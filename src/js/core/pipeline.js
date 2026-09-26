@@ -86,6 +86,9 @@ export async function decodeChannel(capture, channel, opts) {
   packets.sort((a, b) => a.startSample - b.startSample);
   packets.forEach((p, i) => { p.index = i; });
 
+  // 建立 GOOD CRC → 被确认报文的对应关系（供界面「同色配对」及导出使用）
+  linkGoodCrc(packets);
+
   return {
     packets,
     stats: {
@@ -99,6 +102,47 @@ export async function decodeChannel(capture, channel, opts) {
       warnings: packets.reduce((s, p) => s + (p.warnings?.length ?? 0), 0),
     },
   };
+}
+
+// ── GOOD CRC 配对 ────────────────────────────────────────────────────
+
+/**
+ * 给每条 GOOD CRC 找出「它所确认的那条报文」，写入：
+ *   p.ackOf   —— 被确认报文的序号（packets 下标）
+ *   p.ackType —— 被确认报文的类型名（便于展示）
+ *
+ * 判据来源：
+ *   ① **紧邻性**——GoodCRC 是对报文的即时应答，必然落在被确认报文之后最近处。
+ *      向前找最近一条「非 GOOD CRC 且方向相反」的报文，即物理上唯一合理的对象。
+ *      这一条也能覆盖 Hard Reset / Cable Reset 这类没有 MessageID 的报文。
+ *   ② **MessageID**——PD 规范要求 GoodCRC 的 MessageID 与被确认报文相同。
+ *      用它校验 ①；若邻近报文 CRC 完好却 ID 对不上（说明中间夹了别的方向的报文），
+ *      再向后找同 ID 的那条。找不到仍按邻近关系配对。
+ *
+ * 注意不能只用 ②：被确认报文本身是坏包时 MessageID 不可信，若拿它去查
+ * 「最近登记的同 ID 报文」，会误配到几十条报文之前的一条陈旧记录上。
+ * 坏掉的 GOOD CRC 不参与配对（保持错误标识，便于定位）。
+ */
+const ACK_WINDOW = 16;   // 向前搜索窗口（条）
+function linkGoodCrc(packets) {
+  const pick = (p, needId) => {
+    for (let j = p.index - 1; j >= 0 && j > p.index - ACK_WINDOW; j--) {
+      const q = packets[j];
+      if (q.msgType === 'GOOD CRC' || q.role === p.role) continue;
+      if (needId && q.crcOk !== false && q.msgId !== p.msgId) continue;
+      return q;
+    }
+    return null;
+  };
+  for (const p of packets) {
+    if (p.msgType !== 'GOOD CRC' || p.crcOk === false) continue;
+    let ref = pick(p, false);
+    if (!ref) continue;
+    // 邻近报文 CRC 完好但 MessageID 对不上 → 改按 MessageID 精确匹配
+    if (ref.crcOk !== false && ref.msgId !== p.msgId) ref = pick(p, true) || ref;
+    p.ackOf = ref.index;
+    p.ackType = ref.msgType;
+  }
 }
 
 // ── bus.ini 模拟量轨迹 ────────────────────────────────────────────────

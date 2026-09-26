@@ -141,6 +141,32 @@ class CDP {
   close() { try { this.ws.close(); } catch {} }
 }
 
+/**
+ * 把真实 .atkcc 以拖拽事件注入页面，并等到解码完成（统计行出现「显示」字样）。
+ * @param {CDP} cdp
+ * @param {string} relPath 相对项目根目录的路径
+ */
+async function injectDrop(cdp, relPath) {
+  const abs = resolve(ROOT, relPath);
+  const b64 = (await readFile(abs)).toString('base64');
+  const nm = basename(abs);
+  log(`  注入文件：${nm}（${(b64.length / 1365).toFixed(1)} KB）`);
+  await cdp.eval(`(()=>{
+    const b=atob('${b64}'); const a=new Uint8Array(b.length);
+    for(let i=0;i<b.length;i++) a[i]=b.charCodeAt(i);
+    const f=new File([a], ${JSON.stringify(nm)});
+    const dt=new DataTransfer(); dt.items.add(f);
+    window.dispatchEvent(new DragEvent('drop',{dataTransfer:dt,bubbles:true,cancelable:true}));
+    return true;
+  })()`);
+  for (let i = 0; i < 120; i++) {
+    await sleep(500);
+    const s = await cdp.eval(`document.querySelector('#statLine').textContent || ''`);
+    if (/显示/.test(s)) break;
+  }
+  return nm;
+}
+
 /* ── 主流程 ─────────────────────────────────────────── */
 let cdp;
 try {
@@ -163,10 +189,11 @@ try {
 
   await sleep(1200);
 
-  /* ── 调试模式：--eval "<js>" [--eval-load] ── */
+  /* ── 调试模式：--eval "<js>" [--eval-load] [--drop <file>] ── */
   const EVAL = arg('--eval', null);
   if (EVAL) {
-    if (argv.includes('--eval-load')) {
+    if (DROP) await injectDrop(cdp, DROP);
+    else if (argv.includes('--eval-load')) {
       await cdp.eval(`document.querySelector('#btnDemo')?.click()`);
       for (let i = 0; i < 120; i++) {
         await sleep(500);
@@ -202,18 +229,7 @@ try {
   const willLoad = !!DROP || hasDemo;
 
   if (DROP) {
-    const abs = resolve(ROOT, DROP);
-    const b64 = (await readFile(abs)).toString('base64');
-    const nm = basename(abs);
-    log(`  注入文件：${nm}（${(b64.length / 1365).toFixed(1)} KB）`);
-    await cdp.eval(`(()=>{
-      const b=atob('${b64}'); const a=new Uint8Array(b.length);
-      for(let i=0;i<b.length;i++) a[i]=b.charCodeAt(i);
-      const f=new File([a], ${JSON.stringify(nm)});
-      const dt=new DataTransfer(); dt.items.add(f);
-      window.dispatchEvent(new DragEvent('drop',{dataTransfer:dt,bubbles:true,cancelable:true}));
-      return true;
-    })()`);
+    const nm = await injectDrop(cdp, DROP);
     check('拖拽注入抓包文件', true, nm);
   } else {
     check('示例按钮可用（http 模式）', hasDemo === true);

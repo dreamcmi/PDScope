@@ -31,16 +31,42 @@ function fmtTime(ms) {
 const fmtSize = (n) => n > 1048576 ? (n / 1048576).toFixed(2) + ' MB' : (n / 1024).toFixed(1) + ' KB';
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
-/** 报文颜色分类（用于「报文类别」筛选 + 字体配色） */
-function kindOf(p) {
-  if (p.crcOk === false) return 'Error';
+/**
+ * 报文的「语义类别」——只看报文自身的协议属性，不看 CRC 是否通过。
+ * 用于给「被确认的报文」取配色（坏包仍要显示为错误色，但它的语义类别依旧有效）。
+ */
+function toneOf(p) {
   if (p.msgType === 'VDM') return 'VDM';
   if (p.msgKind === 'ext') return 'Extended';
   if (p.msgKind === 'data') return 'Data';
   if (p.msgKind === 'special') return 'Error';
   return 'Control';
 }
+/** 报文颜色分类（用于「报文类别」筛选 + 字体配色）：坏包一律归错误色 */
+function kindOf(p) {
+  if (p.crcOk === false) return 'Error';
+  return toneOf(p);
+}
 const CAT_CLASS = { Control: 'cat-Control', Data: 'cat-Data', Extended: 'cat-Extended', VDM: 'cat-VDM', Error: 'cat-Error' };
+
+/**
+ * GOOD CRC 配色配对（界面侧）。
+ *
+ * 配对关系由内核 `linkGoodCrc()` 算好（p.ackOf），这里只负责取色：
+ * 让回应包与它所确认的报文同色，一眼看出「哪条被谁确认了」；
+ * 否则 GOOD CRC 只能笼统地取 Control 色，与它确认的报文各成一色。
+ *
+ * 坏掉的 GOOD CRC 保持错误色，不参与配对。
+ */
+function pairAckTone(packets) {
+  for (const p of packets) {
+    p.tone = p.kind;
+    if (p.ackOf == null) continue;
+    if (p.crcOk === false) continue;
+    const ref = packets[p.ackOf];
+    if (ref) p.tone = toneOf(ref);
+  }
+}
 
 /** 是否属于「功率协商」/「状态切换」这两类关注点 */
 const POWER_TYPES = /Source_Cap|Request|EPR_Request|EPR_Mode|PPS|BIST|Source_Capabilities_Extended|EPR_Source|EPR_Sink|Sink_Cap/i;
@@ -204,6 +230,7 @@ async function decodeAndShow(channel) {
     p.vbus = v; p.ibus = i;
     p.kind = kindOf(p);
   }
+  pairAckTone(packets);   // GOOD CRC 与它确认的报文同色
   S.packets = packets;
   S.stats = stats;
   S.decodedMs = Math.round(performance.now() - t0);
@@ -499,13 +526,15 @@ $('#tbody').addEventListener('scroll', () => {
 function rowEl(p, i) {
   const r = el('div', 'tr' + (i === S.selected ? ' sel' : '') + (p.crcOk === false ? ' bad' : ''));
   r.dataset.i = i;
-  const cls = CAT_CLASS[p.kind] || '';
+  const cls = CAT_CLASS[p.tone] || '';
   const hex = p.dataHex || '';
   const note = highlight(p.summary || '');
+  // GOOD CRC 取被确认报文的颜色，悬停提示它确认的是哪一条
+  const tip = p.ackOf != null ? ` title="确认 #${p.ackOf} · ${p.ackType || ''}"` : '';
   r.innerHTML =
     `<div class="td num">${p.index}</div>`
   + `<div class="td"><span class="pill sop">${esc(p.sop)}</span></div>`
-  + `<div class="td type ${cls}">${esc(p.msgType)}</div>`
+  + `<div class="td type ${cls}"${tip}>${esc(p.msgType)}</div>`
   + `<div class="td num">${p.msgId ?? ''}</div>`
   + `<div class="td"><span class="pill ${p.role}">${esc(p.role)}</span></div>`
   + `<div class="td num">${p.nObjects ?? ''}</div>`
@@ -561,7 +590,7 @@ $('#btnDetailClose').addEventListener('click', () => document.body.classList.add
 
 function renderDetail(p) {
   const box = $('#detailBody');
-  const cls = CAT_CLASS[p.kind] || '';
+  const cls = CAT_CLASS[p.tone] || '';
   const h = [];
 
   h.push(`<div class="dhero ${p.crcOk === false ? 'dhero-bad' : ''}">
@@ -581,6 +610,7 @@ function renderDetail(p) {
     ${cell('报文时长', p.durationUs.toFixed(1) + ' µs')}
     ${cell('数据对象', String(p.nObjects ?? 0))}
     ${cell('实测码率', (p.bitrate / 1000).toFixed(1) + ' kbps')}
+    ${p.ackOf != null ? cell('确认的报文', `#${p.ackOf} · ${p.ackType || ''}`) : ''}
   </div></div>`);
 
   // 报文头位域
@@ -898,6 +928,25 @@ addEventListener('keydown', (e) => {
   }
   else if (e.key === 'g') { $('#fHideGoodCrc').checked = !$('#fHideGoodCrc').checked; S.filters.hideGoodCrc = $('#fHideGoodCrc').checked; applyFilters(); }
 });
+
+/* ═══════════════════════ 桌面外壳桥（WebView2 / Electron 注入） ═══════════════════════ */
+/**
+ * 桌面外壳把「用 PDScope 打开」的文件（命令行参数 / 双击关联 / 菜单）交给界面。
+ *
+ * 之所以绕一层 fetch 而不是直接塞字节：外壳可以按需把文件映射成 URL（内嵌资源、
+ * 虚拟主机、临时文件…），页面这边只管按 URL 取，不关心来源，避免外壳与前端耦合。
+ */
+window.pdscopeOpenUrl = async (name, url) => {
+  try {
+    const r = await fetch(url, { cache: 'no-store' });
+    if (!r.ok) throw new Error(`HTTP ${r.status} ${r.statusText}`);
+    const buf = new Uint8Array(await r.arrayBuffer());
+    await loadFile(new File([buf], name));
+  } catch (err) {
+    hideProgress();
+    toast('打开失败：' + (err?.message || err), 'err');
+  }
+};
 
 /* 初始化 */
 document.documentElement.style.setProperty('--rh', S.rowH + 'px');
