@@ -29,10 +29,6 @@
 
 # 若日后需要提交某个图片资源（如 logo / 打包图标），用 ! 单独放行。
 # 注意：.gitignore 是「后写的规则覆盖先写的」，放行规则必须写在忽略规则之后。
-#
-# ⚠ 本仓库的根就是 PDScope/，所以这里的路径**不带 PDScope/ 前缀**。
-#   早先的版本误写成 !PDScope/build/icon.ico，在仓库根下永远匹配不到任何文件，
-#   放行等于没写（图标会被 *.ico 吃掉）。已改回相对根目录的写法。
 !assets/icon.ico
 !assets/icon.icns
 !assets/icon.png
