@@ -1,0 +1,263 @@
+# PDScope 跨平台构建
+#
+# Tauri 最后一步要链各平台的系统 WebView（Windows→WebView2、macOS→WKWebView、
+# Linux→WebKitGTK），三者都没有交叉编译的路子，所以每个目标都要一台对应系统与
+# 架构的机器各构建一次。
+#
+# 目标清单（产物名 = PDScope-<目标>）：
+#   windows11-x64      windows-2025      x86_64-pc-windows-msvc      nsis + msi + 绿色版
+#   windows11-arm64    windows-11-arm    aarch64-pc-windows-msvc     nsis + 绿色版
+#   macos15-arm64      macos-15          aarch64-apple-darwin        app + dmg
+#   macos15-x64        macos-15-intel    x86_64-apple-darwin         app + dmg
+#   macos26-arm64      macos-26          aarch64-apple-darwin        app + dmg
+#   macos26-x64        macos-26-intel    x86_64-apple-darwin         app + dmg
+#   ubuntu2404-x64     ubuntu-24.04      x86_64-unknown-linux-gnu    deb + AppImage
+#   ubuntu2404-arm64   ubuntu-24.04-arm  aarch64-unknown-linux-gnu   deb + AppImage
+#   ubuntu2604-x64     ubuntu-26.04      x86_64-unknown-linux-gnu    deb + AppImage
+#   ubuntu2604-arm64   ubuntu-26.04-arm  aarch64-unknown-linux-gnu   deb + AppImage
+#
+# ① 不含 Windows 10：GitHub 没有 Win10 镜像，且它与 windows11-x64 是同一个
+#    Rust target、产物完全一样，Win10 直接用 windows11-x64 那份即可。
+# ② glibc 下限跟着构建机走：ubuntu2404-* 的包要 glibc ≥ 2.39、ubuntu2604-* 要 ≥ 2.42。
+#    要发给老系统就用 2404 那份。
+
+name: build
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# 同一分支串行执行：分支上「改了又推」很常见，直接把上一轮掐掉省时间。
+# 标签是发版动作，不能掐，必须跑完。
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  CARGO_TERM_COLOR: always
+  # linuxdeploy（AppImage 的打包工具）自身是 AppImage，默认要挂 FUSE，CI 容器里常常没有
+  APPIMAGE_EXTRACT_AND_RUN: 1
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── Windows ───────────────────────────────────────────────
+          - name: windows11-x64
+            os: windows-2025
+            target: x86_64-pc-windows-msvc
+            bundles: 'nsis,msi'
+            note: 'Windows 10 也用这份（同一 target，产物相同）'
+
+          - name: windows11-arm64
+            os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            bundles: 'nsis'
+            note: '唯一的原生 arm64 Windows 镜像；WiX 的 arm64 MSI 未验证，故只出 NSIS'
+
+          # ── macOS ─────────────────────────────────────────────────
+          - name: macos15-arm64
+            os: macos-15
+            target: aarch64-apple-darwin
+            bundles: 'app,dmg'
+            note: 'macOS 15 / Apple Silicon'
+
+          - name: macos15-x64
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+            bundles: 'app,dmg'
+            note: 'macOS 15 / Intel'
+
+          - name: macos26-arm64
+            os: macos-26
+            target: aarch64-apple-darwin
+            bundles: 'app,dmg'
+            note: 'macOS 26 / Apple Silicon'
+
+          - name: macos26-x64
+            os: macos-26-intel
+            target: x86_64-apple-darwin
+            bundles: 'app,dmg'
+            note: 'macOS 26 / Intel'
+
+          # ── Linux ─────────────────────────────────────────────────
+          - name: ubuntu2404-x64
+            os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            bundles: 'deb,appimage'
+            note: 'glibc ≥ 2.39；发给老系统用这份'
+
+          - name: ubuntu2404-arm64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            bundles: 'deb,appimage'
+            note: 'glibc ≥ 2.39 / arm64'
+
+          - name: ubuntu2604-x64
+            os: ubuntu-26.04
+            target: x86_64-unknown-linux-gnu
+            bundles: 'deb,appimage'
+            note: 'glibc ≥ 2.42，不要在 24.04 及更老系统上跑'
+
+          - name: ubuntu2604-arm64
+            os: ubuntu-26.04-arm
+            target: aarch64-unknown-linux-gnu
+            bundles: 'deb,appimage'
+            note: 'glibc ≥ 2.42 / arm64'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          # 不开 npm 缓存：setup-node 的缓存依赖 package-lock.json，仓库里没有
+
+      # 仓库里的 src-tauri/.cargo/config.toml 是给国内开发机用的 USTC 镜像，
+      # 海外 runner 走官方源更快更稳，先删掉
+      - name: 切回 crates.io 官方源
+        run: node -e "require('node:fs').rmSync('src-tauri/.cargo/config.toml',{force:true})"
+
+      # 包名跨 Ubuntu 版本会改（libgtk-3-0 → libgtk-3-0t64），逐个装、装不上只警告，
+      # 最后再断言真正必须的 webkit2gtk-4.1，这样 24.04 / 26.04 能共用一份脚本
+      - name: 装 Linux 系统依赖
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          set -u -o pipefail
+          sudo apt-get update || echo "::warning::apt-get update 失败，继续试装"
+          for p in libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libxdo-dev \
+                   libayatana-appindicator3-dev libssl-dev patchelf file \
+                   build-essential curl wget; do
+            sudo apt-get install -y --no-install-recommends "$p" \
+              || echo "::warning title=依赖缺失::$p 在这个 Ubuntu 版本上装不上，继续"
+          done
+          pkg-config --exists webkit2gtk-4.1 \
+            || { echo "::error title=缺少核心依赖::没有 libwebkit2gtk-4.1-dev，构建不可能成功"; exit 1; }
+          echo "webkit2gtk-4.1 就位"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.name }}
+          # 每个目标各一份缓存，全回写会顶满仓库 10 GB 配额，所以只在默认分支回写
+          save-if: ${{ github.ref_name == github.event.repository.default_branch }}
+          cache-on-failure: true
+
+      - run: npm install --no-audit --no-fund
+
+      # 只跑不依赖抓包样本的三项：ackcheck.js 与 e2e.mjs 要读仓库上一级的 *.atkcc
+      # 实测样本，而那些文件按 .gitignore 不入库，想跑就在本机 npm run check
+      - name: 版本号 / 语法 / 协议层自检
+        run: |
+          node tools/version-check.mjs
+          node tools/syntax.mjs
+          node tools/selftest.js
+
+      # bundles 的值必须加引号，否则 PowerShell 会把 nsis,msi 当数组拆成两个参数。
+      # 要签名 macOS 包时在本步补 env，别塞空值 —— Tauri 见到空字符串的
+      # APPLE_CERTIFICATE 会当成「有证书」去解析，反而报错。
+      - name: 构建可执行文件与安装包
+        run: npm run app:build -- --target "${{ matrix.target }}" --bundles "${{ matrix.bundles }}"
+
+      # macOS / Linux 先 tar 一层再上传：upload-artifact 会把权限压成 644 且不保留
+      # 符号链接（官方 Limitations「Permission Loss」），而 .app 与 .AppImage 全靠它们
+      - name: 打包（macOS / Linux）
+        if: runner.os != 'Windows'
+        run: |
+          set -euo pipefail
+          cd "src-tauri/target/${{ matrix.target }}/release/bundle"
+          dirs=""
+          for d in macos dmg deb appimage; do
+            if [ -d "$d" ]; then dirs="$dirs $d"; fi   # 不用 [ ] && —— set -e 会在判断为假时把脚本掐断
+          done
+          echo "打进包里的目录：$dirs"
+          tar -czf "$GITHUB_WORKSPACE/PDScope-${{ matrix.name }}.tar.gz" $dirs
+
+      # Windows 出两个 zip：安装包版（NSIS + MSI）与绿色版（单个 exe，解压即用）
+      - name: 打包（Windows）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $rel = "src-tauri/target/${{ matrix.target }}/release"
+          New-Item -ItemType Directory -Force -Path out, portable | Out-Null
+          Copy-Item "$rel/pdscope.exe" portable/PDScope.exe
+          Copy-Item "$rel/bundle/nsis/*" out/
+          if (Test-Path "$rel/bundle/msi") { Copy-Item "$rel/bundle/msi/*" out/ }
+          Compress-Archive -Path "out/*"      -DestinationPath "PDScope-${{ matrix.name }}.zip"
+          Compress-Archive -Path "portable/*" -DestinationPath "PDScope-${{ matrix.name }}-portable.zip"
+          Get-ChildItem PDScope-*.zip | Format-Table Name, Length -AutoSize
+
+      - name: 生成 SHA256 校验和
+        run: node tools/ci-checksum.mjs --name "${{ matrix.name }}"
+
+      # 归档名带目标名，否则不同目标的同名文件汇总到 Release 时会互相覆盖
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PDScope-${{ matrix.name }}
+          if-no-files-found: error
+          retention-days: 30
+          path: PDScope-${{ matrix.name }}*
+
+      - name: 写运行摘要
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### \`${{ matrix.name }}\`"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "| --- | --- |"
+            echo "| runner | \`${{ matrix.os }}\` |"
+            echo "| Rust target | \`${{ matrix.target }}\` |"
+            echo "| 安装包 | ${{ matrix.bundles }} |"
+            echo "| 说明 | ${{ matrix.note }} |"
+            echo ""
+            echo '```'
+            ls -lh "PDScope-${{ matrix.name }}"* 2>/dev/null
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY" || true
+
+  # 推 v* 标签时把全部产物汇总到一个草稿 Release：产物没签名，先让人看一眼再决定发不发
+  release:
+    name: 汇总 Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - run: ls -lh dist
+
+      - name: 建 Release 并附上全部产物（已存在就补传覆盖）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find dist -type f | sort)
+          printf '共 %d 个文件\n' "${#files[@]}"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --title "PDScope $GITHUB_REF_NAME" \
+              --draft \
+              --generate-notes \
+              "${files[@]}"
+          fi

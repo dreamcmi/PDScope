@@ -114,9 +114,19 @@ artifacts/
 # Rust / Tauri 编译产物
 src-tauri/target/
 src-tauri/gen/
-out/
 release/
 *.pdb
+
+# CI（.github/workflows/build.yml）在仓库根留下的打包产物，都不入库：
+#   out/ / portable/         Windows 的暂存目录（安装包、绿色版 exe）
+#   PDScope-*.zip            Windows 的成品：安装包版 + 绿色版（-portable）
+#   PDScope-*.tar.gz         macOS / Linux 的成品（tar 才保得住可执行位）
+#   PDScope-*.sha256         上面各归档的校验和（名字带目标名，防不同目标撞名）
+out/
+portable/
+PDScope-*.zip
+PDScope-*.tar.gz
+PDScope-*.sha256
 
 # 历史遗留：.NET / Electron 产物（对应方案已废弃，保留规则以防旧目录复现）
 bin/

@@ -18,6 +18,7 @@
 * [形态一：单文件 HTML 版](#形态一单文件-html-版)
 * [形态二：Tauri 桌面版](#形态二tauri-桌面版)
 * [形态三：本地服务（开发调试用）](#形态三本地服务开发调试用)
+* [CI 构建：](#ci-构建10-个目标一次出齐)
 * [界面功能](#界面功能)
 * [`.atkcc` 格式（逆向结论）](#atkcc-格式逆向结论)
 * [目录结构](#目录结构)
@@ -121,8 +122,8 @@ node tools/build-standalone.mjs
 Tauri（和 Electron 一样）**不支持交叉编译**。在哪个系统上打包，就只能出那个系统的产物。
 
 原因在最后一步链接：Windows 要链 WebView2 loader + MSVC 运行库，macOS 要链 WKWebView + Cocoa，
-Linux 要链 WebKitGTK + GTK。想要三平台的包，就得在三个系统上各跑一次
-（或者用 CI 矩阵，比如 GitHub Actions 的三个 runner）。
+Linux 要链 WebKitGTK + GTK。想要各平台的包，就得在对应架构的系统上各跑一次 ——
+本仓库把这件事交给 [CI 矩阵](#ci-构建10-个目标一次出齐)，10 个目标一起出，见下一节。
 
 **但代码本身是跨平台的**：`src-tauri/` 那一份 Rust 在三个平台直接编译，
 唯一的平台分支是 —— macOS 通过 `RunEvent::Opened` 接收「用 PDScope 打开」事件，
@@ -139,16 +140,26 @@ npm run app:build       # 出当前平台的全部安装包
 
 | 平台        | 只出可执行文件        | 出安装包             | 安装包产物                                          |
 | ----------- | --------------------- | -------------------- | --------------------------------------------------- |
-| **Windows** | `npm run app:exe`     | `npm run app:win`    | `bundle/nsis/PDScope_0.1.0_x64-setup.exe`           |
+| **Windows** | `npm run app:exe`     | `npm run app:win`    | `bundle/nsis/PDScope_0.1.0_x64-setup.exe`（NSIS）<br>`npm run app:build` 还多出 `bundle/msi/PDScope_0.1.0_x64_zh-CN.msi` |
 | **macOS**   | `npm run app:exe`     | `npm run app:mac`    | `bundle/dmg/PDScope_0.1.0_x64.dmg` + `bundle/macos/PDScope.app` |
 | **Linux**   | `npm run app:exe`     | `npm run app:linux`  | `bundle/appimage/PDScope_0.1.0_amd64.AppImage` + `bundle/deb/PDScope_0.1.0_amd64.deb` |
 
-产物都在 `src-tauri/target/release/` 下。三个平台的依赖见[附录 B](#附录-b环境准备)。
+产物在 `src-tauri/target/<三元组>/release/` 下 —— **显式传 `--target` 时路径里会多一层三元组目录**，
+不传才是 `target/release/`。三个平台的依赖见[附录 B](#附录-b环境准备)。
 
-> **安装包需要联网，可执行文件不需要。** `--no-bundle`（即 `app:exe`）只调用本机已有的
-> 编译器，完全离线；而打安装包时 Tauri 会去 GitHub Releases 下载打包辅助程序
-> （NSIS、appimage 工具等）。**本机网络访问 GitHub 被阻断**，所以
-> `app:exe` 已实测通过，`app:win` 这条**未实测**。网络通畅的机器上直接可用。
+> **`app:exe` 产出的那个可执行文件就是绿色版**：拷到任何同架构的机器上双击即用，
+> 不安装、不写注册表（Windows 上需要系统有 WebView2 运行时）。`app:build` 才是「绿色版 + 安装包」。
+> CI 会把绿色版单独压成 `PDScope-<目标>-portable.zip` 供下载。
+
+> **MSI 的码页跟着语言走，这一项不能省。** `tauri.conf.json` 里配了
+> `bundle.windows.wix.language: "zh-CN"`：MSI 数据库默认是 1252（en-US）码页，而本项目的
+> 文件关联描述是中文，不改这一项 `light.exe` 会以 `LGHT0311`（字符串含码页外字符）直接拒绝出包。
+> 所以 MSI 文件名带 `_zh-CN` 后缀，安装界面也是中文的。
+
+> **安装包需要联网一次，可执行文件不需要。** `--no-bundle`（即 `app:exe`）只用本机已有的编译器，
+> 完全离线；打安装包时 Tauri 会去 GitHub Releases 下载打包辅助程序（NSIS、WiX、appimage 工具，
+> 下载完校验哈希）。不想在本机装这一堆、或者要别的平台的包，交给
+> [CI](#ci-构建10-个目标一次出齐)。
 
 ### 怎么打开一个抓包文件
 
@@ -182,6 +193,121 @@ npm run app:build       # 出当前平台的全部安装包
 | 查看 → 全屏                 | `F11`           | 全屏 / 还原                    |
 | 查看 → 开发者工具           | `F12`           | 打开 DevTools                  |
 | 帮助 → 关于 PDScope         | —               | 版本 / 平台信息                |
+
+---
+
+## CI 构建：10 个目标一次出齐
+
+`.github/workflows/build.yml` —— **每次提交都自动构建**，一次出齐 10 个平台的成品。
+
+**怎么触发**
+
+| 方式 | 场景 |
+| --- | --- |
+| 往任意分支 `push`（含合并进主干） | 每次提交都跑；跑完在 Actions 页面底部 **Artifacts** 区按平台下载，保留 30 天 |
+| Actions 页面点 **Run workflow** | 不想提交，也要一版包 |
+| 推 `v*` 标签 | 发版：除了 Artifacts，再自动建一个**草稿** Release 汇总全部产物 |
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0     # 走发版那条路
+```
+
+> Artifacts 要登录 GitHub 才能下载。想让任何人都能下，就推个标签，
+> 然后去 Releases 页面点一下 **Publish** 把草稿发出去。
+
+**10 个目标怎么落地的**
+
+每个目标都一对一落到一台真实存在的 GitHub runner 镜像上（runner 标签已逐个核对过）。
+
+| 目标 | runner | Rust target | Artifacts 里的归档 | 归档里是什么 |
+| --- | --- | --- | --- | --- |
+| Windows11-x64 | `windows-2025` | `x86_64-pc-windows-msvc` | `PDScope-windows11-x64.zip`<br>`PDScope-windows11-x64-portable.zip` | 安装包版：NSIS `-setup.exe` + `.msi`<br>绿色版：单个 `PDScope.exe` |
+| Windows11-arm64 | `windows-11-arm` | `aarch64-pc-windows-msvc` | `PDScope-windows11-arm64.zip`<br>`PDScope-windows11-arm64-portable.zip` | 安装包版：NSIS `-setup.exe`<br>绿色版：单个 `PDScope.exe` |
+| macos15-arm64 | `macos-15` | `aarch64-apple-darwin` | `PDScope-macos15-arm64.tar.gz` | `PDScope.app` + `.dmg` |
+| macos15-x64 | `macos-15-intel` | `x86_64-apple-darwin` | `PDScope-macos15-x64.tar.gz` | 同上 |
+| macos26-arm64 | `macos-26` | `aarch64-apple-darwin` | `PDScope-macos26-arm64.tar.gz` | 同上 |
+| macos26-x64 | `macos-26-intel` | `x86_64-apple-darwin` | `PDScope-macos26-x64.tar.gz` | 同上 |
+| ubuntu2404-x64 | `ubuntu-24.04` | `x86_64-unknown-linux-gnu` | `PDScope-ubuntu2404-x64.tar.gz` | `.deb` + `.AppImage` |
+| ubuntu2404-arm64 | `ubuntu-24.04-arm` | `aarch64-unknown-linux-gnu` | `PDScope-ubuntu2404-arm64.tar.gz` | 同上 |
+| ubuntu2604-x64 | `ubuntu-26.04` | `x86_64-unknown-linux-gnu` | `PDScope-ubuntu2604-x64.tar.gz` | 同上 |
+| ubuntu2604-arm64 | `ubuntu-26.04-arm` | `aarch64-unknown-linux-gnu` | `PDScope-ubuntu2604-arm64.tar.gz` | 同上 |
+
+每个归档都配一个同名的 `.sha256`（例如 `PDScope-windows11-x64.zip.sha256`），校验一句就够：
+`sha256sum -c PDScope-windows11-x64.zip.sha256`（macOS 用 `shasum -a 256 -c`）。
+
+> **Windows 的绿色版**：`PDScope-windows11-x64-portable.zip` 解压后就是一个 `PDScope.exe`，
+> 双击即用、不写注册表、不需要安装。它依赖系统的 **WebView2 运行时**（Win11 与新版 Win10
+> 自带，没有的话装一次即可）；想要「双击 `.atkcc` 直接打开」的文件关联，就装安装包版。
+
+**为什么没有 Windows 10 的产物**
+
+GitHub 的 Windows runner 一直是 **Windows Server** 系列，从来没有过 Windows 10 的镜像；
+`windows-2019` 也已下架，现在只剩 `windows-2022` 和 `windows-2025`。
+
+早先列过一个 `windows10-x64` 目标，用 `windows-2022` 代打，现在**去掉了**：它和
+`windows11-x64` 的 Rust target 是同一个 `x86_64-pc-windows-msvc`，产物完全一样、
+在 Win10 上能直接跑，重复构建一份一模一样的包没有意义。
+
+所以 **Win10 用 `windows11-x64` 那份即可**（同一份产物，Win10 / Win11 通吃）。
+真要按 Windows 版本严格对应，唯一的路是自建 runner 装 Win10 —— 托管 runner 做不到。
+
+**几个刻意的选择**
+
+* **arm64 一律用原生 runner，不做交叉编译。** Windows 上交叉编 `aarch64-pc-windows-msvc`
+  需要额外装 VS 的「MSVC v143 ARM64 构建工具」组件，原生 runner 自带；
+  Linux 上交叉编 `aarch64` 要自己扛一份多架构的 webkit2gtk，麻烦且容易出错。
+  Tauri 官方的 AppImage 文档也建议 ARM 包直接在 ARM 机器上出。
+* **macOS 四个目标各用各的机器，不做 universal 双架构合并。** 合并出来的包体积翻倍，
+  而四个目标分开下载、各取所需更实用。
+* **Windows arm64 只出 NSIS，不出 MSI。** 不是 WiX 不支持 arm64（Tauri 的模板里本来
+  就有 arm64 分支），而是手上没有 arm64 机器可验 —— 没验过的产物不塞进矩阵。
+  要的话把矩阵里那行的 `bundles` 改成 `nsis,msi` 即可。
+* **Windows 额外出一个绿色版。** 构建时 `--bundles` 产出的
+  `target/<三元组>/release/pdscope.exe` 本身就是完整可运行的程序（前端已经编进二进制里），
+  把它单独压成 `-portable.zip` 就行，不需要额外构建一次。
+* **每个目标的产物都先收拢成一个「带目标名」的归档再上传。** 两个原因：
+  ① `actions/upload-artifact` 有个官方写明、关不掉的限制「Permission Loss」——
+  上传后所有目录变 755、文件变 644，符号链接也不保留；而 macOS 的 `.app` 内部全是
+  符号链接与可执行位、Linux 的 `.AppImage` 必须带 `+x`，散着上传会得到一个
+  「解压后打不开」的包。`tar` 能把权限和链接原样保住，所以 macOS / Linux 用 `.tar.gz`。
+  ② 各目标的出包名是按架构走的（`pdscope.exe`、`PDScope_0.1.0_x64-setup.exe` …），
+  x64 与 arm64 之间、不同打包类型之间都可能撞名；而所有产物在 Release 里是平铺的，
+  同名文件会互相覆盖且不报错。必须靠「归档名带目标名」区分开。
+  Windows 用 `.zip`（没有可执行位这回事，zip 就够，也更合 Windows 用户的习惯）。
+
+**CI 里跑了哪些自检**
+
+```
+node tools/version-check.mjs   # 版本号六处一致（外加 README 里的产物名提示项）
+node tools/syntax.mjs          # 全量语法检查（自动带上 tools/ 下的新脚本）
+node tools/selftest.js         # 协议层合成用例（18 项）
+```
+
+这三项**在 10 个目标上各跑一遍** —— 顺带验证了解析内核在 Windows / macOS / Linux
+以及 x64 / arm64 上结果一致。`ackcheck.js` 与 `e2e.mjs` 要读仓库上一级的 `.atkcc`
+实测样本，而那些文件按 `.gitignore` **不入库**（采样数据，体积大），CI 里没有它们 ——
+想跑就在本机 `npm run check`。
+
+**几点要知道的**
+
+* **产物没有签名。** macOS 首次打开要「右键 → 打开」（或
+  `xattr -dr com.apple.quarantine PDScope.app`），Windows 会弹 SmartScreen，
+  点「仍要运行」即可。要签名就在「构建可执行文件与安装包」那步补 `env`
+  （workflow 里留了注释掉的完整写法；注意别塞空值 —— Tauri 见到空字符串的
+  `APPLE_CERTIFICATE` 会当成「有证书」去解析，反而直接报错）。
+* **glibc 下限跟着构建机走。** 在哪个 Ubuntu 上编，产物的 glibc 下限就是那个版本：
+  `ubuntu2404-*` 要 glibc ≥ 2.39，`ubuntu2604-*` 要 ≥ 2.42。
+  **要发给老系统就用 2404 那份**，26.04 那份不要在 24.04 及更老的系统上跑
+  （会报 `GLIBC_2.42 not found`）。
+* **国内网络不用管。** 仓库里的 `src-tauri/.cargo/config.toml` 是给国内开发机用的
+  USTC 镜像，而 runner 在海外，走官方源更快更稳，所以 CI 会先把这个文件删掉。
+  如果哪天换成自建 runner 且在国内，把「切回 crates.io 官方源」那步删掉或加个
+  `if` 即可。
+* **arm64 runner 公开仓库和私有仓库都能用**（私有仓库自 2026 年 1 月起支持标准
+  arm64 runner，只是 vCPU 从 4 降到 2）。用不了的话，把那几行的 `os` 换掉即可。
+* **第一次跑会比较慢**（每个目标都要把 Tauri 的几百个 crate 从零编一遍，macOS 的
+  3 核 M1 尤其慢），之后有 `Swatinem/rust-cache` 缓存会快很多。
+  缓存只在默认分支上回写，避免 10 个目标把仓库 10 GB 的配额挤爆。
 
 ---
 
@@ -299,9 +425,12 @@ PDScope/
 ├─ assets/                品牌图标「源素材」：icon.png（1024² 主源图）+ icon.ico
 ├─ dist/                  前端产物：PDScope.html —— 单文件版与桌面版共用的唯一入口页
 ├─ artifacts/             自检产物：截图 + 报告（不入库，也不进安装包）
+├─ .github/workflows/     CI：10 个目标一起构建（build.yml，见上文「CI 构建」一节）
 └─ tools/
    ├─ cli.js              命令行解析（table / --json / --csv / --rate 强制指定采样率）
-   ├─ syntax.mjs          全量语法检查（node --check，几秒，自检链第一步）
+   ├─ version-check.mjs   版本号五处一致性检查（自检链第一步）
+   ├─ syntax.mjs          全量语法检查（node --check，几秒）
+   ├─ ci-checksum.mjs     给 CI 产物生成 .sha256 校验和（三平台同一套命令）
    ├─ selftest.js         协议层合成用例自检
    ├─ ackcheck.js         GOOD CRC 配对校验（跨全部真实抓包）
    ├─ e2e.mjs             无头浏览器端到端自检 + 截图（测单文件版 / 本地服务版）
@@ -328,8 +457,9 @@ PDScope/
 ## 自检
 
 ```bash
-# 协议层与配对（纯 Node，秒级）
-node tools/syntax.mjs                     # 全量语法检查（几秒，先跑它）
+# 版本号 / 语法 / 协议层（纯 Node，秒级）
+node tools/version-check.mjs              # 版本号五处是否一致（最便宜，先跑它）
+node tools/syntax.mjs                     # 全量语法检查（几秒；界面脚本错一个字符就是白屏）
 node tools/selftest.js                    # 合成用例 18 项：4B5B / PD / CRC 语义 + 多种采样率
 node tools/ackcheck.js                    # GOOD CRC 配对（跨 5 份真实抓包）
 
@@ -348,6 +478,11 @@ npm run check
 ```
 
 > 自检需要根目录上一级存在 `.atkcc` 样本文件；`--drop` / `--open` 都是相对 `PDScope/` 的路径。
+
+**`version-check.mjs`** 把版本号在五个文件里对一遍：`package.json`、`src-tauri/tauri.conf.json`、
+`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`、`src/ui/app.js`，外加 README 里写着的安装包产物名。
+这几处分别被 npm、打包器、Cargo、锁文件、界面「关于」读走，只改一处不会报错，
+只会悄悄装出一个「文件名 0.2.0、关于里写 0.1.0」的包 —— 所以放在自检链最前面拦。
 
 **`ackcheck.js`** 校验 `linkGoodCrc()`：配对覆盖率、是否自指、方向是否相反、
 **双方 CRC 完好时 MessageID 是否相同**（PD 规范的硬约束）、配对距离。
@@ -407,11 +542,11 @@ node tools/cli.js "../绿联70w-ip18pro.atkcc" --rate 2400000    # 强制指定�
 ## 已知限制
 
 * **桌面版不交叉编译**。想在 macOS 上用桌面版，就得在 macOS 上构建（或直接用单文件版）。
-  本机只实测了 Windows 产物。
-* **安装包未实测**。打安装包时 Tauri 需要从 GitHub Releases 下载打包辅助程序，
-  本机网络访问 GitHub 被阻断，因此 `app:exe`（不联网）已实测、`app:win` / `app:mac` / `app:linux`
-  未实测。相应地，**双击 `.atkcc` 的文件关联要装包后才生效**；不装包时可用
-  「命令行传路径」或「把 `.atkcc` 拖到 exe 图标上」达到同样效果（这条已实测）。
+  本机只实测了 Windows 产物：`pdscope.exe` 3.1 MB、NSIS 安装包 `PDScope_0.1.0_x64-setup.exe` 1.2 MB。
+* **安装包只验到「能打出来」**。打安装包时 Tauri 会从 GitHub Releases 下载打包辅助程序
+  （NSIS / WiX / appimage 工具），本机已实测可下载并成功产出 NSIS 与 MSI；但**没有在本机执行安装**，
+  所以「装完之后双击 `.atkcc` 直接打开」这条只在命令行与拖拽两条等效路径上实测过 ——
+  不装包时用「命令行传路径」或「把 `.atkcc` 拖到 exe 图标上」即可，效果一样。
 * **桌面版依赖系统自带的 WebView**。Windows 走 **WebView2**（Win10/11 基本内置），
   macOS 走系统 **WKWebView**（10.15+ 自带），Linux 需要 `libwebkit2gtk-4.1`。
   系统里没有 WebView 时，退回单文件版即可。
@@ -470,11 +605,11 @@ node tools/cli.js "../绿联70w-ip18pro.atkcc" --rate 2400000    # 强制指定�
 | **macOS**   | `xcode-select --install`（Command Line Tools，提供 clang 与系统框架）          |
 | **Linux**   | `sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev patchelf build-essential`（Debian/Ubuntu 系；打 AppImage 需要 `patchelf`） |
 
-### 网络：国内镜像
+### 网络：镜像
 
-仓库里已经配好两处镜像，clone 下来即可用，不需要额外设置：
+* `src-tauri/.cargo/config.toml` —— crates 走 USTC 稀疏索引（给国内开发机用；海外网络删掉它即可回到官方源）。
+  CI 里是自动删掉的：runner 在海外，走官方源更快更稳。
+* `.npmrc` —— 预留了 npmmirror 的开关，但**默认注释着**：依赖只有 `@tauri-apps/cli` 一个，官方源直接可达，没必要绕。
 
-* `.npmrc` —— npm 走 npmmirror
-* `src-tauri/.cargo/config.toml` —— crates 走 USTC 稀疏索引
-
-`tauri build --no-bundle` 完全走本地，不碰外网。只有打安装包时需要访问 GitHub Releases。
+`tauri build --no-bundle` 完全走本地，不碰外网；打安装包（nsis / msi / dmg / AppImage）时
+才会去 GitHub Releases 下载打包辅助程序。
