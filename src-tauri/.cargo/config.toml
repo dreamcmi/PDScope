@@ -1,0 +1,14 @@
+# ─────────────────────────────────────────────────────────────
+# Cargo 源配置（项目级）
+#
+# 官方 index.crates.io 在国内约 2s/次；首次构建 Tauri 要拉 400+ 个 crate，
+# 逐次累积会拖到十几分钟。这里改用 USTC 稀疏索引镜像（实测 ~120ms）。
+#
+# 海外网络下如果觉得绕，直接删除本文件即可回到官方源。
+# ─────────────────────────────────────────────────────────────
+
+[source.crates-io]
+replace-with = "ustc"
+
+[source.ustc]
+registry = "sparse+https://mirrors.ustc.edu.cn/crates.io-index/"

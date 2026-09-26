@@ -1,10 +1,13 @@
 <!DOCTYPE html>
 <html lang="zh-CN" data-theme="light">
 <head>
-<meta name="pdscope-standalone" content="1" />
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>PDScope · USB PD 抓包解析上位机</title>
+<!-- 内联图标（与顶栏标志同形：圆角方块 + 方波）。
+     内联而不是放一个 favicon.ico 文件，是为了让单文件版在没有同目录资源的情况下
+     依然有标签页图标；同时桌面外壳里也不会再因找不到 /favicon.ico 而报一次 500。 -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20x='1'%20y='1'%20width='30'%20height='30'%20rx='9'%20fill='%236d5cf5'/%3E%3Cpath%20d='M9%2016.5h4.2l1.8-5%202.4%209%201.7-4h4'%20fill='none'%20stroke='%23fff'%20stroke-width='2.6'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E" />
 <style>
 /* ═══════════════════════════════════════════════════════════════
    PDScope — 样式
@@ -2735,13 +2738,13 @@ async function readWaveform(capture, channel, inflate, startSample, endSample, m
 /**
  * inflate.js — 环境自适应的 raw deflate 解压
  *
- * 浏览器 / Electron 渲染进程：DecompressionStream('deflate-raw')
+ * 浏览器 / 桌面外壳的 WebView：DecompressionStream('deflate-raw')
  * Node：node:zlib
  *
  * 对外只暴露一个 makeInflator() -> (raw, expectedSize) => Promise<Uint8Array>
  */
 
-/** 浏览器实现（Chrome 103+ / Safari 16.4+ / Electron 均可） */
+/** 浏览器实现（Chrome/Edge 103+ / Safari 16.4+ / Firefox 113+；桌面外壳的 WebView 也走这条） */
 function makeBrowserInflator() {
   const supported = typeof DecompressionStream === 'function';
   return async function inflateRaw(raw, expectedSize) {
@@ -2781,16 +2784,51 @@ async function makeAutoInflator() {
 /**
  * app.js — PDScope 前端主程序
  *
- * 纯客户端实现：所有解析都在浏览器/渲染进程里完成（ZIP + inflate + BMC + PD），
- * 因此同一份代码可以：
- *   · 由 tools/serve.mjs 通过 http://127.0.0.1 打开
- *   · 打包成单文件 dist/PDScope.html 直接双击运行（macOS / Windows / Linux 通用）
- *   · 由 Electron 外壳承载
+ * 纯客户端实现：所有解析都在浏览器/渲染进程里完成（ZIP + inflate + BMC + PD）。
+ * **同一份代码，三种运行形态**，靠运行期探测自动适配，没有条件编译、没有分支产物：
+ *
+ *   ┌ 形态 ──────────┬ 地址协议 ─┬ 由谁承载 ─────────────────────────────────────┐
+ *   │ 桌面应用        │ http:     │ src-tauri/ Tauri 外壳（WebView2 / WKWebView） │
+ *   │ 本地服务        │ http:     │ tools/serve.mjs（开发调试，多一个「载入示例」）│
+ *   │ 单文件免安装版  │ file:     │ 双击 dist/PDScope.html，系统默认浏览器        │
+ *   └────────────────┴───────────┴───────────────────────────────────────────────┘
+ *
+ * 三者的区别只有两点，都在下面 `ENV` 里显式判定：
+ *   1. 「载入示例」按钮依赖 `api/samples` 接口，只有 http 形态才存在；
+ *   2. 桌面形态下原生菜单已经接管了 Ctrl+O / Ctrl+T 等快捷键，页面不再重复绑定。
+ *
+ * 外壳（任何形态都可以有，也可以没有）通过下面两个入口与界面交互，见文件末尾的
+ * 「外壳桥」一节：`window.pdscopeOpenUrl()` 由外壳调用，`window.PDScope` 由外壳/调试读取。
  */
 
 
 
 
+
+/* ═══════════════════════ 运行形态探测 ═══════════════════════ */
+/**
+ * 判定当前跑在哪种形态里。判据只有「地址协议」和「有没有 Tauri 注入的全局对象」，
+ * 都是运行期事实，因此同一份 dist/PDScope.html 丢到哪儿都能正确自适应。
+ */
+const ENV = (() => {
+  const proto = location.protocol;
+  // Tauri v2 会注入 __TAURI_INTERNALS__；__TAURI__ 只在开了 withGlobalTauri 时出现，
+  // 两个都认，避免以后关掉 withGlobalTauri 就认不出来。
+  const tauri = typeof globalThis.__TAURI__ !== 'undefined'
+             || typeof globalThis.__TAURI_INTERNALS__ !== 'undefined';
+  const http = proto === 'http:' || proto === 'https:';
+  const file = proto === 'file:';
+  return {
+    tauri, http, file, proto,
+    /** 桌面外壳承载 —— 有原生菜单、可被外壳喂文件 */
+    desktop: tauri,
+    /** 有同源后端 —— 「载入示例」接口可用 */
+    hasServer: http && !tauri,
+    /** 文件名/展示用的形态标识 */
+    name: tauri ? 'desktop' : (http ? 'server' : (file ? 'standalone' : 'unknown')),
+    label: tauri ? '桌面版' : (http ? '本地服务' : (file ? '单文件版' : '网页')),
+  };
+})();
 
 /* ═══════════════════════ 小工具 ═══════════════════════ */
 const $  = (s, r = document) => r.querySelector(s);
@@ -3671,10 +3709,16 @@ function exportAs(fmt) {
   toast(`已导出 ${name}`, 'ok');
 }
 
-/* ═══════════════════════ 示例（仅在本地服务模式下可用） ═══════════════════════ */
+/* ═══════════════════════ 示例（仅本地服务形态可用） ═══════════════════════ */
+/**
+ * 「载入示例」靠 tools/serve.mjs 提供的 `api/samples` 接口，只有本地服务形态才有。
+ * 单文件版（file:）连 fetch 同源路径都不被允许，桌面版（Tauri）的 asset 协议下也没有这个接口，
+ * 所以这里先按形态短路 —— 不去发那个注定失败的请求，避免控制台里留下一条红色报错。
+ */
 async function initSamples() {
   const btn = $('#btnDemo');
   if (!btn) return;
+  if (!ENV.hasServer) { btn.style.display = 'none'; return; }
   try {
     const r = await fetch('api/samples', { cache: 'no-store' });
     if (!r.ok) throw 0;
@@ -3694,10 +3738,17 @@ async function initSamples() {
 }
 
 /* ═══════════════════════ 快捷键 ═══════════════════════ */
+/**
+ * 键盘快捷键同样按形态分工：
+ *   · 单文件版 / 本地服务：浏览器里没有任何原生菜单，Ctrl+O 必须由页面自己接管；
+ *   · 桌面版：Tauri 原生菜单已经注册了 CmdOrCtrl+O，页面再绑一次就会弹出两个文件对话框，
+ *     所以这里在有原生菜单时主动让位（菜单项最终仍会去点同一个 `#fileInput`）。
+ * 不带修饰键的快捷键（↑↓ / Esc / / / T / G）三种形态都不冲突，统一在页面里处理。
+ */
 addEventListener('keydown', (e) => {
   if (e.target.matches('input,textarea')) return;
   const mod = e.ctrlKey || e.metaKey;
-  if (mod && e.key.toLowerCase() === 'o') { e.preventDefault(); $('#fileInput').click(); }
+  if (mod && e.key.toLowerCase() === 'o') { if (!ENV.desktop) { e.preventDefault(); $('#fileInput').click(); } }
   else if (e.key === 'ArrowDown') { e.preventDefault(); navDetail(1); }
   else if (e.key === 'ArrowUp') { e.preventDefault(); navDetail(-1); }
   else if (e.key === 'Escape') { document.body.classList.add('detail-collapsed'); setTimeout(drawTimeline, 200); }
@@ -3709,29 +3760,69 @@ addEventListener('keydown', (e) => {
   else if (e.key === 'g') { $('#fHideGoodCrc').checked = !$('#fHideGoodCrc').checked; S.filters.hideGoodCrc = $('#fHideGoodCrc').checked; applyFilters(); }
 });
 
-/* ═══════════════════════ 桌面外壳桥（WebView2 / Electron 注入） ═══════════════════════ */
+/* ═══════════════════════ 外壳桥 ═══════════════════════ */
 /**
- * 桌面外壳把「用 PDScope 打开」的文件（命令行参数 / 双击关联 / 菜单）交给界面。
+ * 外壳（Tauri / 任何想把文件推给界面的宿主）与界面之间的契约。
  *
- * 之所以绕一层 fetch 而不是直接塞字节：外壳可以按需把文件映射成 URL（内嵌资源、
- * 虚拟主机、临时文件…），页面这边只管按 URL 取，不关心来源，避免外壳与前端耦合。
+ * 设计原则：**界面不反向依赖外壳**。页面里没有一行 `__TAURI__` 调用，所以把同一个文件丢进
+ * 浏览器照样跑；外壳只要在页面就绪后调下面两个函数之一即可，没有外壳时它们就一直闲置。
+ *
+ *   · `window.pdscopeOpenBytes(name, bytes)` —— 外壳已经拿到字节（Tauri 走这条）
+ *   · `window.pdscopeOpenUrl(name, url)`     —— 外壳能给一个可取回的 URL
+ *
+ * 为什么字节和 URL 两个入口都要：外壳把文件给页面的方式差别很大（读进内存、映射虚拟主机、
+ * 临时文件、内嵌资源…）。给 URL 的走 URL，给字节的走字节，两边都不必为对方改变实现。
  */
-window.pdscopeOpenUrl = async (name, url) => {
+window.pdscopeOpenBytes = async (name, bytes) => {
   try {
-    const r = await fetch(url, { cache: 'no-store' });
-    if (!r.ok) throw new Error(`HTTP ${r.status} ${r.statusText}`);
-    const buf = new Uint8Array(await r.arrayBuffer());
-    await loadFile(new File([buf], name));
+    const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    await loadFile(new File([u8], name));
   } catch (err) {
     hideProgress();
     toast('打开失败：' + (err?.message || err), 'err');
   }
 };
 
+window.pdscopeOpenUrl = async (name, url) => {
+  try {
+    const r = await fetch(url, { cache: 'no-store' });
+    if (!r.ok) throw new Error(`HTTP ${r.status} ${r.statusText}`);
+    await window.pdscopeOpenBytes(name, await r.arrayBuffer());
+  } catch (err) {
+    hideProgress();
+    toast('打开失败：' + (err?.message || err), 'err');
+  }
+};
+
+/**
+ * 对外自述：外壳与自动化测试都可以读它，判断「页面是什么形态、就绪没有、加载了什么」。
+ * 外壳的启动流程应该是「等 `PDScope.ready === true`，再调 openBytes/openUrl」。
+ */
+window.PDScope = {
+  version: '0.1.0',
+  env: ENV,                       // { tauri, http, file, desktop, hasServer, name, label, proto }
+  ready: false,
+  openBytes: window.pdscopeOpenBytes,
+  openUrl: window.pdscopeOpenUrl,
+  /** 当前状态快照，供外壳自检 / 调试面板读取 */
+  status: () => ({
+    env: ENV.name,
+    file: S.fileName,
+    channel: S.channel,
+    packets: S.packets?.length ?? 0,
+    filtered: S.view?.length ?? 0,
+  }),
+};
+
 /* 初始化 */
 document.documentElement.style.setProperty('--rh', S.rowH + 'px');
+// 标注形态，便于 CSS 按形态微调（桌面版没有「载入示例」，单文件版可用 file: 特有能力）
+document.documentElement.dataset.env = ENV.name;
 initSamples();
 requestAnimationFrame(() => drawTimeline());
+// 就绪信号：外壳据此决定何时把命令行里带的抓包文件推进来
+window.PDScope.ready = true;
+window.dispatchEvent(new Event('pdscope-ready'));
 
 })();
 </script>

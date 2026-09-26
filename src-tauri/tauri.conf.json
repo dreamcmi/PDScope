@@ -1,0 +1,68 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "PDScope",
+  "version": "0.1.0",
+  "identifier": "com.pdscope.desktop",
+  "build": {
+    "beforeDevCommand": "npm run build",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "PDScope · USB PD 抓包解析",
+        "url": "PDScope.html",
+        "width": 1560,
+        "height": 960,
+        "minWidth": 1040,
+        "minHeight": 640,
+        "resizable": true,
+        "center": true,
+        "dragDropEnabled": false,
+        "backgroundColor": "#eef1f5"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "DeveloperTool",
+    "shortDescription": "USB PD 抓包解析上位机",
+    "longDescription": "直接解析正点原子 ATK-C 的 .atkcc 抓包文件，跨平台（Windows / macOS / Linux）。",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "fileAssociations": [
+      {
+        "ext": ["atkcc"],
+        "name": "ATK PD Capture",
+        "description": "正点原子 ATK-C 抓取的 USB PD 数据",
+        "role": "Editor"
+      }
+    ],
+    "windows": {
+      "nsis": {
+        "languages": ["SimpChinese", "English"],
+        "installMode": "currentUser"
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    },
+    "linux": {
+      "deb": {
+        "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0"]
+      }
+    }
+  }
+}

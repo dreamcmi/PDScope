@@ -7,6 +7,7 @@
  *
  * 用法：node tools/build-standalone.mjs
  */
+import { existsSync, rmSync } from 'node:fs';
 import { readFile, writeFile, mkdir, stat } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -98,13 +99,19 @@ if (!/<script[^>]+src="\.\/app\.js"/.test(html)) throw new Error('index.html 里
 html = html.replace(/[ \t]*<link[^>]+href="\.\/styles\.css"[^>]*>\s*/, () => `<style>\n${css}\n</style>\n`);
 html = html.replace(/[ \t]*<script[^>]+src="\.\/app\.js"[^>]*><\/script>\s*/, () => `<script>\n${bundle}\n</script>\n`);
 
-// 单文件模式下「载入示例」不可用（没有同目录的 .atkcc），直接隐藏
-html = html.replace('<head>', `<head>\n<meta name="pdscope-standalone" content="1" />`);
+// 注意：不再往 HTML 里注入任何「这是单文件版」的标记。
+// 早先注入过 <meta name="pdscope-standalone">，但 Tauri 复用的就是同一个文件，
+// 会连带把桌面版也标成单文件版。形态判定已全部移到运行期（app.js 的 ENV），这里保持中立。
 
 await mkdir(dirname(OUT), { recursive: true });
 await writeFile(OUT, html, 'utf8');
 
 const st = await stat(OUT);
+const stale = join(ROOT, 'dist', 'index.html');
+if (existsSync(stale)) {
+  rmSync(stale);                     // Tauri 现在直接加载 PDScope.html，旧的重复入口清掉
+}
+
 console.log('');
 console.log('  ✔ 单文件版已生成');
 console.log('  ─────────────────────────────────────────');
@@ -113,5 +120,6 @@ console.log(`  体积   ${(st.size / 1024).toFixed(1)} KB`);
 console.log(`  模块   ${order.length} 个，源码 ${(totalBytes / 1024).toFixed(1)} KB`);
 if (collisions.length) console.log(`  警告   ${collisions.length} 处顶层重名`);
 console.log('');
-console.log('  双击该 HTML 即可在任意系统上运行，无需 Node。');
+console.log('  双击该 HTML 即可在任意系统上运行，无需 Node；');
+console.log('  Tauri 桌面版也直接加载它，无需另做入口。');
 console.log('');

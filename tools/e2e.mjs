@@ -28,7 +28,7 @@ const FILE = arg('--file', null);
 const TARGET = FILE
   ? pathToFileURL(resolve(ROOT, FILE)).href
   : `http://127.0.0.1:${PORT}/`;
-const SHOT = arg('--out', join(ROOT, 'dist', 'e2e-screenshot.png'));
+const SHOT = arg('--out', join(ROOT, 'artifacts', 'e2e-screenshot.png'));
 const DROP = arg('--drop', null);          // 用拖拽事件注入的真实 .atkcc 路径（相对 ROOT）
 
 const CANDIDATES = [

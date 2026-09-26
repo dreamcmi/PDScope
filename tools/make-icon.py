@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """
-生成 PDScope 的应用图标。
+生成 PDScope 的品牌图标源图。
 
-产物：
-  build/icon.png   1024×1024  （electron-builder 会据此生成 mac icns / linux png）
-  build/icon.ico   多尺寸      （Windows 外壳与 electron-builder 用）
+产物（写入 assets/，那是「图标源素材」目录，不是构建产物目录）：
+  assets/icon.png   1024×1024  主源图，供 tools/make-tauri-icons.py 派发各平台图标
+  assets/icon.ico   多尺寸     Windows 直接可用的一份（16~256）
+
+下一步：改完源图后跑 `python tools/make-tauri-icons.py`，它会重新生成
+src-tauri/icons/ 下打包所需的整套图标（含手写 ICNS 容器）。
 
 图形构思：
   深色圆角底 + 「PD」字样 + 下方一段方波。
@@ -17,7 +20,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-OUT_DIR = Path(__file__).resolve().parent.parent / "build"
+OUT_DIR = Path(__file__).resolve().parent.parent / "assets"
 S = 1024
 
 BG_TOP = (30, 45, 74)          # 深蓝

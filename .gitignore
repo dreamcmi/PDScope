@@ -33,11 +33,15 @@
 # ⚠ 本仓库的根就是 PDScope/，所以这里的路径**不带 PDScope/ 前缀**。
 #   早先的版本误写成 !PDScope/build/icon.ico，在仓库根下永远匹配不到任何文件，
 #   放行等于没写（图标会被 *.ico 吃掉）。已改回相对根目录的写法。
-!build/icon.ico
-!build/icon.icns
-!build/icon.png
+!assets/icon.ico
+!assets/icon.icns
+!assets/icon.png
 !src/ui/assets/**
 # 例如：!src/ui/assets/logo.svg
+
+# Tauri 的打包图标（tauri.conf.json → bundle.icon 直接引用这些路径），
+# 缺一个就无法构建，必须入库；否则会被上面的 *.png / *.ico / *.icns 吃掉。
+!src-tauri/icons/**
 
 # ── 3. 编辑器 / IDE ───────────────────────────────────────────────
 .vscode/
@@ -97,28 +101,29 @@ env/
 .ruff_cache/
 
 # ── 7. 构建产物 ───────────────────────────────────────────────────
-# 注1：dist/PDScope.html 是「单文件免安装版」交付物，故刻意不忽略 dist。
-#      如需改为不跟踪，取消下面两行注释即可：
-# dist/
-# !dist/PDScope.html
-# 注2：build/ 存放 electron-builder 与 Windows 外壳共用的图标，属源文件，
-#      必须跟踪，因此这里不忽略它，只忽略打包输出 out/ 与 release/。
-# 注3：dist/shell-* 是 Windows 外壳自检生成的报告与截图（截图已被上面 *.png 覆盖），
-#      属运行产物，不入库。
+# 注1：dist/ 是「前端产物」目录，但同时供给两种形态，所以刻意不忽略：
+#      · dist/PDScope.html —— 单文件免安装版（双击即用），也是 Tauri 桌面版的入口页
+#      两份形态共用这一个文件，没有第二个入口，改前端只需重建它。
+# 注2：assets/ 与 src-tauri/icons/ 是图标源文件，属源文件，不忽略。
+# 注3：artifacts/ 是自检产物（截图 + 报告），属运行产物，整体不入库。
+#      单独放一个目录是为了不让它们混进 dist/ —— Tauri 会把 frontendDist 整个打进
+#      可执行文件，混进去会白胖将近 1 MB。
 
-dist/shell-*.txt
+artifacts/
 
+# Rust / Tauri 编译产物
+src-tauri/target/
+src-tauri/gen/
 out/
 release/
+*.pdb
+
+# 历史遗留：.NET / Electron 产物（对应方案已废弃，保留规则以防旧目录复现）
+bin/
+obj/
 *.asar
 *.asar.unpacked/
 .electron-builder-cache/
-
-# .NET / Windows 外壳（shell-win）的编译中间产物与输出
-bin/
-obj/
-*.user
-*.suo
 
 # ── 8. 操作系统垃圾文件 ───────────────────────────────────────────
 .DS_Store

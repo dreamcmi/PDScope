@@ -1,13 +1,13 @@
 /**
  * inflate.js — 环境自适应的 raw deflate 解压
  *
- * 浏览器 / Electron 渲染进程：DecompressionStream('deflate-raw')
+ * 浏览器 / 桌面外壳的 WebView：DecompressionStream('deflate-raw')
  * Node：node:zlib
  *
  * 对外只暴露一个 makeInflator() -> (raw, expectedSize) => Promise<Uint8Array>
  */
 
-/** 浏览器实现（Chrome 103+ / Safari 16.4+ / Electron 均可） */
+/** 浏览器实现（Chrome/Edge 103+ / Safari 16.4+ / Firefox 113+；桌面外壳的 WebView 也走这条） */
 export function makeBrowserInflator() {
   const supported = typeof DecompressionStream === 'function';
   return async function inflateRaw(raw, expectedSize) {
