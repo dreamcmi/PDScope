@@ -5,6 +5,8 @@
  * 检查 SOP / Header / Data / CRC / EOP 与 PDO 语义是否逐字段还原。
  */
 import { PdDecoder } from '../src/js/core/pd.js';
+import { EdgeExtractor, BmcDecoder, UI_US, collectRunStats, estimateSampleRate } from '../src/js/core/bmc.js';
+import { parseSampleRate, DEFAULT_SAMPLE_RATE } from '../src/js/core/atkcc.js';
 import {
   DEC4B5B, SOP_SEQUENCES, EOP_SYM,
 } from '../src/js/core/pd_tables.js';
@@ -105,5 +107,94 @@ for (const c of cases) {
   }
   ok ? pass++ : fail++;
 }
+/* ═══════════ ② 采样率不是写死的：任意采样率下都能解，且能从波形反推 ═══════════ */
+
+/** 把「一串报文」编成 BMC 电平采样：每个位边界必有一次跳变，位为 1 时位中间再跳一次。
+ *  包与包之间留一段无跳变的空闲，且空闲之后的第一位仍从跳变开始（真实设备就是这样）。 */
+function bmcEncode(packets, fs, { leadUs = 6, gapUs = 12 } = {}) {
+  const us = (v) => v * fs / 1e6;
+  const bitSamples = us(2 * UI_US);          // 1 bit = 2 UI
+  const edges = [];
+  let t = us(leadUs);
+  edges.push(t);                             // 第一个位单元的起始跳变（之前是空闲电平）
+  for (const bits of packets) {
+    for (const b of bits) {
+      if (b) edges.push(t + bitSamples / 2);
+      t += bitSamples;
+      edges.push(t);
+    }
+    t += us(gapUs);                          // 空闲：间隔 > maxbit 即视为包结束
+    edges.push(t);                           // 下一包的起始跳变
+  }
+  const total = Math.ceil(t);
+  // 采样并打包成 LSB 优先的字节流（与 .atkcc 的存法一致）
+  const bytes = new Uint8Array(Math.ceil(total / 8));
+  let ei = 0, high = 0;
+  for (let i = 0; i < total; i++) {
+    while (ei < edges.length && Math.round(edges[ei]) <= i) { high ^= 1; ei++; }
+    if (high) bytes[i >> 3] |= 1 << (i & 7);
+  }
+  return bytes;
+}
+
+/** 走完整链路：边沿提取 → BMC 状态机 → PD 解析 */
+function decodeSamples(bytes, sampleRate) {
+  const ex = new EdgeExtractor({ bitOrder: 'lsb' });
+  const bmc = new BmcDecoder({ sampleRate });
+  const pd = new PdDecoder({ sampleRate });
+  const out = [];
+  const feed = (raw) => { if (raw) { const p = pd.decode(raw, 0); if (p) out.push(p); } };
+  ex.push(bytes, 0, (e) => feed(bmc.pushEdge(e)));
+  ex.flush((e) => feed(bmc.pushEdge(e, true)), bmc.maxbit + 1);
+  return out;
+}
+
+const streamPackets = [], streamTypes = [];
+for (const c of cases) {
+  const { bits } = buildPacket(c.sop, c.header, c.data);
+  streamPackets.push(bits);
+  streamTypes.push(c.expectType);
+}
+
+const check = (name, ok, extra = '') => {
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${name.padEnd(20)} ${extra}`);
+  ok ? pass++ : fail++;
+};
+
+// 真实设备常见的采样率区间，外加一个极端值
+for (const fs of [1500000, 2500000, 4000000, 6000000]) {
+  const mhz = (fs / 1e6).toFixed(2);
+  const bytes = bmcEncode(streamPackets, fs);
+
+  const decoded = decodeSamples(bytes, fs);
+  const okDecode = decoded.length === cases.length && decoded.every((p, i) => p.msgType === streamTypes[i] && p.crcOk === true);
+
+  const est = estimateSampleRate(collectRunStats(bytes));
+  const errRate = est ? Math.abs(est.sampleRate - fs) / fs : 1;
+  const okEst = !!est && errRate <= 0.08;
+  const decoded2 = est ? decodeSamples(bytes, est.sampleRate) : [];
+  const okFallback = decoded2.length === cases.length && decoded2.every((p, i) => p.msgType === streamTypes[i]);
+
+  const wrong = decodeSamples(bytes, fs * 2);          // 采样率写错一倍
+  const okWrong = !(wrong.length === cases.length && wrong.every((p) => p.crcOk === true));
+
+  check(`${mhz} MHz 采样`, okDecode && okEst && okFallback && okWrong,
+    `报文 ${decoded.length}/${cases.length} · 反推 ${est ? (est.sampleRate / 1e6).toFixed(3) : '—'} MHz（误差 ${(errRate * 100).toFixed(2)}%）`
+    + ` · 按反推值解出 ${decoded2.length}/${cases.length} · 错一倍时解出 ${wrong.length} 条`);
+}
+
+// 采样率声明的解析：不同键名 / 单位都要认
+for (const [text, want, src] of [
+  ['SamplingFrequency=2500', 2500000, 'declared'],
+  ['SampleRate=2500000', 2500000, 'declared'],
+  ['sampling_freq = 2.5 MHz', 2500000, 'declared'],
+  ['SampleRate=12000 kHz', 12000000, 'declared'],
+  ['Resolution=16', DEFAULT_SAMPLE_RATE, 'default'],
+  ['', DEFAULT_SAMPLE_RATE, 'default'],
+]) {
+  const r = parseSampleRate(text);
+  check('解析采样率声明', r.hz === want && r.source === src, `${JSON.stringify(text).padEnd(24)} → ${r.hz}Hz ${r.source}`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

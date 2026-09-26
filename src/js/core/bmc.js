@@ -6,6 +6,12 @@
  *   threshold     = 1.5 * UI   = 2.5   µs          （区分「半位1」与「位0」）
  *   maxbit        = 3 * UI     = 5.0   µs          （超过即视为空闲，包结束）
  *
+ * ⚠ 这里的 600 kHz 是 **PD 协议规定的**，与抓包设备的采样率无关；
+ *   采样率由调用方传入（来自 channel.ini 的声明）。所以本模块里出现的
+ *   threshold / maxbit 都是「按采样率换算出来的采样点数」，不是写死的常数 ——
+ *   16 MHz 采样的文件照样能解，门限会跟着变成 40 / 80 个采样点。
+ *   文件没声明采样率时，可用本文件末尾的 estimateSampleRate() 从波形反推。
+ *
  * 状态机（与参考实现一致）：
  *   diff = 本次边沿 - 上次边沿
  *   isZero = diff > threshold
@@ -15,7 +21,10 @@
  *   other: 非法序列，按 0 处理并记录
  */
 
-export const UI_US = 1000000 / 600000;            // 1.6666666...
+/** PD 规范规定的 BMC 载波频率（1 UI = 半个位宽 = 1/600 kHz ≈ 1.6667 µs） */
+export const BMC_HZ = 600000;
+
+export const UI_US = 1000000 / BMC_HZ;            // 1.6666666...
 export const THRESHOLD_US = (UI_US + 2 * UI_US) / 2; // 2.5
 export const MAXBIT_US = 3 * UI_US;               // 5.0
 
@@ -210,4 +219,121 @@ export class BmcDecoder {
       bitrate,
     };
   }
+}
+
+/* ═══════════════════════ 采样率反推（波形自检） ═══════════════════════ */
+
+/**
+ * 收集一段采样字节流里的「游程」长度（相邻同电平采样点的连续个数）。
+ *
+ * BMC 里的合法游程只有两种：1 UI（'1' 位的半段）和 2 UI（'0' 位的整段），
+ * 空闲段会长得多。所以游程长度分布里只有两个簇，且长度比恒为 1:2 ——
+ * 据此就能把「1 UI 等于几个采样点」解出来（见 estimateUiSamples）。
+ *
+ * @param {Uint8Array} data 采样字节流（每字节 8 个采样点，LSB 优先）
+ * @param {{maxRun?:number, maxRuns?:number}} [opts] maxRun 以上的算空闲段直接丢弃
+ * @returns {number[]} 游程长度（采样点数）列表，最多 maxRuns 个
+ */
+export function collectRunStats(data, { maxRun = 64, maxRuns = 40000 } = {}) {
+  const runs = [];
+  const push = (n) => { if (n >= 2 && n <= maxRun) runs.push(n); };
+  let level = -1, len = 0;
+
+  for (let i = 0; i < data.length; i++) {
+    const b = data[i];
+    if (b === 0 || b === 0xff) {                 // 快速路径：整字节同电平
+      const bit = b === 0 ? 0 : 1;
+      if (bit === level) { len += 8; }
+      else { if (level !== -1) push(len); level = bit; len = 8; }
+      continue;
+    }
+    const rs = BYTE_RUNS_LSB[b];
+    for (let r = 0; r < rs.length; r++) {
+      const run = rs[r];
+      if (run.bit === level) { len += run.len; }
+      else { if (level !== -1) push(len); level = run.bit; len = run.len; }
+    }
+    if (runs.length >= maxRuns) break;           // 统计量够了，不再往下扫
+  }
+  if (level !== -1 && runs.length < maxRuns) push(len);
+  return runs;
+}
+
+/**
+ * 由游程分布反推「1 UI = 多少采样点」。
+ *
+ * 原理：每个游程非 1 UI 即 2 UI，于是
+ *        Σ 游程采样点数 = UI × (nShort + 2 × nLong)
+ *     ⇒  UI = Σ / (nShort + 2 × nLong)
+ * 分类门限取 1.5 × UI，迭代几轮即收敛（比只看直方图峰值精确得多：
+ * 峰值只能给到整数，而这个式子能把 4.167 这种小数解出来）。
+ *
+ * @param {number[]} runs collectRunStats 的输出
+ * @returns {null|{uiSamples:number, nShort:number, nLong:number, confidence:number, used:number}}
+ */
+export function estimateUiSamples(runs) {
+  if (!runs || runs.length < 200) return null;
+
+  // ① 粗搜候选 UI：挑「能把游程解释成 1 UI 或 2 UI 的比例最高」的那个。
+  //    不能只看直方图峰值或最小值 —— UI=2.5 个采样点时，1 UI 的游程会在 2 和 3 之间
+  //    来回跳，任何单点启发式都会被量化噪声带偏。全量扫候选值最稳，代价几十毫秒。
+  const sub = runs.length > 4000
+    ? Array.from({ length: 4000 }, (_, i) => runs[Math.floor((i * runs.length) / 4000)])
+    : runs;
+  let bestUi = 0, bestScore = 0;
+  for (let ui = 1.2; ui <= 60; ui += 0.05) {
+    const tol = ui * 0.3;
+    let hit = 0, nS = 0, nL = 0;
+    for (const r of sub) {
+      if (Math.min(Math.abs(r - ui), Math.abs(r - 2 * ui)) >= tol) continue;
+      hit++;
+      if (r < ui * 1.5) nS++; else nL++;
+    }
+    if (hit / sub.length < 0.9) continue;
+    if (nS < sub.length * 0.1 || nL < sub.length * 0.1) continue;   // 两个簇都得有料
+    const score = hit / sub.length;
+    if (score > bestScore) { bestScore = score; bestUi = ui; }
+  }
+  if (!bestUi) return null;
+
+  // ② 精修：每个游程非 1 UI 即 2 UI ⇒ Σ 游程采样点数 = UI · (nShort + 2·nLong)，
+  //    迭代几轮把这个式子解到底 —— 整数取整带来的偏差会被平均掉，能解出 4.167 这种小数。
+  let ui = bestUi, nS = 0, nL = 0;
+  for (let it = 0; it < 8; it++) {
+    const cut = 1.5 * ui;
+    nS = 0; nL = 0;
+    let total = 0;
+    for (const r of runs) {
+      if (r < ui * 0.55 || r > ui * 3.2) continue;         // 既不像 1 UI 也不像 2 UI
+      total += r;
+      if (r < cut) nS++; else nL++;
+    }
+    if (nS + nL < 100) return null;
+    const next = total / (nS + 2 * nL);
+    if (!(next > 0)) return null;
+    if (Math.abs(next - ui) < 1e-4) { ui = next; break; }
+    ui = next;
+  }
+
+  // ③ 置信度：游程里有多大比例真的落在 1 UI / 2 UI 附近（±0.35 UI）
+  let good = 0;
+  for (const r of runs) {
+    if (Math.min(Math.abs(r - ui), Math.abs(r - 2 * ui)) < ui * 0.35) good++;
+  }
+  const confidence = good / runs.length;
+  if (confidence < 0.85 || nS < 50 || nL < 50) return null;  // 不像 PD 波形，别硬猜
+  return { uiSamples: ui, nShort: nS, nLong: nL, confidence, used: nS + nL };
+}
+
+/**
+ * 从波形反推采样率（Hz）。
+ * @param {number[]} runs collectRunStats 的输出
+ * @returns {null|{sampleRate:number, uiSamples:number, confidence:number}}
+ */
+export function estimateSampleRate(runs) {
+  const e = estimateUiSamples(runs);
+  if (!e) return null;
+  const sampleRate = Math.round(e.uiSamples * BMC_HZ);
+  if (!(sampleRate >= 100000 && sampleRate <= 50000000)) return null;   // 离谱的值不认
+  return { sampleRate, uiSamples: e.uiSamples, confidence: e.confidence, nShort: e.nShort, nLong: e.nLong };
 }

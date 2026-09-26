@@ -11,13 +11,60 @@
  * 关键结论（已用官方 ATK-C 截图逐字段交叉验证，完全一致）：
  *   · 每个采样点 1 bit，**LSB 优先**（每字节内 bit0 时间最早）
  *   · 某字节 0xFF = 该 8 个采样点全高；0x00 = 全低（空载/空闲段，末块尾部为补齐）
- *   · 采样率 2.5 MHz；BMC 时钟 600 kHz（UI=1.6667us），故 1 UI ≈ 4.167 采样点、1 bit = 2 UI
+ *   · 采样率**由文件声明**（channel.ini），本工具不写死；只管两点：① 声明值怎么读
+ *     （见 parseSampleRate，认多种键名与单位），② 缺失/不可信时怎么办（见 pipeline.js
+ *     的 resolveSampleRate：用波形节拍反推，再兜底 DEFAULT_SAMPLE_RATE）。
+ *     BMC 时钟 600 kHz（UI=1.6667us）是 PD 协议定的，与采样率无关。
  *   · 分块序号按数值排序（0-9 在 0-10 之前），最后一块尾部用 0x00 补齐
  */
 
 import { ZipReader } from './zip.js';
 
 export const CHUNK_SIZE = 1048576;      // 1 MiB
+
+/** 文件没声明采样率、且波形也认不出来时的兜底值（实测 ATK-C 一直导出 2.5 MHz） */
+export const DEFAULT_SAMPLE_RATE = 2500000;
+
+/**
+ * 从 ini 文本里读出采样率 —— 兼容不同版本 ATK-C 的写法，不假定键名。
+ *
+ *   SamplingFrequency=2500        ← 实测就是这个，单位 kHz
+ *   SampleRate=2500000            ← 也有工具直接给 Hz
+ *   Sampling_Freq = 2.5 MHz       ← 带单位后缀
+ *
+ * 单位判定顺序：键名里带 khz/mhz → 行尾带单位 → 都没有则看数量级
+ * （≥ 100 kHz 当 Hz，否则当 kHz —— 因为实测 ATK-C 写的是 kHz 的 2500）。
+ *
+ * @param {string} text
+ * @returns {{hz:number, source:'declared'|'default', key:string|null, value:number, unit:string, raw:string|null}}
+ */
+export function parseSampleRate(text) {
+  const fallback = { hz: DEFAULT_SAMPLE_RATE, source: 'default', key: null, value: 0, unit: '', raw: null };
+  if (!text) return fallback;
+
+  for (const line of String(text).split(/\r?\n/)) {
+    const m = /^\s*([A-Za-z_][\w .\-]*?)\s*[=:]\s*([0-9]+(?:\.[0-9]+)?)\s*([A-Za-z\/]*)\s*$/.exec(line);
+    if (!m) continue;
+    const key = m[1].trim();
+    const norm = key.toLowerCase().replace(/[\s._\-]/g, '');
+    if (!/freq|rate|hz/.test(norm)) continue;          // 只认像采样率的键
+
+    const value = Number(m[2]);
+    if (!(value > 0)) continue;
+
+    let unit = (m[3] || '').toLowerCase();
+    if (!unit) unit = /khz/.test(norm) ? 'khz' : /mhz/.test(norm) ? 'mhz' : '';
+    let hz;
+    if (unit === 'khz' || unit === 'k') hz = value * 1e3;
+    else if (unit === 'mhz' || unit === 'm') hz = value * 1e6;
+    else if (unit === 'hz') hz = value;
+    else hz = value >= 100000 ? value : value * 1e3;
+
+    if (!(hz >= 10000 && hz <= 1e9)) continue;         // 数量级明显不对的值不当采样率
+    return { hz, source: 'declared', key, value, unit: unit || (hz === value ? 'hz' : 'khz'), raw: line.trim() };
+  }
+  return fallback;
+}
 
 export class AtkccCapture {
   constructor(zip, meta) {
@@ -35,17 +82,16 @@ export class AtkccCapture {
   static async open(bytes, io) {
     const zip = new ZipReader(bytes);
 
-    // ── channel.ini：采样率 ──
+    // ── channel.ini：采样率（文件声明 → 波形自检 → 兜底，三级策略见 pipeline.js）──
     const rootIni = await zip.readText('channel.ini', io.inflate);
-    let samplingFrequency = 0;
-    if (rootIni) {
-      const m = /SamplingFrequency\s*=\s*([0-9.]+)/i.exec(rootIni);
-      if (m) samplingFrequency = Number(m[1]);
+    let rate = parseSampleRate(rootIni);
+    // 个别版本把参数写在子目录那份 channel.ini 里，根目录缺失时也认
+    const subIni = await zip.readText('0/channel.ini', io.inflate);
+    if (rate.source !== 'declared') {
+      const alt = parseSampleRate(subIni);
+      if (alt.source === 'declared') rate = alt;
     }
-    // 实测 2500 的单位是 kHz。若文件给出的是 Hz 量级（<100000），按 Hz 处理。
-    const sampleRate = samplingFrequency > 0
-      ? (samplingFrequency >= 100000 ? samplingFrequency : samplingFrequency * 1000)
-      : 2500000;
+    const sampleRate = rate.hz;
 
     // ── bus.ini：VBUS / IBUS ──
     const busIni = await zip.readText('bus.ini', io.inflate);
@@ -80,7 +126,6 @@ export class AtkccCapture {
 
     // ── 总采样数 ──
     let totalSamples = 0;
-    const subIni = await zip.readText('0/channel.ini', io.inflate);
     if (subIni) {
       const lines = subIni.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
       if (lines.length >= 2) totalSamples = Number(lines[1]) || 0;
@@ -90,7 +135,10 @@ export class AtkccCapture {
 
     return new AtkccCapture(zip, {
       sampleRate,
-      samplingFrequencyRaw: samplingFrequency,
+      sampleRateSource: rate.source,       // 'declared'（文件声明） | 'default'（没写，用的兜底值）
+      sampleRateKey: rate.key,             // 命中的键名，便于排查
+      sampleRateRaw: rate.raw,             // 命中的整行原文
+      samplingFrequencyRaw: rate.value,    // 文件里写的那个数字（未换算）
       rawChannelIni: subIni,
       totalSamples,
       channels: channelList,

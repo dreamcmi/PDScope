@@ -11,11 +11,12 @@
     "serve": "node tools/serve.mjs",
     "cli": "node tools/cli.js",
 
+    "syntax": "node tools/syntax.mjs",
     "selftest": "node tools/selftest.js",
     "ackcheck": "node tools/ackcheck.js",
     "e2e": "node tools/e2e.mjs --file dist/PDScope.html --drop \"../制糖40w-ip18pro.atkcc\"",
     "e2e:serve": "node tools/e2e.mjs",
-    "test": "node tools/build-standalone.mjs && node tools/selftest.js && node tools/ackcheck.js && npm run e2e",
+    "test": "node tools/syntax.mjs && node tools/build-standalone.mjs && node tools/selftest.js && node tools/ackcheck.js && npm run e2e",
 
     "app": "tauri dev",
     "app:exe": "tauri build --no-bundle",

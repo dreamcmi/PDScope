@@ -288,6 +288,13 @@ async function run() {
       })()`);
       record('报文表用了多种颜色', colors >= 3, `${colors} 种文字色`);
 
+      const rate = await evaluate(`(() => {
+        const c = [...document.querySelectorAll('#metaChips .mchip')].find((x) => /采样率/.test(x.textContent));
+        return c ? c.textContent.replace(/\\s+/g, ' ').trim() : '';
+      })()`);
+      record('采样率已从文件解析并标出来源',
+        /MHz/.test(rate) && /文件声明|波形实测|默认值|手动指定/.test(rate), rate);
+
       const hasTimeline = await evaluate(`(() => {
         const c = document.querySelector('canvas');
         return !!c && c.width > 100;

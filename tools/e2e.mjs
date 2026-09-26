@@ -260,6 +260,14 @@ try {
     const dirPills = await cdp.eval(`document.querySelectorAll('#vrows .pill').length`);
     check('方向标识已渲染', dirPills > 0, `${dirPills} 个标签`);
 
+    // 采样率不是写死的：界面要显示「数值 + 来源」（文件声明 / 波形实测 / 默认值 / 手动指定）
+    const rateChip = await cdp.eval(`(() => {
+      const c = [...document.querySelectorAll('#metaChips .mchip')].find((x) => /采样率/.test(x.textContent));
+      return c ? { text: c.textContent.replace(/\\s+/g, ' ').trim(), tag: (c.querySelector('.mtag') || {}).textContent || '' } : null;
+    })()`);
+    check('采样率已解析并标出来源', !!rateChip && /MHz/.test(rateChip.text)
+      && /文件声明|波形实测|默认值|手动指定/.test(rateChip.tag), rateChip ? rateChip.text : '未找到采样率 chip');
+
     /* 3. 点击一行 -> 详情 */
     await cdp.eval(`document.querySelector('#vrows .tr').click()`);
     await sleep(400);

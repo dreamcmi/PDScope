@@ -204,6 +204,7 @@ node tools/serve.mjs        # 默认 http://127.0.0.1:5188，会自动开浏览�
 | 能力                | 说明                                                                                         |
 | ------------------- | -------------------------------------------------------------------------------------------- |
 | **报文表**          | `# / SOP / 报文类型 / ID / 方向 / Obj / 时间 / VBUS-IBUS / 数据hex / 解析详情`，虚拟滚动，几万条也不卡 |
+| **采样率来源标注**  | 顶栏显示实际采用的采样率并标出来源：`文件声明` / `波形实测` / `默认值`。声明与波形不一致时改按实测解码，并弹出提示；鼠标悬停可见 `channel.ini` 原文或原因 |
 | **方向区分**        | `Source`（供电方）/ `Sink`（受电方）/ `Plug`（线缆 e-marker）三色徽章；`SOP / SOP′ / SOP″` 分别标注 |
 | **GOOD CRC 配对同色** | 每条 `GOOD CRC` 自动取「它所确认的那条报文」的颜色，而不是笼统的控制色。配对依据：GoodCRC 是对报文的即时应答（实测恒为紧邻 1 条），并用 PD 规范要求的 *MessageID 相同* 交叉校验；被确认报文本身是坏包时退化为纯邻近匹配。悬停报文类型可见 `确认 #N · 类型`，详情面板「链路概览」里也有「确认的报文」一栏 |
 | **选择性屏蔽**      | 按方向、SOP 类型、报文类别（控制/数据/扩展/VDM/异常）、**具体报文类型**（多选，带计数）、时间窗口、关键字任意组合过滤 |
@@ -224,7 +225,7 @@ GOOD CRC 配对同色的效果见 `artifacts/ack-colors.png`。
 已与官方 ATK-C 输出**逐字段比对一致**。`.atkcc` 本质就是一个 **ZIP**（`PK\x03\x04`）：
 
 ```
-channel.ini            SamplingFrequency=2500      ← 单位 kHz，即 2.5 MHz 数字采样率
+channel.ini            SamplingFrequency=2500      ← 单位 kHz，即数字采样率 2.5 MHz（时标按它换算）
 bus.ini                sample=N,vbus=14.651,ibus=1.274   ← 模拟量轨迹，sample 与数字采样同域
 0/channel.ini          第 1 行 = 通道组号；第 2 行 = 总采样点数
 0/<ch>-<idx>.bin       通道 <ch> 的第 <idx> 块，每块固定 1 MiB（deflate 压缩）
@@ -243,12 +244,31 @@ bus.ini                sample=N,vbus=14.651,ibus=1.274   ← 模拟量轨迹，s
 1 bit/采样 ──► 游程/边沿提取 ──► BMC 双相标记码状态机 ──► 4B5B 符号 ──► PD 报文（SOP/报文头/数据对象/CRC32）
 ```
 
-* 采样率 2.5 MHz，BMC 时钟 600 kHz → `UI = 1.6667 µs ≈ 4.167 采样点`；**1 bit = 2 UI**。
+* **采样率取自文件**（`channel.ini` 的 `SamplingFrequency`，实测都是 2500 kHz）。BMC 时钟 600 kHz
+  是 PD 协议规定的、与采样率无关 → `UI = 1.6667 µs`；在 2.5 MHz 下 `1 UI ≈ 4.167 采样点`，**1 bit = 2 UI**。
   * `'1'` 位：位周期内两次跳变 → 两段 ~1 UI 的短游程
   * `'0'` 位：位周期内一次跳变 → 一段 ~2 UI 的长游程
-* 判决门限 `1.5 UI = 2.5 µs`（≈6 采样点），空闲门限 `3 UI = 5 µs`（≈13 采样点）。
+* 判决门限 `1.5 UI = 2.5 µs`、空闲门限 `3 UI = 5 µs`，都是**按采样率换算成采样点**之后再比
+  （2.5 MHz 下约 6 / 13 个采样点；换个采样率的文件门限跟着变，不是写死的常数）。
 * 4B5B 表、SOP/SOP′/SOP″ 有序集、报文头字段、PDO/RDO/VDM/扩展报文解析，全部对齐 libsigrok
   `usb_power_delivery` 解码器语义。
+
+### 采样率怎么定：声明 → 波形自检 → 兜底
+
+采样率决定「采样点序号 → 时间」的换算，所以它必须来自文件，不能写死。三级策略：
+
+| 优先 | 来源 | 何时启用 | 界面标记 |
+| :--: | ---- | -------- | -------- |
+| ① | **文件声明** —— `channel.ini` 里的采样率（认 `SamplingFrequency` / `SampleRate` / `Frequency` 等键名，kHz / Hz / MHz 单位都认） | 声明存在，且与波形实测相差不超过 ±25% | `文件声明` |
+| ② | **波形自检** —— 用 BMC 游程分布反推：每个游程非 1 UI 即 2 UI，于是 `Σ游程采样点数 = UI × (nShort + 2 × nLong)`，解出「1 UI 等于几个采样点」，再乘 600 kHz | 文件没声明，或声明值与波形差得离谱（单位写错、少写一位…） | `波形实测` |
+| ③ | **兜底 2.5 MHz** | 波形也认不出来（通道是空的、或者根本不是 PD 数据） | `默认值` |
+
+阈值为什么放宽到 ±25%：波形反推用的是 PD **标称**的 600 kHz 时钟，而实测 5 份不同厂商的抓包，
+反推值都稳定比声明的 2.5 MHz 低约 4%（器件时钟的正常离散）。只要两者量级相符就以文件声明为准 ——
+用它换算出来的时标与官方 ATK-C 完全一致（见上一节的逐字节比对）。
+
+反推只读最前面 1~2 个块（几十毫秒），同一份文件切换通道时不重复测。命令行可以强制指定：
+`node tools/cli.js <file.atkcc> --rate 2400000`（排查异常文件时用）。
 
 > **关键坑**：位序必须用 **LSB 优先**。用 MSB 解出来的游程长度会散落在 1~3 个采样点，
 > 只能得到一堆 CRC 全错的假包；换成 LSB 后游程干净地聚在 4/8 采样点，报文头的 SOP 前导
@@ -280,7 +300,8 @@ PDScope/
 ├─ dist/                  前端产物：PDScope.html —— 单文件版与桌面版共用的唯一入口页
 ├─ artifacts/             自检产物：截图 + 报告（不入库，也不进安装包）
 └─ tools/
-   ├─ cli.js              命令行解析（table / --json / --csv）
+   ├─ cli.js              命令行解析（table / --json / --csv / --rate 强制指定采样率）
+   ├─ syntax.mjs          全量语法检查（node --check，几秒，自检链第一步）
    ├─ selftest.js         协议层合成用例自检
    ├─ ackcheck.js         GOOD CRC 配对校验（跨全部真实抓包）
    ├─ e2e.mjs             无头浏览器端到端自检 + 截图（测单文件版 / 本地服务版）
@@ -308,10 +329,11 @@ PDScope/
 
 ```bash
 # 协议层与配对（纯 Node，秒级）
-node tools/selftest.js                    # 合成用例，验证 4B5B / PD / CRC 语义
+node tools/syntax.mjs                     # 全量语法检查（几秒，先跑它）
+node tools/selftest.js                    # 合成用例 18 项：4B5B / PD / CRC 语义 + 多种采样率
 node tools/ackcheck.js                    # GOOD CRC 配对（跨 5 份真实抓包）
 
-# 界面 18 项（走系统已装的 Chrome/Edge，不下载浏览器）
+# 界面 19 项（走系统已装的 Chrome/Edge，不下载浏览器）
 npm run e2e                               # 单文件版，自包含；会先重建 dist
 npm run e2e:serve                         # 本地服务模式（需另开 node tools/serve.mjs）
 node tools/e2e.mjs --file dist/PDScope.html --drop "../制糖40w-ip18pro.atkcc"
@@ -332,9 +354,14 @@ npm run check
 当前 5 份抓包共 1141 条有效 GOOD CRC **100% 配对成功**，1100 条可校验的配对
 **MessageID 全部一致**，最远距离恒为 1 条报文。
 
+**`selftest.js`** 先用合成报文凭字段校验 4B5B / PD / CRC 语义（8 项），再把同一串报文按
+**1.5 / 2.5 / 4 / 6 MHz** 重新采样一遍（10 项），检查：用真实采样率能解出全部报文、
+波形反推的采样率误差 < 1%、按反推值解码同样得到全部报文，并确认「采样率写错一倍就一条也解不出来」——
+这正是采样率必须动态解析的原因。
+
 **`e2e.mjs`** 直接走 Chrome DevTools Protocol（用系统已装的 Chrome/Edge，不下载浏览器），
-18 项校验：页面骨架、抓包解码、虚拟滚动、方向过滤、关键字搜索、时间轴绘制、主题切换、无控制台异常，
-最后自动截图。加 `--drop <文件>` 可注入真实抓包；`--eval "<js>"` 进调试模式，
+19 项校验：页面骨架、抓包解码、虚拟滚动、方向过滤、关键字搜索、时间轴绘制、主题切换、
+采样率来源标注、无控制台异常，最后自动截图。加 `--drop <文件>` 可注入真实抓包；`--eval "<js>"` 进调试模式，
 在页面里跑任意表达式并打印结果。
 
 **`tauri-e2e.mjs`** 连的是 Tauri 真正在跑的那个 WebView2（靠
@@ -362,6 +389,7 @@ node tools/cli.js "../制糖40w-ip18pro.atkcc"                   # 表格
 node tools/cli.js "../绿联70w-ip18pro.atkcc" --json           # JSON
 node tools/cli.js "../苹果40w-ip18pro.atkcc" --csv            # CSV
 node tools/cli.js "../apple_40w_avs_iphone_air.atkcc" --scan  # 各通道活动度
+node tools/cli.js "../绿联70w-ip18pro.atkcc" --rate 2400000    # 强制指定采样率（排查用）
 ```
 
 实测样本（`.atkcc` → 报文数 / CRC 错误）：

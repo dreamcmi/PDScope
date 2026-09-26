@@ -134,6 +134,18 @@ body{
   white-space:nowrap; font-family:var(--mono);
 }
 .mchip b{ color:var(--tx); font-weight:600; }
+/* 采样率 chip 上的「来源」小标：文件声明 / 波形实测 / 默认值 */
+.mchip .mtag{
+  margin-left:5px; padding:1px 5px; border-radius:4px;
+  font-size:9.5px; letter-spacing:.2px;
+  font-family:var(--font); color:var(--tx-3);
+  background:var(--bg); border:1px solid var(--line);
+}
+.mchip .mtag.warn{
+  color:var(--warn);
+  border-color:color-mix(in srgb, var(--warn) 40%, transparent);
+  background:color-mix(in srgb, var(--warn) 12%, transparent);
+}
 
 .btn{
   display:inline-flex; align-items:center; gap:6px; justify-content:center;
@@ -492,6 +504,7 @@ body.detail-collapsed .detail{ width:0; opacity:0; overflow:hidden; border-left:
 }
 .toast.ok{ border-color:color-mix(in srgb,var(--ok) 45%,transparent); }
 .toast.err{ border-color:color-mix(in srgb,var(--err) 50%,transparent); }
+.toast.warn{ border-color:color-mix(in srgb,var(--warn) 50%,transparent); }
 @keyframes tin{ from{ opacity:0; transform:translateY(6px);} to{ opacity:1; transform:none;} }
 
 /* 滚动条 */
@@ -897,13 +910,60 @@ class ZipReader {
  * 关键结论（已用官方 ATK-C 截图逐字段交叉验证，完全一致）：
  *   · 每个采样点 1 bit，**LSB 优先**（每字节内 bit0 时间最早）
  *   · 某字节 0xFF = 该 8 个采样点全高；0x00 = 全低（空载/空闲段，末块尾部为补齐）
- *   · 采样率 2.5 MHz；BMC 时钟 600 kHz（UI=1.6667us），故 1 UI ≈ 4.167 采样点、1 bit = 2 UI
+ *   · 采样率**由文件声明**（channel.ini），本工具不写死；只管两点：① 声明值怎么读
+ *     （见 parseSampleRate，认多种键名与单位），② 缺失/不可信时怎么办（见 pipeline.js
+ *     的 resolveSampleRate：用波形节拍反推，再兜底 DEFAULT_SAMPLE_RATE）。
+ *     BMC 时钟 600 kHz（UI=1.6667us）是 PD 协议定的，与采样率无关。
  *   · 分块序号按数值排序（0-9 在 0-10 之前），最后一块尾部用 0x00 补齐
  */
 
 
 
 const CHUNK_SIZE = 1048576;      // 1 MiB
+
+/** 文件没声明采样率、且波形也认不出来时的兜底值（实测 ATK-C 一直导出 2.5 MHz） */
+const DEFAULT_SAMPLE_RATE = 2500000;
+
+/**
+ * 从 ini 文本里读出采样率 —— 兼容不同版本 ATK-C 的写法，不假定键名。
+ *
+ *   SamplingFrequency=2500        ← 实测就是这个，单位 kHz
+ *   SampleRate=2500000            ← 也有工具直接给 Hz
+ *   Sampling_Freq = 2.5 MHz       ← 带单位后缀
+ *
+ * 单位判定顺序：键名里带 khz/mhz → 行尾带单位 → 都没有则看数量级
+ * （≥ 100 kHz 当 Hz，否则当 kHz —— 因为实测 ATK-C 写的是 kHz 的 2500）。
+ *
+ * @param {string} text
+ * @returns {{hz:number, source:'declared'|'default', key:string|null, value:number, unit:string, raw:string|null}}
+ */
+function parseSampleRate(text) {
+  const fallback = { hz: DEFAULT_SAMPLE_RATE, source: 'default', key: null, value: 0, unit: '', raw: null };
+  if (!text) return fallback;
+
+  for (const line of String(text).split(/\r?\n/)) {
+    const m = /^\s*([A-Za-z_][\w .\-]*?)\s*[=:]\s*([0-9]+(?:\.[0-9]+)?)\s*([A-Za-z\/]*)\s*$/.exec(line);
+    if (!m) continue;
+    const key = m[1].trim();
+    const norm = key.toLowerCase().replace(/[\s._\-]/g, '');
+    if (!/freq|rate|hz/.test(norm)) continue;          // 只认像采样率的键
+
+    const value = Number(m[2]);
+    if (!(value > 0)) continue;
+
+    let unit = (m[3] || '').toLowerCase();
+    if (!unit) unit = /khz/.test(norm) ? 'khz' : /mhz/.test(norm) ? 'mhz' : '';
+    let hz;
+    if (unit === 'khz' || unit === 'k') hz = value * 1e3;
+    else if (unit === 'mhz' || unit === 'm') hz = value * 1e6;
+    else if (unit === 'hz') hz = value;
+    else hz = value >= 100000 ? value : value * 1e3;
+
+    if (!(hz >= 10000 && hz <= 1e9)) continue;         // 数量级明显不对的值不当采样率
+    return { hz, source: 'declared', key, value, unit: unit || (hz === value ? 'hz' : 'khz'), raw: line.trim() };
+  }
+  return fallback;
+}
 
 class AtkccCapture {
   constructor(zip, meta) {
@@ -921,17 +981,16 @@ class AtkccCapture {
   static async open(bytes, io) {
     const zip = new ZipReader(bytes);
 
-    // ── channel.ini：采样率 ──
+    // ── channel.ini：采样率（文件声明 → 波形自检 → 兜底，三级策略见 pipeline.js）──
     const rootIni = await zip.readText('channel.ini', io.inflate);
-    let samplingFrequency = 0;
-    if (rootIni) {
-      const m = /SamplingFrequency\s*=\s*([0-9.]+)/i.exec(rootIni);
-      if (m) samplingFrequency = Number(m[1]);
+    let rate = parseSampleRate(rootIni);
+    // 个别版本把参数写在子目录那份 channel.ini 里，根目录缺失时也认
+    const subIni = await zip.readText('0/channel.ini', io.inflate);
+    if (rate.source !== 'declared') {
+      const alt = parseSampleRate(subIni);
+      if (alt.source === 'declared') rate = alt;
     }
-    // 实测 2500 的单位是 kHz。若文件给出的是 Hz 量级（<100000），按 Hz 处理。
-    const sampleRate = samplingFrequency > 0
-      ? (samplingFrequency >= 100000 ? samplingFrequency : samplingFrequency * 1000)
-      : 2500000;
+    const sampleRate = rate.hz;
 
     // ── bus.ini：VBUS / IBUS ──
     const busIni = await zip.readText('bus.ini', io.inflate);
@@ -966,7 +1025,6 @@ class AtkccCapture {
 
     // ── 总采样数 ──
     let totalSamples = 0;
-    const subIni = await zip.readText('0/channel.ini', io.inflate);
     if (subIni) {
       const lines = subIni.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
       if (lines.length >= 2) totalSamples = Number(lines[1]) || 0;
@@ -976,7 +1034,10 @@ class AtkccCapture {
 
     return new AtkccCapture(zip, {
       sampleRate,
-      samplingFrequencyRaw: samplingFrequency,
+      sampleRateSource: rate.source,       // 'declared'（文件声明） | 'default'（没写，用的兜底值）
+      sampleRateKey: rate.key,             // 命中的键名，便于排查
+      sampleRateRaw: rate.raw,             // 命中的整行原文
+      samplingFrequencyRaw: rate.value,    // 文件里写的那个数字（未换算）
       rawChannelIni: subIni,
       totalSamples,
       channels: channelList,
@@ -1048,6 +1109,12 @@ async function scanChannelActivity(capture, channel, inflate, maxChunks = 4, onP
  *   threshold     = 1.5 * UI   = 2.5   µs          （区分「半位1」与「位0」）
  *   maxbit        = 3 * UI     = 5.0   µs          （超过即视为空闲，包结束）
  *
+ * ⚠ 这里的 600 kHz 是 **PD 协议规定的**，与抓包设备的采样率无关；
+ *   采样率由调用方传入（来自 channel.ini 的声明）。所以本模块里出现的
+ *   threshold / maxbit 都是「按采样率换算出来的采样点数」，不是写死的常数 ——
+ *   16 MHz 采样的文件照样能解，门限会跟着变成 40 / 80 个采样点。
+ *   文件没声明采样率时，可用本文件末尾的 estimateSampleRate() 从波形反推。
+ *
  * 状态机（与参考实现一致）：
  *   diff = 本次边沿 - 上次边沿
  *   isZero = diff > threshold
@@ -1057,7 +1124,10 @@ async function scanChannelActivity(capture, channel, inflate, maxChunks = 4, onP
  *   other: 非法序列，按 0 处理并记录
  */
 
-const UI_US = 1000000 / 600000;            // 1.6666666...
+/** PD 规范规定的 BMC 载波频率（1 UI = 半个位宽 = 1/600 kHz ≈ 1.6667 µs） */
+const BMC_HZ = 600000;
+
+const UI_US = 1000000 / BMC_HZ;            // 1.6666666...
 const THRESHOLD_US = (UI_US + 2 * UI_US) / 2; // 2.5
 const MAXBIT_US = 3 * UI_US;               // 5.0
 
@@ -1252,6 +1322,123 @@ class BmcDecoder {
       bitrate,
     };
   }
+}
+
+/* ═══════════════════════ 采样率反推（波形自检） ═══════════════════════ */
+
+/**
+ * 收集一段采样字节流里的「游程」长度（相邻同电平采样点的连续个数）。
+ *
+ * BMC 里的合法游程只有两种：1 UI（'1' 位的半段）和 2 UI（'0' 位的整段），
+ * 空闲段会长得多。所以游程长度分布里只有两个簇，且长度比恒为 1:2 ——
+ * 据此就能把「1 UI 等于几个采样点」解出来（见 estimateUiSamples）。
+ *
+ * @param {Uint8Array} data 采样字节流（每字节 8 个采样点，LSB 优先）
+ * @param {{maxRun?:number, maxRuns?:number}} [opts] maxRun 以上的算空闲段直接丢弃
+ * @returns {number[]} 游程长度（采样点数）列表，最多 maxRuns 个
+ */
+function collectRunStats(data, { maxRun = 64, maxRuns = 40000 } = {}) {
+  const runs = [];
+  const push = (n) => { if (n >= 2 && n <= maxRun) runs.push(n); };
+  let level = -1, len = 0;
+
+  for (let i = 0; i < data.length; i++) {
+    const b = data[i];
+    if (b === 0 || b === 0xff) {                 // 快速路径：整字节同电平
+      const bit = b === 0 ? 0 : 1;
+      if (bit === level) { len += 8; }
+      else { if (level !== -1) push(len); level = bit; len = 8; }
+      continue;
+    }
+    const rs = BYTE_RUNS_LSB[b];
+    for (let r = 0; r < rs.length; r++) {
+      const run = rs[r];
+      if (run.bit === level) { len += run.len; }
+      else { if (level !== -1) push(len); level = run.bit; len = run.len; }
+    }
+    if (runs.length >= maxRuns) break;           // 统计量够了，不再往下扫
+  }
+  if (level !== -1 && runs.length < maxRuns) push(len);
+  return runs;
+}
+
+/**
+ * 由游程分布反推「1 UI = 多少采样点」。
+ *
+ * 原理：每个游程非 1 UI 即 2 UI，于是
+ *        Σ 游程采样点数 = UI × (nShort + 2 × nLong)
+ *     ⇒  UI = Σ / (nShort + 2 × nLong)
+ * 分类门限取 1.5 × UI，迭代几轮即收敛（比只看直方图峰值精确得多：
+ * 峰值只能给到整数，而这个式子能把 4.167 这种小数解出来）。
+ *
+ * @param {number[]} runs collectRunStats 的输出
+ * @returns {null|{uiSamples:number, nShort:number, nLong:number, confidence:number, used:number}}
+ */
+function estimateUiSamples(runs) {
+  if (!runs || runs.length < 200) return null;
+
+  // ① 粗搜候选 UI：挑「能把游程解释成 1 UI 或 2 UI 的比例最高」的那个。
+  //    不能只看直方图峰值或最小值 —— UI=2.5 个采样点时，1 UI 的游程会在 2 和 3 之间
+  //    来回跳，任何单点启发式都会被量化噪声带偏。全量扫候选值最稳，代价几十毫秒。
+  const sub = runs.length > 4000
+    ? Array.from({ length: 4000 }, (_, i) => runs[Math.floor((i * runs.length) / 4000)])
+    : runs;
+  let bestUi = 0, bestScore = 0;
+  for (let ui = 1.2; ui <= 60; ui += 0.05) {
+    const tol = ui * 0.3;
+    let hit = 0, nS = 0, nL = 0;
+    for (const r of sub) {
+      if (Math.min(Math.abs(r - ui), Math.abs(r - 2 * ui)) >= tol) continue;
+      hit++;
+      if (r < ui * 1.5) nS++; else nL++;
+    }
+    if (hit / sub.length < 0.9) continue;
+    if (nS < sub.length * 0.1 || nL < sub.length * 0.1) continue;   // 两个簇都得有料
+    const score = hit / sub.length;
+    if (score > bestScore) { bestScore = score; bestUi = ui; }
+  }
+  if (!bestUi) return null;
+
+  // ② 精修：每个游程非 1 UI 即 2 UI ⇒ Σ 游程采样点数 = UI · (nShort + 2·nLong)，
+  //    迭代几轮把这个式子解到底 —— 整数取整带来的偏差会被平均掉，能解出 4.167 这种小数。
+  let ui = bestUi, nS = 0, nL = 0;
+  for (let it = 0; it < 8; it++) {
+    const cut = 1.5 * ui;
+    nS = 0; nL = 0;
+    let total = 0;
+    for (const r of runs) {
+      if (r < ui * 0.55 || r > ui * 3.2) continue;         // 既不像 1 UI 也不像 2 UI
+      total += r;
+      if (r < cut) nS++; else nL++;
+    }
+    if (nS + nL < 100) return null;
+    const next = total / (nS + 2 * nL);
+    if (!(next > 0)) return null;
+    if (Math.abs(next - ui) < 1e-4) { ui = next; break; }
+    ui = next;
+  }
+
+  // ③ 置信度：游程里有多大比例真的落在 1 UI / 2 UI 附近（±0.35 UI）
+  let good = 0;
+  for (const r of runs) {
+    if (Math.min(Math.abs(r - ui), Math.abs(r - 2 * ui)) < ui * 0.35) good++;
+  }
+  const confidence = good / runs.length;
+  if (confidence < 0.85 || nS < 50 || nL < 50) return null;  // 不像 PD 波形，别硬猜
+  return { uiSamples: ui, nShort: nS, nLong: nL, confidence, used: nS + nL };
+}
+
+/**
+ * 从波形反推采样率（Hz）。
+ * @param {number[]} runs collectRunStats 的输出
+ * @returns {null|{sampleRate:number, uiSamples:number, confidence:number}}
+ */
+function estimateSampleRate(runs) {
+  const e = estimateUiSamples(runs);
+  if (!e) return null;
+  const sampleRate = Math.round(e.uiSamples * BMC_HZ);
+  if (!(sampleRate >= 100000 && sampleRate <= 50000000)) return null;   // 离谱的值不认
+  return { sampleRate, uiSamples: e.uiSamples, confidence: e.confidence, nShort: e.nShort, nLong: e.nLong };
 }
 
 /* ══════ src/js/core/pd_tables.js ══════ */
@@ -2517,14 +2704,17 @@ function hex8(v) { return (v >>> 0).toString(16).padStart(8, '0').toUpperCase();
 /**
  * @param {AtkccCapture} capture
  * @param {number} channel
- * @param {{inflate:Function, onProgress?:Function, shouldStop?:()=>boolean}} opts
+ * @param {{inflate:Function, onProgress?:Function, shouldStop?:()=>boolean, sampleRate?:number}} opts
  * @returns {Promise<{packets:object[], stats:object}>}
  */
 async function decodeChannel(capture, channel, opts) {
   const { inflate, onProgress, shouldStop } = opts;
-  const sampleRate = capture.meta.sampleRate;
   const ch = capture.meta.channelMap.get(channel);
   if (!ch) throw new Error(`通道 ${channel} 不存在`);
+
+  // 采样率不是写死的：先看文件声明，再用波形节拍核对 / 兜底（同一份文件只测一次）
+  const rate = await resolveSampleRate(capture, channel, inflate, { shouldStop, sampleRate: opts.sampleRate });
+  const sampleRate = rate.rate;
 
   const bmc = new BmcDecoder({ sampleRate });
   const pd = new PdDecoder({ sampleRate });
@@ -2599,6 +2789,11 @@ async function decodeChannel(capture, channel, opts) {
       channel,
       totalSamples: sampleBase,
       durationSec: sampleBase / sampleRate,
+      sampleRate,
+      sampleRateSource: rate.source,          // declared | measured | default | override
+      sampleRateDeclared: rate.declared,
+      sampleRateMeasured: rate.measured ?? null,
+      sampleRateNote: rate.note ?? null,      // 与声明值不一致时给界面一句人话解释
       edges,
       trimmedBytes: trimmed,
       packetCount: packets.length,
@@ -2606,6 +2801,95 @@ async function decodeChannel(capture, channel, opts) {
       warnings: packets.reduce((s, p) => s + (p.warnings?.length ?? 0), 0),
     },
   };
+}
+
+// ── 采样率：声明 → 波形自检 → 兜底 ───────────────────────────────────
+
+/**
+ * 声明值与波形实测的最大允许偏差。超出这个比例才认为「文件写的采样率不可信」。
+ *
+ * 为什么门槛这么宽（±25%）而不是 5%？因为 PD 标称的 600 kHz BMC 时钟只是**标称**：
+ * 用波形节拍反推的采样率与文件声明的 2.5 MHz 之间，实测 5 份不同厂商的抓包都稳定
+ * 偏低约 4%（器件时钟与标称值的正常离散）。而文件声明的采样率才是「采样点序号 → 时间」
+ * 的换算依据（用它算出来的时标与官方上位机逐字段一致），所以只要两者量级相符就以声明为准。
+ */
+const RATE_TOLERANCE = 0.25;
+
+const fmtHz = (hz) => `${(hz / 1e6).toFixed(3).replace(/\.?0+$/, '')} MHz`;
+
+/**
+ * 只用波形的游程分布反推采样率 —— 只读最前面 1~2 个块，量级几十毫秒。
+ * @returns {Promise<null|{sampleRate:number, uiSamples:number, confidence:number}>}
+ */
+async function probeSampleRate(capture, channel, inflate, { maxChunks = 2, maxRuns = 40000, shouldStop } = {}) {
+  const ch = capture.meta.channelMap.get(channel);
+  if (!ch) return null;
+  let runs = [];
+  for (let i = 0; i < Math.min(maxChunks, ch.chunks.length); i++) {
+    if (shouldStop?.()) break;
+    const data = await capture.readChunk(channel, i, inflate);
+    if (!data) continue;
+    runs = runs.concat(collectRunStats(data, { maxRuns: Math.max(0, maxRuns - runs.length) }));
+    if (runs.length >= maxRuns) break;
+  }
+  return estimateSampleRate(runs);
+}
+
+/**
+ * 决定这份抓包用哪个采样率把「采样点序号」换算成时间。三级策略，越靠前越优先：
+ *
+ *   ① **文件声明**（`channel.ini`）—— 5 份真实抓包都声明 2500 kHz，且据此算出的时标
+ *      与官方 ATK-C 截图逐字段一致，所以它是首选。
+ *   ② **波形自检** —— 用 BMC 游程反推（`estimateSampleRate`）。只有当 ① 缺失，或 ① 与
+ *      波形相差超过 ±RATE_TOLERANCE 时才推翻 ①。这样遇到「别的采样率」「单位写错」
+ *      「压根没写」的文件也能解，而正常文件的行为一字不变。
+ *   ③ **兜底** `DEFAULT_SAMPLE_RATE`（2.5 MHz）。
+ *
+ * 结果会缓存到 capture 上：同一份文件切换通道时不重复测。
+ *
+ * @returns {Promise<{rate:number, source:'declared'|'measured'|'default'|'override',
+ *                    declared:number, measured:number|null, note:string|null, cached?:boolean}>}
+ */
+async function resolveSampleRate(capture, channel, inflate, opts = {}) {
+  const declared = capture.meta.sampleRate;
+  const declaredSource = capture.meta.sampleRateSource || 'default';
+
+  if (opts.sampleRate > 0) {
+    return { rate: opts.sampleRate, source: 'override', declared, measured: null,
+      note: `采样率由调用方指定为 ${fmtHz(opts.sampleRate)}（文件声明 ${fmtHz(declared)}）` };
+  }
+
+  capture._rateCache ||= new Map();
+  if (capture._rateCache.has(channel)) return capture._rateCache.get(channel);
+
+  const measured = await probeSampleRate(capture, channel, inflate, opts);
+  const info = {
+    declared,
+    declaredSource,
+    measured: measured?.sampleRate ?? null,
+    measuredUi: measured?.uiSamples ?? null,
+    confidence: measured?.confidence ?? 0,
+    declaredText: capture.meta.sampleRateRaw || null,
+  };
+
+  let out;
+  if (!measured) {
+    // 波形认不出来（比如通道是空的、或数据不是 PD）→ 保持声明值/兜底值
+    out = { ...info, rate: declared, source: declaredSource, note: null };
+  } else {
+    const ratio = measured.sampleRate / declared;
+    if (declaredSource === 'declared' && ratio >= 1 - RATE_TOLERANCE && ratio <= 1 + RATE_TOLERANCE) {
+      out = { ...info, rate: declared, source: 'declared', ratio, note: null };     // 一致 → 信文件
+    } else if (declaredSource === 'default') {
+      out = { ...info, rate: measured.sampleRate, source: 'measured', ratio,
+        note: `文件未声明采样率，按波形节拍取 ${fmtHz(measured.sampleRate)}` };
+    } else {
+      out = { ...info, rate: measured.sampleRate, source: 'measured', ratio,
+        note: `文件声明 ${fmtHz(declared)} 与波形节拍（${fmtHz(measured.sampleRate)}）相差过大，已按实测值解码` };
+    }
+  }
+  capture._rateCache.set(channel, out);
+  return out;
 }
 
 // ── GOOD CRC 配对 ────────────────────────────────────────────────────
@@ -2897,6 +3181,8 @@ const S = {
   fileName: '',
   fileSize: 0,
   channel: 0,
+  /** 本文件实际采用的采样率（文件声明 → 波形自检 → 兜底，见 pipeline.resolveSampleRate） */
+  rate: 0,
   packets: [],
   view: [],          // 过滤 + 排序后的结果
   stats: null,
@@ -2992,6 +3278,7 @@ async function loadFile(file) {
     const cap = await AtkccCapture.open(buf, { inflate });
     S.cap = cap; S.meta = cap.meta;
     S.fileName = file.name; S.fileSize = buf.length;
+    S.rate = cap.meta.sampleRate;      // 先用文件声明的值，解码时再由波形自检核一遍
 
     const chs = cap.meta.channels;
     // 多通道时扫描活动度，自动挑一个「有报文」的通道
@@ -3052,10 +3339,13 @@ async function decodeAndShow(channel) {
   S.packets = packets;
   S.stats = stats;
   S.decodedMs = Math.round(performance.now() - t0);
+  // 采样率以解码时定下来的为准（文件声明 / 波形实测 / 兜底），后面所有「采样点 → 秒」都用它
+  if (stats.sampleRate > 0) S.rate = stats.sampleRate;
+  if (stats.sampleRateNote) toast(stats.sampleRateNote, 'warn');
 
   // 时间轴数据
   const total = stats.totalSamples || S.cap.meta.totalSamples || 1;
-  S.busSeries = buildBusSeries(bus, total, S.cap.meta.sampleRate, 2400);
+  S.busSeries = buildBusSeries(bus, total, S.rate, 2400);
   S.totalSamples = total;
 
   buildTypeList();
@@ -3080,9 +3370,20 @@ function renderMeta() {
   if (!S.meta) { $('#btnExport').disabled = true; return; }
   const m = S.meta;
   const add = (k, v) => box.appendChild(Object.assign(el('span', 'mchip'), { innerHTML: `${k} <b>${v}</b>` }));
-  add('采样率', (m.sampleRate / 1e6).toFixed(2) + ' MHz');
 
-  const dur = (S.totalSamples || m.totalSamples) / m.sampleRate;
+  // 采样率：数值 + 来源标记。值不是写死的，来源可能是 channel.ini 的声明、
+  // 也可能是波形自检反推出来的（文件没声明或声明得离谱时），所以必须标出来。
+  const rate = S.rate || m.sampleRate;
+  const src = S.stats?.sampleRateSource || m.sampleRateSource || 'declared';
+  const tag = { declared: '文件声明', measured: '波形实测', default: '默认值', override: '手动指定' }[src] || src;
+  const rateChip = el('span', 'mchip');
+  rateChip.innerHTML = `采样率 <b>${(rate / 1e6).toFixed(2)} MHz</b>`
+    + `<span class="mtag${src === 'measured' || src === 'override' ? ' warn' : ''}">${tag}</span>`;
+  rateChip.title = S.stats?.sampleRateNote
+    || (m.sampleRateRaw ? `取自 channel.ini：${m.sampleRateRaw}` : '文件未声明采样率，用默认值');
+  box.appendChild(rateChip);
+
+  const dur = (S.totalSamples || m.totalSamples) / rate;
   add('时长', dur >= 60 ? (dur / 60).toFixed(2) + ' min' : dur.toFixed(2) + ' s');
   if (S.packets.length) {
     add('报文', S.packets.length);
@@ -3103,7 +3404,7 @@ function renderChannels() {
     const b = el('button', 'chitem' + (c.channel === S.channel ? ' is-on' : ''));
     b.innerHTML = `<b>CH${c.channel}</b><span>${c.chunks.length} 块</span>`
       + (S.chActivity.has(c.channel) ? `<span class="act">${S.chActivity.get(c.channel)}</span>` : '');
-    b.title = `${c.totalSamples} 采样点 ≈ ${(c.totalSamples / S.meta.sampleRate).toFixed(2)} s`;
+    b.title = `${c.totalSamples} 采样点 ≈ ${(c.totalSamples / (S.rate || S.meta.sampleRate)).toFixed(2)} s`;
     b.addEventListener('click', () => { if (c.channel !== S.channel) decodeAndShow(c.channel); });
     box.appendChild(b);
   }
@@ -3291,7 +3592,7 @@ function renderTimeHint() {
   const tb = S.totalSamples || 1;
   const f = S.filters;
   $('#tRangeHint').textContent = (f.tFrom > 0 || f.tTo < 1)
-    ? `${(f.tFrom * tb / (S.meta?.sampleRate || 1)).toFixed(2)}–${(f.tTo * tb / (S.meta?.sampleRate || 1)).toFixed(2)} s`
+    ? `${(f.tFrom * tb / (S.rate || 1)).toFixed(2)}–${(f.tTo * tb / (S.rate || 1)).toFixed(2)} s`
     : '';
 }
 function applyTimeRangeFromView() {
@@ -3647,7 +3948,7 @@ cv.addEventListener('mousemove', (e) => {
   if (!S.busSeries || x < TL.x0 || x > TL.x0 + TL.w) { tip.style.display = 'none'; return; }
   const t = TL.xToTime(x);
   const i = clamp(Math.round(t * (S.busSeries.n - 1)), 0, S.busSeries.n - 1);
-  const sec = (t * (S.totalSamples || 1)) / (S.meta?.sampleRate || 1);
+  const sec = (t * (S.totalSamples || 1)) / (S.rate || 1);
   tip.textContent = `${sec.toFixed(3)}s  ${S.busSeries.vbus[i].toFixed(3)}V  ${S.busSeries.ibus[i].toFixed(3)}A`;
   tip.style.display = 'block';
   tip.style.left = x + 'px';
@@ -3699,7 +4000,10 @@ function exportAs(fmt) {
     name = `${base}-ch${S.channel}.csv`;
   } else {
     blob = new Blob([JSON.stringify({
-      file: S.fileName, channel: S.channel, sampleRate: S.meta?.sampleRate,
+      file: S.fileName, channel: S.channel,
+      // 实际采用的采样率 + 文件里声明的那个（不一致时 stats.sampleRateNote 里有人话解释）
+      sampleRate: S.rate,
+      sampleRateDeclared: S.meta?.sampleRate ?? null,
       totalSamples: S.totalSamples, stats: S.stats, packets: S.packets,
     }, null, 2)], { type: 'application/json' });
     name = `${base}-ch${S.channel}.json`;

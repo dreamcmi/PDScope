@@ -6,21 +6,24 @@
  * 全程流式处理，逐块回调进度，支持中断（长抓包可随时停止）。
  */
 
-import { EdgeExtractor, BmcDecoder } from './bmc.js';
+import { EdgeExtractor, BmcDecoder, collectRunStats, estimateSampleRate } from './bmc.js';
 import { PdDecoder } from './pd.js';
 import { AtkccCapture } from './atkcc.js';
 
 /**
  * @param {AtkccCapture} capture
  * @param {number} channel
- * @param {{inflate:Function, onProgress?:Function, shouldStop?:()=>boolean}} opts
+ * @param {{inflate:Function, onProgress?:Function, shouldStop?:()=>boolean, sampleRate?:number}} opts
  * @returns {Promise<{packets:object[], stats:object}>}
  */
 export async function decodeChannel(capture, channel, opts) {
   const { inflate, onProgress, shouldStop } = opts;
-  const sampleRate = capture.meta.sampleRate;
   const ch = capture.meta.channelMap.get(channel);
   if (!ch) throw new Error(`通道 ${channel} 不存在`);
+
+  // 采样率不是写死的：先看文件声明，再用波形节拍核对 / 兜底（同一份文件只测一次）
+  const rate = await resolveSampleRate(capture, channel, inflate, { shouldStop, sampleRate: opts.sampleRate });
+  const sampleRate = rate.rate;
 
   const bmc = new BmcDecoder({ sampleRate });
   const pd = new PdDecoder({ sampleRate });
@@ -95,6 +98,11 @@ export async function decodeChannel(capture, channel, opts) {
       channel,
       totalSamples: sampleBase,
       durationSec: sampleBase / sampleRate,
+      sampleRate,
+      sampleRateSource: rate.source,          // declared | measured | default | override
+      sampleRateDeclared: rate.declared,
+      sampleRateMeasured: rate.measured ?? null,
+      sampleRateNote: rate.note ?? null,      // 与声明值不一致时给界面一句人话解释
       edges,
       trimmedBytes: trimmed,
       packetCount: packets.length,
@@ -102,6 +110,95 @@ export async function decodeChannel(capture, channel, opts) {
       warnings: packets.reduce((s, p) => s + (p.warnings?.length ?? 0), 0),
     },
   };
+}
+
+// ── 采样率：声明 → 波形自检 → 兜底 ───────────────────────────────────
+
+/**
+ * 声明值与波形实测的最大允许偏差。超出这个比例才认为「文件写的采样率不可信」。
+ *
+ * 为什么门槛这么宽（±25%）而不是 5%？因为 PD 标称的 600 kHz BMC 时钟只是**标称**：
+ * 用波形节拍反推的采样率与文件声明的 2.5 MHz 之间，实测 5 份不同厂商的抓包都稳定
+ * 偏低约 4%（器件时钟与标称值的正常离散）。而文件声明的采样率才是「采样点序号 → 时间」
+ * 的换算依据（用它算出来的时标与官方上位机逐字段一致），所以只要两者量级相符就以声明为准。
+ */
+export const RATE_TOLERANCE = 0.25;
+
+const fmtHz = (hz) => `${(hz / 1e6).toFixed(3).replace(/\.?0+$/, '')} MHz`;
+
+/**
+ * 只用波形的游程分布反推采样率 —— 只读最前面 1~2 个块，量级几十毫秒。
+ * @returns {Promise<null|{sampleRate:number, uiSamples:number, confidence:number}>}
+ */
+export async function probeSampleRate(capture, channel, inflate, { maxChunks = 2, maxRuns = 40000, shouldStop } = {}) {
+  const ch = capture.meta.channelMap.get(channel);
+  if (!ch) return null;
+  let runs = [];
+  for (let i = 0; i < Math.min(maxChunks, ch.chunks.length); i++) {
+    if (shouldStop?.()) break;
+    const data = await capture.readChunk(channel, i, inflate);
+    if (!data) continue;
+    runs = runs.concat(collectRunStats(data, { maxRuns: Math.max(0, maxRuns - runs.length) }));
+    if (runs.length >= maxRuns) break;
+  }
+  return estimateSampleRate(runs);
+}
+
+/**
+ * 决定这份抓包用哪个采样率把「采样点序号」换算成时间。三级策略，越靠前越优先：
+ *
+ *   ① **文件声明**（`channel.ini`）—— 5 份真实抓包都声明 2500 kHz，且据此算出的时标
+ *      与官方 ATK-C 截图逐字段一致，所以它是首选。
+ *   ② **波形自检** —— 用 BMC 游程反推（`estimateSampleRate`）。只有当 ① 缺失，或 ① 与
+ *      波形相差超过 ±RATE_TOLERANCE 时才推翻 ①。这样遇到「别的采样率」「单位写错」
+ *      「压根没写」的文件也能解，而正常文件的行为一字不变。
+ *   ③ **兜底** `DEFAULT_SAMPLE_RATE`（2.5 MHz）。
+ *
+ * 结果会缓存到 capture 上：同一份文件切换通道时不重复测。
+ *
+ * @returns {Promise<{rate:number, source:'declared'|'measured'|'default'|'override',
+ *                    declared:number, measured:number|null, note:string|null, cached?:boolean}>}
+ */
+export async function resolveSampleRate(capture, channel, inflate, opts = {}) {
+  const declared = capture.meta.sampleRate;
+  const declaredSource = capture.meta.sampleRateSource || 'default';
+
+  if (opts.sampleRate > 0) {
+    return { rate: opts.sampleRate, source: 'override', declared, measured: null,
+      note: `采样率由调用方指定为 ${fmtHz(opts.sampleRate)}（文件声明 ${fmtHz(declared)}）` };
+  }
+
+  capture._rateCache ||= new Map();
+  if (capture._rateCache.has(channel)) return capture._rateCache.get(channel);
+
+  const measured = await probeSampleRate(capture, channel, inflate, opts);
+  const info = {
+    declared,
+    declaredSource,
+    measured: measured?.sampleRate ?? null,
+    measuredUi: measured?.uiSamples ?? null,
+    confidence: measured?.confidence ?? 0,
+    declaredText: capture.meta.sampleRateRaw || null,
+  };
+
+  let out;
+  if (!measured) {
+    // 波形认不出来（比如通道是空的、或数据不是 PD）→ 保持声明值/兜底值
+    out = { ...info, rate: declared, source: declaredSource, note: null };
+  } else {
+    const ratio = measured.sampleRate / declared;
+    if (declaredSource === 'declared' && ratio >= 1 - RATE_TOLERANCE && ratio <= 1 + RATE_TOLERANCE) {
+      out = { ...info, rate: declared, source: 'declared', ratio, note: null };     // 一致 → 信文件
+    } else if (declaredSource === 'default') {
+      out = { ...info, rate: measured.sampleRate, source: 'measured', ratio,
+        note: `文件未声明采样率，按波形节拍取 ${fmtHz(measured.sampleRate)}` };
+    } else {
+      out = { ...info, rate: measured.sampleRate, source: 'measured', ratio,
+        note: `文件声明 ${fmtHz(declared)} 与波形节拍（${fmtHz(measured.sampleRate)}）相差过大，已按实测值解码` };
+    }
+  }
+  capture._rateCache.set(channel, out);
+  return out;
 }
 
 // ── GOOD CRC 配对 ────────────────────────────────────────────────────

@@ -114,6 +114,8 @@ const S = {
   fileName: '',
   fileSize: 0,
   channel: 0,
+  /** 本文件实际采用的采样率（文件声明 → 波形自检 → 兜底，见 pipeline.resolveSampleRate） */
+  rate: 0,
   packets: [],
   view: [],          // 过滤 + 排序后的结果
   stats: null,
@@ -209,6 +211,7 @@ async function loadFile(file) {
     const cap = await AtkccCapture.open(buf, { inflate });
     S.cap = cap; S.meta = cap.meta;
     S.fileName = file.name; S.fileSize = buf.length;
+    S.rate = cap.meta.sampleRate;      // 先用文件声明的值，解码时再由波形自检核一遍
 
     const chs = cap.meta.channels;
     // 多通道时扫描活动度，自动挑一个「有报文」的通道
@@ -269,10 +272,13 @@ async function decodeAndShow(channel) {
   S.packets = packets;
   S.stats = stats;
   S.decodedMs = Math.round(performance.now() - t0);
+  // 采样率以解码时定下来的为准（文件声明 / 波形实测 / 兜底），后面所有「采样点 → 秒」都用它
+  if (stats.sampleRate > 0) S.rate = stats.sampleRate;
+  if (stats.sampleRateNote) toast(stats.sampleRateNote, 'warn');
 
   // 时间轴数据
   const total = stats.totalSamples || S.cap.meta.totalSamples || 1;
-  S.busSeries = buildBusSeries(bus, total, S.cap.meta.sampleRate, 2400);
+  S.busSeries = buildBusSeries(bus, total, S.rate, 2400);
   S.totalSamples = total;
 
   buildTypeList();
@@ -297,9 +303,20 @@ function renderMeta() {
   if (!S.meta) { $('#btnExport').disabled = true; return; }
   const m = S.meta;
   const add = (k, v) => box.appendChild(Object.assign(el('span', 'mchip'), { innerHTML: `${k} <b>${v}</b>` }));
-  add('采样率', (m.sampleRate / 1e6).toFixed(2) + ' MHz');
 
-  const dur = (S.totalSamples || m.totalSamples) / m.sampleRate;
+  // 采样率：数值 + 来源标记。值不是写死的，来源可能是 channel.ini 的声明、
+  // 也可能是波形自检反推出来的（文件没声明或声明得离谱时），所以必须标出来。
+  const rate = S.rate || m.sampleRate;
+  const src = S.stats?.sampleRateSource || m.sampleRateSource || 'declared';
+  const tag = { declared: '文件声明', measured: '波形实测', default: '默认值', override: '手动指定' }[src] || src;
+  const rateChip = el('span', 'mchip');
+  rateChip.innerHTML = `采样率 <b>${(rate / 1e6).toFixed(2)} MHz</b>`
+    + `<span class="mtag${src === 'measured' || src === 'override' ? ' warn' : ''}">${tag}</span>`;
+  rateChip.title = S.stats?.sampleRateNote
+    || (m.sampleRateRaw ? `取自 channel.ini：${m.sampleRateRaw}` : '文件未声明采样率，用默认值');
+  box.appendChild(rateChip);
+
+  const dur = (S.totalSamples || m.totalSamples) / rate;
   add('时长', dur >= 60 ? (dur / 60).toFixed(2) + ' min' : dur.toFixed(2) + ' s');
   if (S.packets.length) {
     add('报文', S.packets.length);
@@ -320,7 +337,7 @@ function renderChannels() {
     const b = el('button', 'chitem' + (c.channel === S.channel ? ' is-on' : ''));
     b.innerHTML = `<b>CH${c.channel}</b><span>${c.chunks.length} 块</span>`
       + (S.chActivity.has(c.channel) ? `<span class="act">${S.chActivity.get(c.channel)}</span>` : '');
-    b.title = `${c.totalSamples} 采样点 ≈ ${(c.totalSamples / S.meta.sampleRate).toFixed(2)} s`;
+    b.title = `${c.totalSamples} 采样点 ≈ ${(c.totalSamples / (S.rate || S.meta.sampleRate)).toFixed(2)} s`;
     b.addEventListener('click', () => { if (c.channel !== S.channel) decodeAndShow(c.channel); });
     box.appendChild(b);
   }
@@ -508,7 +525,7 @@ function renderTimeHint() {
   const tb = S.totalSamples || 1;
   const f = S.filters;
   $('#tRangeHint').textContent = (f.tFrom > 0 || f.tTo < 1)
-    ? `${(f.tFrom * tb / (S.meta?.sampleRate || 1)).toFixed(2)}–${(f.tTo * tb / (S.meta?.sampleRate || 1)).toFixed(2)} s`
+    ? `${(f.tFrom * tb / (S.rate || 1)).toFixed(2)}–${(f.tTo * tb / (S.rate || 1)).toFixed(2)} s`
     : '';
 }
 function applyTimeRangeFromView() {
@@ -864,7 +881,7 @@ cv.addEventListener('mousemove', (e) => {
   if (!S.busSeries || x < TL.x0 || x > TL.x0 + TL.w) { tip.style.display = 'none'; return; }
   const t = TL.xToTime(x);
   const i = clamp(Math.round(t * (S.busSeries.n - 1)), 0, S.busSeries.n - 1);
-  const sec = (t * (S.totalSamples || 1)) / (S.meta?.sampleRate || 1);
+  const sec = (t * (S.totalSamples || 1)) / (S.rate || 1);
   tip.textContent = `${sec.toFixed(3)}s  ${S.busSeries.vbus[i].toFixed(3)}V  ${S.busSeries.ibus[i].toFixed(3)}A`;
   tip.style.display = 'block';
   tip.style.left = x + 'px';
@@ -916,7 +933,10 @@ function exportAs(fmt) {
     name = `${base}-ch${S.channel}.csv`;
   } else {
     blob = new Blob([JSON.stringify({
-      file: S.fileName, channel: S.channel, sampleRate: S.meta?.sampleRate,
+      file: S.fileName, channel: S.channel,
+      // 实际采用的采样率 + 文件里声明的那个（不一致时 stats.sampleRateNote 里有人话解释）
+      sampleRate: S.rate,
+      sampleRateDeclared: S.meta?.sampleRate ?? null,
       totalSamples: S.totalSamples, stats: S.stats, packets: S.packets,
     }, null, 2)], { type: 'application/json' });
     name = `${base}-ch${S.channel}.json`;
