@@ -1,0 +1,3646 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta name="pdscope-standalone" content="1" />
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PDScope · USB PD 抓包解析上位机</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════
+   PDScope — 样式
+   主题变量：html[data-theme="light" | "dark"]
+   ═══════════════════════════════════════════════════════════════ */
+
+:root{
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", Roboto, sans-serif;
+  --mono: "SF Mono", "JetBrains Mono", "Cascadia Mono", Consolas,
+          "Liberation Mono", Menlo, monospace;
+
+  --rh: 30px;                       /* 表格行高 */
+  --r: 8px;                          /* 圆角 */
+  --dur: .16s;
+  --cols: 50px 64px 196px 40px 74px 44px 112px 126px minmax(200px,1fr) minmax(230px,2.1fr);
+}
+
+html[data-theme="light"]{
+  --bg:        #eef1f5;
+  --bg2:       #f7f9fb;
+  --panel:     #ffffff;
+  --panel-2:   #fafbfd;
+  --line:      #e0e5eb;
+  --line-2:    #eceff3;
+  --tx:        #1b2027;
+  --tx-2:      #5b6572;
+  --tx-3:      #8b95a3;
+  --accent:    #2563eb;
+  --accent-2:  #1d4ed8;
+  --accent-sf: #e8efff;
+
+  --src:  #1d64e0;  --src-bg:  #e7f0ff;
+  --snk:  #d2691e;  --snk-bg:  #fdefe2;
+  --plug: #7a3cd8;  --plug-bg: #f1e9ff;
+
+  --ctrl: #0e8ba1;  --data: #159c53;  --ext: #b98600;  --vdm: #7a3cd8;  --err: #d93838;
+
+  --row-hover: #f2f6fd;
+  --row-sel:   #dbeafe;
+  --scroll:    #c9d1da;
+  --shadow:    0 1px 2px rgba(16,24,40,.05), 0 8px 24px -12px rgba(16,24,40,.18);
+  --shadow-lg: 0 12px 40px -12px rgba(16,24,40,.35);
+  --ok: #159c53; --warn: #b98600; --bad: #d93838;
+}
+
+html[data-theme="dark"]{
+  --bg:        #0d1014;
+  --bg2:       #12161c;
+  --panel:     #161b22;
+  --panel-2:   #1b212a;
+  --line:      #262e38;
+  --line-2:    #1f272f;
+  --tx:        #e6eaf0;
+  --tx-2:      #a2acba;
+  --tx-3:      #737e8d;
+  --accent:    #4d8dff;
+  --accent-2:  #6ba0ff;
+  --accent-sf: #17233a;
+
+  --src:  #6ba0ff;  --src-bg:  #16233c;
+  --snk:  #f0a35e;  --snk-bg:  #33260f;
+  --plug: #b28bfa;  --plug-bg: #251a3c;
+
+  --ctrl: #45c7dd;  --data: #4ed08a;  --ext: #e6bf4a;  --vdm: #b28bfa;  --err: #ff6b6b;
+
+  --row-hover: #1c2430;
+  --row-sel:   #1e3352;
+  --scroll:    #39424e;
+  --shadow:    0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+  --shadow-lg: 0 12px 40px -12px rgba(0,0,0,.8);
+  --ok: #4ed08a; --warn: #e6bf4a; --bad: #ff6b6b;
+}
+
+*{ box-sizing:border-box; }
+html,body{ height:100%; margin:0; }
+body{
+  font-family:var(--font);
+  font-size:12.5px;
+  color:var(--tx);
+  background:var(--bg);
+  -webkit-font-smoothing:antialiased;
+  overflow:hidden;
+}
+.i{ width:14px; height:14px; flex:none; display:block; }
+.spacer{ flex:1 1 auto; }
+.row{ display:flex; align-items:center; }
+.row.gap{ gap:6px; }
+.row.wrap{ flex-wrap:wrap; }
+.row.center{ justify-content:center; }
+.mt6{ margin-top:6px; }
+.hint{ font-weight:400; color:var(--tx-3); font-size:11px; }
+
+/* ── 布局 ───────────────────────────────────────────── */
+.app{ height:100vh; display:flex; flex-direction:column; }
+
+.appbar{
+  height:52px; flex:none;
+  display:flex; align-items:center; gap:10px; padding:0 14px;
+  background:var(--panel); border-bottom:1px solid var(--line);
+  box-shadow:0 1px 0 rgba(0,0,0,.02);
+  z-index:30;
+}
+.brand{ display:flex; align-items:center; gap:9px; }
+.logo{ width:29px; height:29px; flex:none; }
+.brand-txt{ display:flex; flex-direction:column; line-height:1.15; }
+.brand-txt b{ font-size:14px; letter-spacing:.2px; }
+.brand-txt span{ font-size:10.5px; color:var(--tx-3); }
+
+.file-chip{
+  display:flex; align-items:center; gap:6px; max-width:340px;
+  padding:5px 11px; border-radius:999px;
+  background:var(--bg2); border:1px solid var(--line);
+  color:var(--tx-2); font-size:11.5px;
+  overflow:hidden; white-space:nowrap; text-overflow:ellipsis;
+}
+.file-chip.has{ color:var(--tx); border-color:color-mix(in srgb, var(--accent) 35%, var(--line)); background:var(--accent-sf); }
+.file-chip .i{ color:var(--accent); }
+
+.meta-chips{ display:flex; gap:6px; flex-wrap:nowrap; overflow:hidden; }
+.mchip{
+  font-size:10.5px; padding:3px 8px; border-radius:6px;
+  background:var(--bg2); border:1px solid var(--line); color:var(--tx-2);
+  white-space:nowrap; font-family:var(--mono);
+}
+.mchip b{ color:var(--tx); font-weight:600; }
+
+.btn{
+  display:inline-flex; align-items:center; gap:6px; justify-content:center;
+  height:30px; padding:0 12px; border-radius:7px; cursor:pointer;
+  border:1px solid var(--line); background:var(--panel);
+  color:var(--tx); font:inherit; font-size:12px; font-weight:500;
+  transition:background var(--dur), border-color var(--dur), transform var(--dur);
+  white-space:nowrap;
+}
+.btn:hover:not(:disabled){ background:var(--bg2); border-color:var(--tx-3); }
+.btn:active:not(:disabled){ transform:translateY(.5px); }
+.btn:disabled{ opacity:.45; cursor:not-allowed; }
+.btn.primary{ background:var(--accent); border-color:var(--accent); color:#fff; }
+.btn.primary:hover:not(:disabled){ background:var(--accent-2); border-color:var(--accent-2); }
+.btn.ghost{ background:transparent; border-color:transparent; }
+.btn.ghost:hover:not(:disabled){ background:var(--bg2); border-color:var(--line); }
+.btn.icon-only{ width:30px; padding:0; }
+.btn.tiny{ height:24px; padding:0 9px; font-size:11px; border-radius:6px; }
+.btn.block{ width:100%; height:28px; font-size:11.5px; }
+
+.body{ flex:1 1 auto; display:flex; min-height:0; }
+
+/* ── 侧栏 ───────────────────────────────────────────── */
+.sidebar{
+  width:236px; flex:none; background:var(--panel);
+  border-right:1px solid var(--line); display:flex; flex-direction:column;
+  transition:width .18s ease, opacity .18s ease;
+}
+body.side-collapsed .sidebar{ width:0; opacity:0; overflow:hidden; border-right:none; }
+.side-scroll{ flex:1 1 auto; overflow-y:auto; padding:12px 12px 20px; }
+
+.fgroup{ margin-bottom:15px; }
+.fgroup h4{
+  margin:0 0 7px; font-size:10.5px; font-weight:600; letter-spacing:.6px;
+  text-transform:uppercase; color:var(--tx-3); display:flex; align-items:baseline; gap:6px;
+}
+.chips{ display:flex; flex-wrap:wrap; gap:5px; }
+.chip{
+  display:inline-flex; align-items:center; gap:5px;
+  height:24px; padding:0 9px; border-radius:6px; cursor:pointer;
+  border:1px solid var(--line); background:var(--panel-2);
+  color:var(--tx-2); font:inherit; font-size:11px;
+  opacity:.5; transition:all var(--dur);
+}
+.chip.is-on{ opacity:1; }
+.chip:hover{ border-color:var(--tx-3); }
+.chip i{ font-style:normal; font-family:var(--mono); font-size:10px; opacity:.75; }
+.chip.role-src.is-on  { color:var(--src);  border-color:color-mix(in srgb,var(--src) 45%,transparent);  background:var(--src-bg); }
+.chip.role-snk.is-on  { color:var(--snk);  border-color:color-mix(in srgb,var(--snk) 45%,transparent);  background:var(--snk-bg); }
+.chip.role-plug.is-on { color:var(--plug); border-color:color-mix(in srgb,var(--plug) 45%,transparent); background:var(--plug-bg); }
+.chip.cat-ctrl.is-on{ color:var(--ctrl); border-color:color-mix(in srgb,var(--ctrl) 45%,transparent); }
+.chip.cat-data.is-on{ color:var(--data); border-color:color-mix(in srgb,var(--data) 45%,transparent); }
+.chip.cat-ext.is-on { color:var(--ext);  border-color:color-mix(in srgb,var(--ext) 45%,transparent); }
+.chip.cat-vdm.is-on { color:var(--vdm);  border-color:color-mix(in srgb,var(--vdm) 45%,transparent); }
+.chip.cat-err.is-on { color:var(--err);  border-color:color-mix(in srgb,var(--err) 45%,transparent); }
+
+.switch{
+  display:flex; align-items:center; gap:8px; padding:4px 0;
+  font-size:11.5px; color:var(--tx-2); cursor:pointer; user-select:none;
+}
+.switch input{ display:none; }
+.switch span{
+  width:28px; height:16px; border-radius:999px; flex:none; position:relative;
+  background:var(--line); transition:background var(--dur);
+}
+.switch span::after{
+  content:""; position:absolute; top:2px; left:2px; width:12px; height:12px;
+  border-radius:50%; background:#fff; transition:transform var(--dur);
+  box-shadow:0 1px 2px rgba(0,0,0,.25);
+}
+.switch input:checked + span{ background:var(--accent); }
+.switch input:checked + span::after{ transform:translateX(12px); }
+.switch input:checked ~ *{ color:var(--tx); }
+.switch.sm{ font-size:11px; }
+
+.text{
+  width:100%; height:28px; padding:0 9px; border-radius:7px;
+  border:1px solid var(--line); background:var(--panel-2);
+  color:var(--tx); font:inherit; font-size:11.5px; outline:none;
+}
+.text:focus{ border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-sf); }
+
+.chlist{ display:flex; flex-direction:column; gap:4px; }
+.chitem{
+  display:flex; align-items:center; gap:8px; padding:6px 9px; border-radius:7px;
+  border:1px solid var(--line); background:var(--panel-2); cursor:pointer;
+  font-size:11.5px; color:var(--tx-2);
+}
+.chitem.is-on{ border-color:var(--accent); background:var(--accent-sf); color:var(--tx); }
+.chitem b{ font-family:var(--mono); }
+.chitem .act{ margin-left:auto; font-family:var(--mono); font-size:10px; color:var(--tx-3); }
+
+.multisel{ position:relative; }
+.ms-head{
+  width:100%; height:28px; padding:0 9px; border-radius:7px; cursor:pointer;
+  border:1px solid var(--line); background:var(--panel-2); color:var(--tx);
+  font:inherit; font-size:11.5px; text-align:left;
+  display:flex; align-items:center; justify-content:space-between;
+}
+.ms-head .caret{
+  width:0; height:0; border-left:4px solid transparent; border-right:4px solid transparent;
+  border-top:5px solid var(--tx-3);
+}
+.ms-body{
+  display:none; margin-top:5px; max-height:230px; overflow-y:auto;
+  border:1px solid var(--line); border-radius:7px; background:var(--panel);
+  padding:4px; box-shadow:var(--shadow);
+}
+.ms-body.open{ display:block; }
+.ms-item{
+  display:flex; align-items:center; gap:7px; padding:4px 6px; border-radius:5px;
+  cursor:pointer; font-size:11.5px; color:var(--tx-2);
+}
+.ms-item:hover{ background:var(--bg2); }
+.ms-item input{ margin:0; accent-color:var(--accent); }
+.ms-item .cnt{ margin-left:auto; font-family:var(--mono); font-size:10px; color:var(--tx-3); }
+.ms-item .dot{ width:6px; height:6px; border-radius:50%; flex:none; }
+
+.range-row{ position:relative; height:24px; }
+.range-row input[type=range]{
+  position:absolute; left:0; width:100%; margin:0; height:24px;
+  -webkit-appearance:none; appearance:none; background:transparent; pointer-events:none;
+}
+.range-row input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none; width:13px; height:13px; border-radius:50%;
+  background:var(--accent); border:2px solid var(--panel); cursor:pointer;
+  pointer-events:all; box-shadow:0 1px 3px rgba(0,0,0,.3); margin-top:-4px;
+}
+.range-row input[type=range]::-webkit-slider-runnable-track{
+  height:5px; border-radius:3px; background:var(--line);
+}
+
+/* ── 中间主区 ───────────────────────────────────────── */
+.main{ flex:1 1 auto; display:flex; flex-direction:column; min-width:0; background:var(--bg); }
+
+.toolbar{
+  height:40px; flex:none; display:flex; align-items:center; gap:8px;
+  padding:0 12px; background:var(--panel); border-bottom:1px solid var(--line);
+}
+.stat{ font-size:11.5px; color:var(--tx-2); font-variant-numeric:tabular-nums; }
+.stat b{ color:var(--tx); }
+.stat .bad{ color:var(--bad); font-weight:600; }
+
+.seg{ display:flex; padding:2px; border-radius:7px; background:var(--bg2); border:1px solid var(--line); }
+.seg-item{
+  height:22px; padding:0 10px; border:none; border-radius:5px; cursor:pointer;
+  background:transparent; color:var(--tx-2); font:inherit; font-size:11px;
+}
+.seg-item.is-on{ background:var(--panel); color:var(--accent); font-weight:600; box-shadow:0 1px 2px rgba(0,0,0,.08); }
+
+.table-wrap{
+  flex:1 1 auto; min-height:0; display:flex; flex-direction:column;
+  background:var(--panel); position:relative; overflow:hidden;
+}
+.thead{
+  display:grid; grid-template-columns:var(--cols); flex:none;
+  border-bottom:1px solid var(--line); background:var(--panel-2);
+  position:sticky; top:0; z-index:5;
+}
+.th{
+  padding:7px 8px; font-size:10.5px; font-weight:600; letter-spacing:.3px;
+  color:var(--tx-3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  cursor:pointer; user-select:none; border-right:1px solid var(--line-2);
+}
+.th:hover{ color:var(--tx); }
+.th.sorted::after{ content:" ▾"; color:var(--accent); }
+.th.sorted.asc::after{ content:" ▴"; }
+
+.tbody{ flex:1 1 auto; overflow:auto; position:relative; }
+.vph{ width:1px; }
+.vrows{ position:absolute; top:0; left:0; right:0; }
+
+.tr{
+  display:grid; grid-template-columns:var(--cols);
+  height:var(--rh); align-items:center;
+  border-bottom:1px solid var(--line-2);
+  cursor:pointer; position:relative;
+}
+.tr::before{
+  content:""; position:absolute; left:0; top:0; bottom:0; width:3px;
+  background:transparent;
+}
+.tr:hover{ background:var(--row-hover); }
+.tr.sel{ background:var(--row-sel); }
+.tr.sel::before{ background:var(--accent); }
+.tr.bad::before{ background:var(--err); }
+.tr.bad{ background:color-mix(in srgb, var(--err) 7%, transparent); }
+
+.td{
+  padding:0 8px; font-size:11.5px; white-space:nowrap; overflow:hidden;
+  text-overflow:ellipsis; color:var(--tx-2);
+}
+.td.mono{ font-family:var(--mono); font-size:11px; }
+.td.num{ font-family:var(--mono); color:var(--tx-3); text-align:right; }
+.td.type{ font-weight:600; }
+.td.time{ font-family:var(--mono); font-size:10.5px; color:var(--tx-3); }
+.td.bus{ font-family:var(--mono); font-size:10.5px; }
+.td.bus em{ font-style:normal; color:var(--tx-3); }
+.td.note{ color:var(--tx-2); font-size:11px; }
+
+.pill{
+  display:inline-block; padding:1px 6px; border-radius:5px; font-size:10px;
+  font-weight:600; font-family:var(--mono); letter-spacing:.3px;
+  border:1px solid transparent;
+}
+.pill.SRC { color:var(--src);  background:var(--src-bg);  border-color:color-mix(in srgb,var(--src) 35%,transparent); }
+.pill.SNK { color:var(--snk);  background:var(--snk-bg);  border-color:color-mix(in srgb,var(--snk) 35%,transparent); }
+.pill.Plug{ color:var(--plug); background:var(--plug-bg); border-color:color-mix(in srgb,var(--plug) 35%,transparent); }
+.pill.sop{ color:var(--tx-3); background:var(--bg2); border-color:var(--line); }
+
+.cat-Control  { color:var(--ctrl); }
+.cat-Data     { color:var(--data); }
+.cat-Extended { color:var(--ext);  }
+.cat-VDM      { color:var(--vdm);  }
+.cat-Error    { color:var(--err);  }
+.cat-Plug     { color:var(--plug); }
+.td.type.cat-Data{ font-weight:700; }
+
+.mark{ background:color-mix(in srgb,var(--warn) 35%,transparent); border-radius:3px; padding:0 2px; }
+
+.empty{
+  position:absolute; inset:0; display:flex; flex-direction:column;
+  align-items:center; justify-content:center; gap:9px;
+  background:var(--panel); color:var(--tx-2); text-align:center; padding:24px;
+}
+.empty-art{ width:74px; height:74px; color:var(--accent); opacity:.75; }
+.empty h3{ margin:0; font-size:15px; color:var(--tx); }
+.empty p{ margin:0; font-size:12px; max-width:420px; color:var(--tx-3); }
+.empty .tiny-note{ font-size:11px; color:var(--tx-3); }
+
+/* ── 时间轴 ─────────────────────────────────────────── */
+.timeline{
+  flex:none; height:158px; background:var(--panel);
+  border-top:1px solid var(--line); display:flex; flex-direction:column;
+  position:relative;
+}
+.tl-head{
+  height:28px; flex:none; display:flex; align-items:center; gap:8px;
+  padding:0 12px; border-bottom:1px solid var(--line-2);
+}
+.tl-title{ font-size:11px; font-weight:600; color:var(--tx-2); }
+#busCanvas{ flex:1 1 auto; width:100%; display:block; cursor:crosshair; }
+.tl-tip{
+  position:absolute; pointer-events:none; display:none;
+  padding:4px 7px; border-radius:6px; font-size:10.5px; font-family:var(--mono);
+  background:var(--tx); color:var(--panel); white-space:nowrap;
+  transform:translate(-50%,-115%); z-index:20;
+}
+
+/* ── 详情面板 ───────────────────────────────────────── */
+.detail{
+  width:390px; flex:none; background:var(--panel);
+  border-left:1px solid var(--line); display:flex; flex-direction:column;
+  transition:width .18s ease, opacity .18s ease;
+}
+body.detail-collapsed .detail{ width:0; opacity:0; overflow:hidden; border-left:none; }
+.detail-head{
+  height:40px; flex:none; display:flex; align-items:center; gap:4px;
+  padding:0 8px 0 12px; border-bottom:1px solid var(--line);
+}
+.detail-head b{ font-size:12px; }
+.detail-body{ flex:1 1 auto; overflow-y:auto; padding:12px; }
+.detail-empty{ color:var(--tx-3); font-size:12px; text-align:center; padding-top:36px; }
+
+.dsec{ margin-bottom:14px; }
+.dsec > h5{
+  margin:0 0 7px; font-size:10.5px; font-weight:600; letter-spacing:.6px;
+  text-transform:uppercase; color:var(--tx-3);
+}
+.dhero{
+  padding:11px; border-radius:9px; border:1px solid var(--line);
+  background:var(--panel-2); margin-bottom:12px;
+}
+.dhero .t1{ font-size:15px; font-weight:700; margin-bottom:5px; }
+.dhero .t2{ font-size:11px; color:var(--tx-3); font-family:var(--mono); }
+.dhero-bad{ border-color:color-mix(in srgb,var(--err) 45%,transparent); background:color-mix(in srgb,var(--err) 8%,transparent); }
+
+.dgrid{ display:grid; grid-template-columns:1fr 1fr; gap:1px; background:var(--line-2);
+        border:1px solid var(--line-2); border-radius:8px; overflow:hidden; }
+.dcell{ background:var(--panel); padding:6px 9px; }
+.dcell .k{ font-size:10px; color:var(--tx-3); margin-bottom:2px; }
+.dcell .v{ font-size:11.5px; font-family:var(--mono); color:var(--tx); word-break:break-all; }
+
+.dbits{ border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+.dbit{
+  display:grid; grid-template-columns:104px 1fr; gap:0;
+  border-bottom:1px solid var(--line-2); font-size:11px;
+}
+.dbit:last-child{ border-bottom:none; }
+.dbit .bk{ padding:5px 9px; color:var(--tx-3); background:var(--panel-2); }
+.dbit .bv{ padding:5px 9px; font-family:var(--mono); color:var(--tx); word-break:break-all; }
+.dbit .bv u{ text-decoration:none; color:var(--accent); }
+
+.dobj{
+  border:1px solid var(--line); border-radius:8px; margin-bottom:7px; overflow:hidden;
+}
+.dobj-h{
+  padding:5px 9px; background:var(--panel-2); font-size:11px; font-weight:600;
+  display:flex; align-items:center; gap:7px; border-bottom:1px solid var(--line-2);
+}
+.dobj-h .k{ color:var(--tx-3); font-family:var(--mono); font-weight:400; margin-left:auto; }
+.dobj-b{ padding:7px 9px; font-size:11px; color:var(--tx-2); }
+
+.dwarn{
+  display:flex; gap:7px; padding:6px 9px; border-radius:7px; font-size:11px;
+  background:color-mix(in srgb,var(--warn) 12%,transparent);
+  border:1px solid color-mix(in srgb,var(--warn) 35%,transparent);
+  color:var(--tx); margin-bottom:6px;
+}
+.dwarn.err{ background:color-mix(in srgb,var(--err) 12%,transparent);
+            border-color:color-mix(in srgb,var(--err) 40%,transparent); }
+
+.hx{ font-family:var(--mono); font-size:11px; line-height:1.65; word-break:break-all; }
+.hx b{ color:var(--accent); font-weight:600; }
+
+/* ── 拖拽 / 进度 / toast ────────────────────────────── */
+.drop{
+  position:fixed; inset:0; z-index:100; display:none;
+  background:color-mix(in srgb, var(--accent) 14%, rgba(0,0,0,.35));
+  backdrop-filter:blur(3px);
+  align-items:center; justify-content:center;
+}
+.drop.show{ display:flex; }
+.drop-inner{
+  display:flex; flex-direction:column; align-items:center; gap:8px;
+  padding:34px 52px; border-radius:16px; border:2px dashed var(--accent);
+  background:var(--panel); color:var(--accent); box-shadow:var(--shadow-lg);
+}
+.drop-inner .i{ width:38px; height:38px; }
+.drop-inner b{ color:var(--tx); font-size:14px; }
+.drop-inner span{ font-size:11px; color:var(--tx-3); font-family:var(--mono); }
+
+.overlay{
+  position:fixed; inset:0; z-index:110; display:none;
+  background:rgba(8,12,18,.45); backdrop-filter:blur(2px);
+  align-items:center; justify-content:center;
+}
+.overlay.show{ display:flex; }
+.prog-card{
+  width:370px; padding:20px; border-radius:12px; background:var(--panel);
+  box-shadow:var(--shadow-lg); border:1px solid var(--line); text-align:center;
+}
+.prog-title{ font-size:13px; font-weight:600; margin-bottom:12px; }
+.bar{ height:6px; border-radius:4px; background:var(--line); overflow:hidden; }
+.bar i{ display:block; height:100%; width:0; background:linear-gradient(90deg,var(--accent),#8b5cf6); transition:width .12s; }
+.prog-sub{ font-size:11px; color:var(--tx-3); margin:9px 0 12px; font-family:var(--mono); }
+
+.toast-wrap{
+  position:fixed; right:16px; bottom:16px; z-index:120;
+  display:flex; flex-direction:column; gap:7px; align-items:flex-end;
+}
+.toast{
+  padding:9px 13px; border-radius:9px; font-size:12px; max-width:340px;
+  background:var(--panel); border:1px solid var(--line); color:var(--tx);
+  box-shadow:var(--shadow-lg); animation:tin .18s ease;
+}
+.toast.ok{ border-color:color-mix(in srgb,var(--ok) 45%,transparent); }
+.toast.err{ border-color:color-mix(in srgb,var(--err) 50%,transparent); }
+@keyframes tin{ from{ opacity:0; transform:translateY(6px);} to{ opacity:1; transform:none;} }
+
+/* 滚动条 */
+::-webkit-scrollbar{ width:10px; height:10px; }
+::-webkit-scrollbar-track{ background:transparent; }
+::-webkit-scrollbar-thumb{ background:var(--scroll); border-radius:6px; border:3px solid transparent; background-clip:content-box; }
+::-webkit-scrollbar-thumb:hover{ background:#8b95a3; background-clip:content-box; }
+
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ── 顶栏 ─────────────────────────────────────────────── -->
+  <header class="appbar">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
+        <rect x="1" y="1" width="30" height="30" rx="9" fill="url(#lg)"/>
+        <defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#3b82f6"/><stop offset="1" stop-color="#8b5cf6"/>
+        </linearGradient></defs>
+        <path d="M9 16.5h4.2l1.8-5 2.4 9 1.7-4h4" fill="none" stroke="#fff"
+              stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <div class="brand-txt">
+        <b>PDScope</b>
+        <span>USB Power Delivery 抓包解析</span>
+      </div>
+    </div>
+
+    <div class="file-chip" id="fileChip" title="">
+      <svg viewBox="0 0 16 16" class="i"><path d="M3 2h6l4 4v8a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1Zm5.5.5V7H12" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
+      <span id="fileName">未打开抓包文件</span>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="meta-chips" id="metaChips"></div>
+
+    <button class="btn ghost icon-only" title="切换主题（快捷键 T）" id="btnTheme">
+      <svg viewBox="0 0 16 16" class="i"><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="8" cy="8" r="2.6" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>
+    </button>
+
+    <button class="btn ghost" id="btnExport" disabled>
+      <svg viewBox="0 0 16 16" class="i"><path d="M8 1.8v8.4M4.8 7l3.2 3.2L11.2 7M2.5 12.5h11" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      导出
+    </button>
+
+    <button class="btn primary" id="btnOpen">
+      <svg viewBox="0 0 16 16" class="i"><path d="M1.8 12.5V3.6a.9.9 0 0 1 .9-.9h3.1l1.4 1.6h6.1a.9.9 0 0 1 .9.9v7.3a.9.9 0 0 1-.9.9H2.7a.9.9 0 0 1-.9-.9Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+      打开抓包
+    </button>
+    <input type="file" id="fileInput" accept=".atkcc,.bin,.zip" hidden />
+  </header>
+
+  <!-- ── 主体 ─────────────────────────────────────────────── -->
+  <div class="body" id="appBody">
+
+    <!-- 左侧筛选 -->
+    <aside class="sidebar" id="sidebar">
+      <div class="side-scroll">
+
+        <section class="fgroup">
+          <h4>通道 <span class="hint" id="chHint"></span></h4>
+          <div class="chlist" id="chList"></div>
+        </section>
+
+        <section class="fgroup">
+          <h4>数据方向</h4>
+          <div class="chips" id="fRole">
+            <button class="chip role-src is-on" data-v="SRC">Source <i id="cSrc">0</i></button>
+            <button class="chip role-snk is-on" data-v="SNK">Sink <i id="cSnk">0</i></button>
+            <button class="chip role-plug is-on" data-v="Plug">线缆 Plug <i id="cPlug">0</i></button>
+          </div>
+        </section>
+
+        <section class="fgroup">
+          <h4>SOP 类型</h4>
+          <div class="chips" id="fSop">
+            <button class="chip is-on" data-v="SOP">SOP</button>
+            <button class="chip is-on" data-v="SOP'">SOP&prime;</button>
+            <button class="chip is-on" data-v="SOP''">SOP&Prime;</button>
+            <button class="chip is-on" data-v="Hard Reset">Hard Reset</button>
+            <button class="chip is-on" data-v="Cable Reset">Cable Reset</button>
+          </div>
+        </section>
+
+        <section class="fgroup">
+          <h4>报文类别</h4>
+          <div class="chips" id="fCat">
+            <button class="chip cat-ctrl is-on" data-v="Control">控制</button>
+            <button class="chip cat-data is-on" data-v="Data">数据</button>
+            <button class="chip cat-ext is-on" data-v="Extended">扩展</button>
+            <button class="chip cat-vdm is-on" data-v="VDM">VDM</button>
+            <button class="chip cat-err is-on" data-v="Error">异常</button>
+          </div>
+        </section>
+
+        <section class="fgroup">
+          <h4>快速过滤</h4>
+          <label class="switch"><input type="checkbox" id="fHideGoodCrc" checked /><span></span>屏蔽 GOOD CRC 心跳包</label>
+          <label class="switch"><input type="checkbox" id="fOnlyBad" /><span></span>只看 CRC 错误</label>
+          <label class="switch"><input type="checkbox" id="fOnlyPower" /><span></span>只看功率协商（Source_Cap / Request / PPS）</label>
+          <label class="switch"><input type="checkbox" id="fOnlyEnter" /><span></span>只看状态切换（PS_RDY / VDM / Alert）</label>
+        </section>
+
+        <section class="fgroup">
+          <h4>报文类型</h4>
+          <div class="multisel" id="fType">
+            <button class="ms-head" id="msHead">全部类型 <span class="caret"></span></button>
+            <div class="ms-body" id="msBody"></div>
+          </div>
+        </section>
+
+        <section class="fgroup">
+          <h4>时间窗口 <span class="hint" id="tRangeHint"></span></h4>
+          <div class="range-row">
+            <input type="range" id="tFrom" min="0" max="1000" value="0" />
+            <input type="range" id="tTo" min="0" max="1000" value="1000" />
+          </div>
+          <div class="row gap">
+            <button class="btn tiny" id="btnClearTime">全时段</button>
+            <button class="btn tiny" id="btnCurView">当前视图</button>
+          </div>
+        </section>
+
+        <section class="fgroup">
+          <h4>关键字</h4>
+          <input class="text" id="fSearch" placeholder="消息名 / 数据hex / 备注…" />
+          <div class="row gap wrap mt6">
+            <button class="btn tiny" data-kw="PPS">PPS</button>
+            <button class="btn tiny" data-kw="AVS">AVS</button>
+            <button class="btn tiny" data-kw="VID">VID</button>
+            <button class="btn tiny" data-kw="Alert">Alert</button>
+            <button class="btn tiny" data-kw="CRC">CRC</button>
+          </div>
+        </section>
+
+        <button class="btn block" id="btnReset">重置全部筛选</button>
+      </div>
+    </aside>
+
+    <!-- 中间：报文表 + 时间轴 -->
+    <main class="main">
+      <div class="toolbar">
+        <button class="btn ghost icon-only" id="btnToggleSide" title="折叠筛选栏">
+          <svg viewBox="0 0 16 16" class="i"><path d="M2 3h12M2 8h12M2 13h12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+        </button>
+        <div class="stat" id="statLine">等待打开抓包文件…</div>
+        <div class="spacer"></div>
+        <div class="seg" id="viewSeg">
+          <button class="seg-item is-on" data-v="all">全部</button>
+          <button class="seg-item" data-v="neg">协商流程</button>
+          <button class="seg-item" data-v="err">异常</button>
+        </div>
+        <div class="density" title="行高">
+          <button class="btn tiny" id="btnDense">紧凑</button>
+        </div>
+      </div>
+
+      <div class="table-wrap" id="tableWrap">
+        <div class="thead" id="thead">
+          <div class="th c-idx"    data-k="index">#</div>
+          <div class="th c-sop"    data-k="sop">SOP</div>
+          <div class="th c-type"   data-k="msgType">报文类型</div>
+          <div class="th c-id"     data-k="msgId">ID</div>
+          <div class="th c-role"   data-k="role">方向</div>
+          <div class="th c-obj"    data-k="nObj">Obj</div>
+          <div class="th c-time"   data-k="timeMs">时间</div>
+          <div class="th c-bus"    data-k="vbus">VBUS / IBUS</div>
+          <div class="th c-data"   data-k="dataHex">数据 (hex)</div>
+          <div class="th c-note">解析详情</div>
+        </div>
+        <div class="tbody" id="tbody">
+          <div class="vph" id="vph"></div>
+          <div class="vrows" id="vrows"></div>
+        </div>
+        <div class="empty" id="emptyState">
+          <svg viewBox="0 0 64 64" class="empty-art"><rect x="8" y="14" width="48" height="36" rx="6" fill="none" stroke="currentColor" stroke-width="1.6" opacity=".5"/><path d="M18 32h7l3-7 4 14 3-7h11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <h3>打开一份 .atkcc 抓包文件</h3>
+          <p>由正点原子 ATK-C 抓取的 PD 数据，直接解析、可视化、逐字段溯源。</p>
+          <div class="row gap center">
+            <button class="btn primary" id="btnOpen2">选择文件</button>
+            <button class="btn" id="btnDemo">载入示例</button>
+          </div>
+          <p class="tiny-note">也可以把 .atkcc 文件直接拖进窗口</p>
+        </div>
+      </div>
+
+      <div class="timeline" id="timeline">
+        <div class="tl-head">
+          <span class="tl-title">VBUS / IBUS 时间轴</span>
+          <div class="spacer"></div>
+          <label class="switch sm"><input type="checkbox" id="tlFollow" checked /><span></span>跟随选中</label>
+          <button class="btn tiny" id="btnTlFit">适应宽度</button>
+        </div>
+        <canvas id="busCanvas"></canvas>
+        <div class="tl-tip" id="tlTip"></div>
+      </div>
+    </main>
+
+    <!-- 右侧详情 -->
+    <aside class="detail" id="detail">
+      <div class="detail-head">
+        <b>报文详情</b>
+        <div class="spacer"></div>
+        <button class="btn ghost icon-only" id="btnDetailNavPrev" title="上一条"><svg viewBox="0 0 16 16" class="i"><path d="M10 3.5 5.5 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <button class="btn ghost icon-only" id="btnDetailNavNext" title="下一条"><svg viewBox="0 0 16 16" class="i"><path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <button class="btn ghost icon-only" id="btnDetailClose" title="收起"><svg viewBox="0 0 16 16" class="i"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+      </div>
+      <div class="detail-body" id="detailBody">
+        <div class="detail-empty">点击左侧任意报文查看逐位解析</div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- 拖拽蒙层 -->
+  <div class="drop" id="drop">
+    <div class="drop-inner">
+      <svg viewBox="0 0 48 48" class="i"><path d="M24 8v24M14 24l10 10 10-10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <b>松开以解析这份抓包</b>
+      <span>.atkcc / .zip</span>
+    </div>
+  </div>
+
+  <!-- 进度蒙层 -->
+  <div class="overlay" id="progress">
+    <div class="prog-card">
+      <div class="prog-title" id="progTitle">正在解析…</div>
+      <div class="bar"><i id="progBar"></i></div>
+      <div class="prog-sub" id="progSub"></div>
+      <button class="btn tiny" id="progCancel">取消</button>
+    </div>
+  </div>
+
+  <div class="toast-wrap" id="toastWrap"></div>
+</div>
+
+<script>
+(function(){
+"use strict";
+/* ══════ src/js/core/zip.js ══════ */
+/**
+ * zip.js — 最小化、零依赖的 ZIP 读取器（支持 ZIP64）
+ *
+ * .atkcc 抓包文件本质上是一个普通 ZIP 压缩包：
+ *   channel.ini           采样率配置
+ *   bus.ini               VBUS / IBUS 模拟量轨迹
+ *   0/channel.ini         通道元数据（含总采样点数）
+ *   0/0-0.bin ...         各通道的数字采样数据，每块固定 1 MiB
+ *
+ * 这里只实现「读取」所需的最小集合：
+ *   中央目录 -> 目录项 -> 本地文件头 -> raw deflate 解压
+ */
+
+const SIG_EOCD = 0x06054b50;
+const SIG_EOCD64 = 0x06064b50;
+const SIG_EOCD64_LOC = 0x07064b50;
+const SIG_CDIR = 0x02014b50;
+const SIG_LOCAL = 0x04034b50;
+
+/** 在尾部 64 KiB + 22 字节范围内反向查找 EOCD 签名。 */
+function findEocd(view, bytes) {
+  const min = Math.max(0, bytes.length - (0xffff + 22));
+  for (let i = bytes.length - 22; i >= min; i--) {
+    if (view.getUint32(i, true) === SIG_EOCD) {
+      // 注释长度必须与剩余字节吻合，避免误命中
+      const commentLen = view.getUint16(i + 20, true);
+      if (i + 22 + commentLen === bytes.length) return i;
+    }
+  }
+  return -1;
+}
+
+class ZipEntry {
+  constructor(o) { Object.assign(this, o); }
+}
+
+class ZipReader {
+  /**
+   * @param {Uint8Array} bytes 整个 .atkcc / .zip 文件内容
+   */
+  constructor(bytes) {
+    this.bytes = bytes;
+    this.view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    this.entries = [];
+    this.byName = new Map();
+    this._parse();
+  }
+
+  _parse() {
+    const { view, bytes } = this;
+    const eocd = findEocd(view, bytes);
+    if (eocd < 0) throw new Error('不是有效的 ZIP 文件：未找到 EOCD 记录');
+
+    let entryCount = view.getUint16(eocd + 10, true);
+    let cdSize = view.getUint32(eocd + 12, true);
+    let cdOffset = view.getUint32(eocd + 16, true);
+
+    // ZIP64 升级
+    if (entryCount === 0xffff || cdSize === 0xffffffff || cdOffset === 0xffffffff) {
+      const loc = eocd - 20;
+      if (loc >= 0 && view.getUint32(loc, true) === SIG_EOCD64_LOC) {
+        const z64 = Number(view.getBigUint64(loc + 8, true));
+        if (view.getUint32(z64, true) === SIG_EOCD64) {
+          entryCount = Number(view.getBigUint64(z64 + 32, true));
+          cdSize = Number(view.getBigUint64(z64 + 40, true));
+          cdOffset = Number(view.getBigUint64(z64 + 48, true));
+        }
+      }
+    }
+
+    let p = cdOffset;
+    const end = Math.min(cdOffset + cdSize, bytes.length);
+    while (p + 46 <= end && view.getUint32(p, true) === SIG_CDIR) {
+      const flags = view.getUint16(p + 8, true);
+      const method = view.getUint16(p + 10, true);
+      const dosTime = view.getUint16(p + 12, true);
+      const dosDate = view.getUint16(p + 14, true);
+      const crc32 = view.getUint32(p + 16, true);
+      let compressedSize = view.getUint32(p + 20, true);
+      let uncompressedSize = view.getUint32(p + 24, true);
+      const nameLen = view.getUint16(p + 28, true);
+      const extraLen = view.getUint16(p + 30, true);
+      const commentLen = view.getUint16(p + 32, true);
+      let localOffset = view.getUint32(p + 42, true);
+
+      const name = new TextDecoder('utf-8').decode(bytes.subarray(p + 46, p + 46 + nameLen));
+
+      // 解析 ZIP64 扩展字段
+      let ep = p + 46 + nameLen;
+      const extraEnd = ep + extraLen;
+      while (ep + 4 <= extraEnd) {
+        const hid = view.getUint16(ep, true);
+        const hsz = view.getUint16(ep + 2, true);
+        if (hid === 0x0001) {
+          let q = ep + 4;
+          const limit = ep + 4 + hsz;
+          if (uncompressedSize === 0xffffffff && q + 8 <= limit) { uncompressedSize = Number(view.getBigUint64(q, true)); q += 8; }
+          if (compressedSize === 0xffffffff && q + 8 <= limit) { compressedSize = Number(view.getBigUint64(q, true)); q += 8; }
+          if (localOffset === 0xffffffff && q + 8 <= limit) { localOffset = Number(view.getBigUint64(q, true)); q += 8; }
+        }
+        ep += 4 + hsz;
+      }
+
+      const e = new ZipEntry({
+        name, method, flags, crc32, compressedSize, uncompressedSize,
+        localOffset, dosTime, dosDate,
+        isDirectory: name.endsWith('/'),
+      });
+      this.entries.push(e);
+      this.byName.set(name, e);
+      p += 46 + nameLen + extraLen + commentLen;
+    }
+  }
+
+  has(name) { return this.byName.has(name); }
+
+  /** 返回该目录项的原始压缩数据切片（不解压）。 */
+  raw(e) {
+    const { view, bytes } = this;
+    const lo = e.localOffset;
+    if (view.getUint32(lo, true) !== SIG_LOCAL) throw new Error('本地文件头损坏：' + e.name);
+    const nameLen = view.getUint16(lo + 26, true);
+    const extraLen = view.getUint16(lo + 28, true);
+    const start = lo + 30 + nameLen + extraLen;
+    return bytes.subarray(start, start + e.compressedSize);
+  }
+
+  /**
+   * 解压单个条目。
+   * @param {string} name
+   * @param {(raw:Uint8Array)=>Promise<Uint8Array>|Uint8Array} inflateRaw
+   */
+  async read(name, inflateRaw) {
+    const e = this.byName.get(name);
+    if (!e) return null;
+    if (e.isDirectory) return new Uint8Array(0);
+    const raw = this.raw(e);
+    if (e.method === 0) return raw.slice();
+    if (e.method !== 8) throw new Error(`不支持的压缩方式 ${e.method}（${name}）`);
+    return await inflateRaw(raw, e.uncompressedSize);
+  }
+
+  /** 解压为文本（用于解析 ini）。 */
+  async readText(name, inflateRaw) {
+    const b = await this.read(name, inflateRaw);
+    return b ? new TextDecoder('utf-8').decode(b) : null;
+  }
+}
+
+/* ══════ src/js/core/atkcc.js ══════ */
+/**
+ * atkcc.js — 正点原子 ATK-C (.atkcc) 抓包文件格式解析
+ *
+ * 格式（实测归纳）：
+ *   .atkcc 就是 ZIP：
+ *     channel.ini        "SamplingFrequency=2500"   —— 数值单位是 kHz，即数字采样率 2.5 MHz
+ *     bus.ini            "sample=N,vbus=1.234,ibus=0.567"  —— 模拟量轨迹，sample 与数字采样同域
+ *     0/channel.ini      第 1 行=通道组号，第 2 行=总采样点数（所有通道共享同一时基）
+ *     0/<ch>-<idx>.bin   通道 <ch> 的第 <idx> 块，每块固定 1 MiB
+ *
+ * 关键结论（已用官方 ATK-C 截图逐字段交叉验证，完全一致）：
+ *   · 每个采样点 1 bit，**LSB 优先**（每字节内 bit0 时间最早）
+ *   · 某字节 0xFF = 该 8 个采样点全高；0x00 = 全低（空载/空闲段，末块尾部为补齐）
+ *   · 采样率 2.5 MHz；BMC 时钟 600 kHz（UI=1.6667us），故 1 UI ≈ 4.167 采样点、1 bit = 2 UI
+ *   · 分块序号按数值排序（0-9 在 0-10 之前），最后一块尾部用 0x00 补齐
+ */
+
+
+
+const CHUNK_SIZE = 1048576;      // 1 MiB
+
+class AtkccCapture {
+  constructor(zip, meta) {
+    this.zip = zip;
+    this.meta = meta;
+    /** @type {Map<number, {folder:string, prefixes:number[], chunks:string[]}>} */
+    this.channels = meta.channels;
+  }
+
+  /**
+   * 打开 .atkcc。
+   * @param {Uint8Array} bytes
+   * @param {{inflate:(raw:Uint8Array,n:number)=>Promise<Uint8Array>}} io
+   */
+  static async open(bytes, io) {
+    const zip = new ZipReader(bytes);
+
+    // ── channel.ini：采样率 ──
+    const rootIni = await zip.readText('channel.ini', io.inflate);
+    let samplingFrequency = 0;
+    if (rootIni) {
+      const m = /SamplingFrequency\s*=\s*([0-9.]+)/i.exec(rootIni);
+      if (m) samplingFrequency = Number(m[1]);
+    }
+    // 实测 2500 的单位是 kHz。若文件给出的是 Hz 量级（<100000），按 Hz 处理。
+    const sampleRate = samplingFrequency > 0
+      ? (samplingFrequency >= 100000 ? samplingFrequency : samplingFrequency * 1000)
+      : 2500000;
+
+    // ── bus.ini：VBUS / IBUS ──
+    const busIni = await zip.readText('bus.ini', io.inflate);
+    const bus = [];
+    if (busIni) {
+      for (const line of busIni.split(/\r?\n/)) {
+        const t = line.trim();
+        if (!t) continue;
+        const m = /sample\s*=\s*(\d+)\s*,\s*vbus\s*=\s*(-?[\d.]+)\s*,\s*ibus\s*=\s*(-?[\d.]+)/i.exec(t);
+        if (m) bus.push({ sample: Number(m[1]), vbus: Number(m[2]), ibus: Number(m[3]) });
+      }
+    }
+
+    // ── 各通道分块清单 ──
+    const channelMap = new Map();
+    const re = /^(\d+)\/(\d+)-(\d+)\.bin$/i;
+    for (const e of zip.entries) {
+      const m = re.exec(e.name);
+      if (!m) continue;
+      const folder = m[1];
+      const ch = Number(m[2]);
+      const idx = Number(m[3]);
+      let c = channelMap.get(ch);
+      if (!c) { c = { channel: ch, folder, chunks: [] }; channelMap.set(ch, c); }
+      c.chunks.push({ idx, name: e.name, size: e.uncompressedSize });
+    }
+    for (const c of channelMap.values()) {
+      c.chunks.sort((a, b) => a.idx - b.idx);
+      c.totalBytes = c.chunks.reduce((s, x) => s + x.size, 0);
+      c.totalSamples = c.totalBytes * 8;
+    }
+
+    // ── 总采样数 ──
+    let totalSamples = 0;
+    const subIni = await zip.readText('0/channel.ini', io.inflate);
+    if (subIni) {
+      const lines = subIni.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+      if (lines.length >= 2) totalSamples = Number(lines[1]) || 0;
+    }
+    const channelList = [...channelMap.values()].sort((a, b) => a.channel - b.channel);
+    if (!totalSamples) totalSamples = channelList[0]?.totalSamples ?? 0;
+
+    return new AtkccCapture(zip, {
+      sampleRate,
+      samplingFrequencyRaw: samplingFrequency,
+      rawChannelIni: subIni,
+      totalSamples,
+      channels: channelList,
+      channelMap,
+      bus,
+      entryCount: zip.entries.length,
+    });
+  }
+
+  get durationSec() { return this.meta.totalSamples / this.meta.sampleRate; }
+
+  /** 读取某通道某块（已解压） */
+  async readChunk(channel, chunkIdx, inflate) {
+    const c = this.meta.channelMap.get(channel);
+    if (!c) return null;
+    const item = c.chunks[chunkIdx];
+    if (!item) return null;
+    return await this.zip.read(item.name, inflate);
+  }
+
+  /**
+   * 计算某通道真正的有效采样上限。
+   *   · 单通道文件：直接使用 channel.ini 里的总采样数
+   *   · 多通道文件：尾部 0x00 是补齐用的，按最后一段非零数据裁掉
+   */
+  effectiveSampleLimit(channel) {
+    const c = this.meta.channelMap.get(channel);
+    if (!c) return 0;
+    if (this.meta.channels.length === 1) {
+      return Math.min(this.meta.totalSamples, c.totalSamples);
+    }
+    // 多通道：交由 chunk 级裁剪（loadChunkTrimmed）处理
+    return c.totalSamples;
+  }
+
+  /** 读取最后一块并裁掉尾部 0x00 补齐区 */
+  static trimTrailingZeros(data) {
+    let end = data.length;
+    while (end > 0 && data[end - 1] === 0) end--;
+    return end;
+  }
+}
+
+/**
+ * 对某个通道做活动度扫描：统计非空闲字节数量，用于判断哪条线才是 CC / 有报文。
+ * 只扫前 maxChunks 块，保证耗时可控。
+ */
+async function scanChannelActivity(capture, channel, inflate, maxChunks = 4, onProgress) {
+  const c = capture.meta.channelMap.get(channel);
+  if (!c) return { channel, activity: 0, bytes: 0, scannedChunks: 0 };
+  let activity = 0, bytes = 0;
+  const n = Math.min(maxChunks, c.chunks.length);
+  for (let i = 0; i < n; i++) {
+    const d = await capture.readChunk(channel, i, inflate);
+    if (!d) continue;
+    for (let k = 0; k < d.length; k++) if (d[k] !== 0xFF) activity++;
+    bytes += d.length;
+    onProgress?.(channel, i + 1, n);
+  }
+  return { channel, activity, bytes, scannedChunks: n };
+}
+
+/* ══════ src/js/core/bmc.js ══════ */
+/**
+ * bmc.js — USB PD 的 BMC（Biphase Mark Coding）解码
+ *
+ * 完全对齐 sigrok `usb_power_delivery` 解码器的实现语义：
+ *   UI            = 1 / 600kHz = 1.6667 µs        （单位间隔 = 半位）
+ *   threshold     = 1.5 * UI   = 2.5   µs          （区分「半位1」与「位0」）
+ *   maxbit        = 3 * UI     = 5.0   µs          （超过即视为空闲，包结束）
+ *
+ * 状态机（与参考实现一致）：
+ *   diff = 本次边沿 - 上次边沿
+ *   isZero = diff > threshold
+ *   位0  : isZero && !halfOne
+ *   位1  : !isZero && halfOne
+ *   half : !isZero && !halfOne  -> 记 halfOne
+ *   other: 非法序列，按 0 处理并记录
+ */
+
+const UI_US = 1000000 / 600000;            // 1.6666666...
+const THRESHOLD_US = (UI_US + 2 * UI_US) / 2; // 2.5
+const MAXBIT_US = 3 * UI_US;               // 5.0
+
+/**
+ * 针对某个字节值，预算好其 8 个采样位形成的游程。
+ * 结果是 [{ bit, len }, ...]，并保证相邻项 bit 一定不同。
+ * 这样扫描时可以避免逐位循环。
+ *
+ * 两种位序都预先算好：
+ *   msb —— bit7 是最早的采样；
+ *   lsb —— bit0 是最早的采样。
+ *
+ * ★ 实测正点原子 ATK-C 导出的 .bin 采用 **LSB 优先**（每字节内 bit0 时间最早）。
+ *   用 LSB 解出的游程长度干净地聚集在 4 / 8 采样点（≈1UI / 2UI，2.5MHz 采样、
+ *   600kHz BMC 时钟、300kbps 数据率），且报文开头呈现规整的 1010… SOP 前导；
+ *   用 MSB 则游程散乱在 1~3 个采样点且无法解出报文。故默认 LSB。
+ */
+const BYTE_RUNS_MSB = (() => {
+  const t = new Array(256);
+  for (let b = 0; b < 256; b++) {
+    const out = [];
+    for (let k = 7; k >= 0; k--) {
+      const bit = (b >> k) & 1;
+      if (out.length && out[out.length - 1].bit === bit) out[out.length - 1].len++;
+      else out.push({ bit, len: 1 });
+    }
+    t[b] = out;
+  }
+  return t;
+})();
+
+const BYTE_RUNS_LSB = (() => {
+  const t = new Array(256);
+  for (let b = 0; b < 256; b++) {
+    const out = [];
+    for (let k = 0; k < 8; k++) {
+      const bit = (b >> k) & 1;
+      if (out.length && out[out.length - 1].bit === bit) out[out.length - 1].len++;
+      else out.push({ bit, len: 1 });
+    }
+    t[b] = out;
+  }
+  return t;
+})();
+
+/**
+ * 从字节流中提取电平游程（run），并转换为「边沿采样点」序列。
+ *
+ * 采样约定：每个字节 8 个采样点。默认 LSB 优先（bit0 是最早的采样）。
+ */
+class EdgeExtractor {
+  /** @param {{bitOrder?: 'lsb'|'msb'}} [opts] */
+  constructor(opts = {}) {
+    this.runs = (opts.bitOrder || 'lsb') === 'msb' ? BYTE_RUNS_MSB : BYTE_RUNS_LSB;
+    this.level = -1;      // 当前电平，-1 表示尚未确定
+    this.runStart = 0;    // 当前游程起始采样序号
+    this.sample = 0;      // 已消费的采样点数
+    this.started = false;
+  }
+
+  /**
+   * 处理一整块数据。
+   * @param {Uint8Array} data
+   * @param {number} baseSample 该块第一个采样点对应的全局采样序号
+   * @param {(edgeSample:number)=>void} onEdge 电平翻转时的全局采样序号
+   */
+  push(data, baseSample, onEdge) {
+    let sample = baseSample;
+    for (let i = 0; i < data.length; i++) {
+      const b = data[i];
+      if (b === 0) {
+        // 全 0：8 个采样点为低
+        if (this.level === 0) { /* 延续 */ }
+        else { onEdge(sample); this.level = 0; this.runStart = sample; }
+        sample += 8;
+        continue;
+      }
+      if (b === 0xff) {
+        // 全 1：8 个采样点为高（绝大多数数据都是这种，走快路径）
+        if (this.level === 1) { /* 延续 */ }
+        else { onEdge(sample); this.level = 1; this.runStart = sample; }
+        sample += 8;
+        continue;
+      }
+      const runs = this.runs[b];
+      for (let r = 0; r < runs.length; r++) {
+        const run = runs[r];
+        if (this.level !== run.bit) {
+          onEdge(sample);
+          this.level = run.bit;
+          this.runStart = sample;
+        }
+        sample += run.len;
+      }
+    }
+    this.sample = sample;
+  }
+
+  /** 收尾：补一个虚拟边沿，让最后一个包也能被刷新出来。 */
+  flush(onEdge, padSamples) {
+    onEdge(this.sample + padSamples);
+  }
+}
+
+/**
+ * PD 包的 BMC 状态机。边沿进来，包出去。
+ */
+class BmcDecoder {
+  constructor({ sampleRate, minEdges = 50, thresholdSamples = null, maxbitSamples = null }) {
+    this.sampleRate = sampleRate;
+    this.minEdges = minEdges;
+    this.threshold = thresholdSamples != null
+      ? thresholdSamples
+      : Math.max(1, Math.round(THRESHOLD_US * sampleRate / 1e6));
+    this.maxbit = maxbitSamples != null
+      ? maxbitSamples
+      : Math.max(1, Math.round(MAXBIT_US * sampleRate / 1e6));
+    this.reset();
+  }
+
+  reset() {
+    this.startsample = null;
+    this.previous = 0;
+    this.bits = [];
+    this.edges = [];
+    this.bad = [];
+    this.halfOne = false;
+    this.startOne = 0;
+  }
+
+  /**
+   * 送入一个边沿。
+   * @returns {null|{bits:number[],edges:number[],startSample:number,endSample:number,bad:number[][],bitrate:number}}
+   */
+  pushEdge(sample, flush = false) {
+    if (this.startsample === null) {
+      this.startsample = sample;
+      this.previous = sample;
+      return null;
+    }
+
+    const diff = sample - this.previous;
+
+    // 长时间空闲 => 视为包结束
+    if (diff > this.maxbit || flush) {
+      if (!flush) this.edges.push(this.previous);
+      const packet = this._emit();
+      // 重新开始
+      this.startsample = flush ? null : sample;
+      this.bits = [];
+      this.edges = [];
+      this.bad = [];
+      this.halfOne = false;
+      this.startOne = 0;
+      this.previous = sample;
+      return packet;
+    }
+
+    const isZero = diff > this.threshold;
+    if (isZero && !this.halfOne) {
+      this.bits.push(0);
+      this.edges.push(this.previous);
+    } else if (!isZero && this.halfOne) {
+      this.bits.push(1);
+      this.edges.push(this.startOne);
+      this.halfOne = false;
+    } else if (!isZero && !this.halfOne) {
+      this.halfOne = true;
+      this.startOne = this.previous;
+    } else {
+      this.bad.push([this.startOne, this.previous]);
+      this.bits.push(0);
+      this.edges.push(this.previous);
+      this.halfOne = false;
+    }
+    this.previous = sample;
+    return null;
+  }
+
+  _emit() {
+    if (this.edges.length < this.minEdges) return null;
+    const ss = this.edges[0];
+    const es = this.edges[this.edges.length - 1];
+    if (!(es > ss)) return null;
+    const bitrate = Math.round(this.sampleRate * this.bits.length / (es - ss));
+    return {
+      bits: this.bits,
+      edges: this.edges,
+      startSample: this.startsample,
+      endSample: es,
+      bad: this.bad,
+      bitrate,
+    };
+  }
+}
+
+/* ══════ src/js/core/pd_tables.js ══════ */
+/**
+ * pd_tables.js — USB PD 协议常量（依据 USB PD 规范 + 与 ATK-C / sigrok 解码器保持一致）
+ */
+
+// ── 4B5B 符号编码（5 bit -> 4 bit / K-code） ─────────────────────────────
+const SYM_ERR = 0x10;
+const SYNC1 = 0x11;
+const SYNC2 = 0x12;
+const SYNC3 = 0x13;
+const RST1 = 0x14;
+const RST2 = 0x15;
+const EOP_SYM = 0x16;
+
+/** index = 5bit 原始码（bit0 最先收到），value = 4bit 数据或 K-code */
+const DEC4B5B = [
+  0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x13, 0x14,
+  0x10, 0x01, 0x04, 0x05, 0x10, 0x16, 0x06, 0x07,
+  0x10, 0x12, 0x08, 0x09, 0x02, 0x03, 0x0A, 0x0B,
+  0x11, 0x15, 0x0C, 0x0D, 0x0E, 0x0F, 0x00, 0x10,
+];
+
+const SYM_NAME = [
+  ['0x0', '0'], ['0x1', '1'], ['0x2', '2'], ['0x3', '3'],
+  ['0x4', '4'], ['0x5', '5'], ['0x6', '6'], ['0x7', '7'],
+  ['0x8', '8'], ['0x9', '9'], ['0xA', 'A'], ['0xB', 'B'],
+  ['0xC', 'C'], ['0xD', 'D'], ['0xE', 'E'], ['0xF', 'F'],
+  ['ERROR', 'X'], ['SYNC-1', 'S1'], ['SYNC-2', 'S2'], ['SYNC-3', 'S3'],
+  ['RST-1', 'R1'], ['RST-2', 'R2'], ['EOP', '#'],
+];
+
+// ── 有序集（Ordered Set）────────────────────────────────────────────────
+const SOP_SEQUENCES = [
+  [SYNC1, SYNC1, SYNC1, SYNC2],   // SOP
+  [SYNC1, SYNC1, SYNC3, SYNC3],   // SOP'
+  [SYNC1, SYNC3, SYNC1, SYNC3],   // SOP''
+  [SYNC1, RST2,  RST2,  SYNC3],   // SOP' Debug
+  [SYNC1, RST2,  SYNC3, SYNC2],   // SOP'' Debug
+  [RST1,  SYNC1, RST1,  SYNC3],   // Cable Reset
+  [RST1,  RST1,  RST1,  RST2],    // Hard Reset
+];
+
+const START_OF_PACKETS = {
+  [SOP_SEQUENCES[0].join()]: 'SOP',
+  [SOP_SEQUENCES[1].join()]: "SOP'",
+  [SOP_SEQUENCES[2].join()]: "SOP''",
+  [SOP_SEQUENCES[3].join()]: "SOP' Debug",
+  [SOP_SEQUENCES[4].join()]: "SOP'' Debug",
+  [SOP_SEQUENCES[5].join()]: 'Cable Reset',
+  [SOP_SEQUENCES[6].join()]: 'Hard Reset',
+};
+
+/** SOP 类型 -> 用于 UI 的稳定短名 */
+const SOP_SHORT = {
+  'SOP': 'SOP',
+  "SOP'": "SOP'",
+  "SOP''": "SOP''",
+  "SOP' Debug": "SOP'D",
+  "SOP'' Debug": "SOP''D",
+  'Cable Reset': 'CRST',
+  'Hard Reset': 'HRST',
+};
+
+// ── 控制消息（Number of Data Objects == 0）─────────────────────────────
+const CTRL_TYPES = {
+  0: 'Reserved', 1: 'GOOD CRC', 2: 'GOTO MIN', 3: 'ACCEPT', 4: 'REJECT',
+  5: 'PING', 6: 'PS RDY', 7: 'GET SOURCE CAP', 8: 'GET SINK CAP',
+  9: 'DR_Swap', 10: 'PR_Swap', 11: 'VCONN_Swap', 12: 'Wait', 13: 'Soft_Reset',
+  14: 'Data_Reset', 15: 'Data_Reset_Complete', 16: 'Not_Supported',
+  17: 'Get_Source_Cap_Extended', 18: 'Get_Status', 19: 'FR_Swap',
+  20: 'Get_PPS_Status', 21: 'Get_Country_Codes', 22: 'Get_Sink_Cap_Extended',
+  23: 'Get_Source_Info', 24: 'Get_Revision',
+};
+
+// ── 数据消息 ────────────────────────────────────────────────────────────
+const DATA_TYPES = {
+  1: 'Source_Cap', 2: 'Request', 3: 'BIST', 4: 'Sink_Cap',
+  5: 'Battery_Status', 6: 'Alert', 7: 'Get_Country_Info', 8: 'Enter_USB',
+  9: 'EPR_Request', 10: 'EPR_Mode', 11: 'Source_Info', 12: 'Revision', 15: 'VDM',
+};
+
+// ── 扩展消息 ────────────────────────────────────────────────────────────
+const EXT_TYPES = {
+  1: 'Source_Capabilities_Extended', 2: 'Status', 3: 'Get_Battery_Cap',
+  4: 'Get_Battery_Status', 5: 'Battery_Capabilities', 6: 'Get_Manufacturer_Info',
+  7: 'Manufacturer_Info', 8: 'Security_Request', 9: 'Security_Response',
+  10: 'Firmware_Update_Request', 11: 'Firmware_Update_Response', 12: 'PPS_Status',
+  13: 'Country_Info', 14: 'Country_Codes', 15: 'Sink_Capabilities_Extended',
+  16: 'Extended_Control', 17: 'EPR_Source_Capabilities', 18: 'EPR_Sink_Capabilities',
+  30: 'Vendor_Defined_Extended',
+};
+
+const BIST_MODES = {
+  0: 'Receiver', 1: 'Transmit', 2: 'Counters', 3: 'Carrier 0',
+  4: 'Carrier 1', 5: 'Carrier 2', 6: 'Carrier 3', 7: 'Eye',
+};
+
+const VDM_CMDS = {
+  1: 'Disc Ident', 2: 'Disc SVID', 3: 'Disc Mode', 4: 'Enter Mode',
+  5: 'Exit Mode', 6: 'Attention',
+  16: 'DP Status', 17: 'DP Configure',
+};
+const VDM_ACK = ['REQ', 'ACK', 'NAK', 'BSY'];
+
+const EPR_MODE_ACTION = {
+  1: 'Enter', 2: 'Enter Acknowledged', 3: 'Enter Succeeded',
+  4: 'Enter Failed', 5: 'Exit',
+};
+const EPR_MODE_DATA = {
+  0: 'Unknown cause', 1: 'Cable not EPR capable',
+  2: 'Source failed to become Vconn source',
+  3: 'EPR Mode Capable bit not set in RDO',
+  4: 'Source unable to enter EPR Mode at this time',
+  5: 'EPR Mode Capable bit not set in PDO',
+};
+const EXT_CONTROL_MSG_TYPES = {
+  1: 'EPR Get Source_Cap', 2: 'EPR Get Sink Cap',
+  3: 'EPR KeepAlive', 4: 'EPR KeepAlive Ack',
+};
+
+const PEAK_CURRENT_DETAILS = {
+  0: { code: '00b', summary: 'IoC only / see Source_Cap_Extended', steps: [] },
+  1: {
+    code: '01b', summary: '150/125/110% IoC overload profile',
+    steps: ['150% IoC for 1ms @ 5%', '125% IoC for 2ms @ 10%', '110% IoC for 10ms @ 50%'],
+  },
+  2: {
+    code: '10b', summary: '200/150/125% IoC overload profile',
+    steps: ['200% IoC for 1ms @ 5%', '150% IoC for 2ms @ 10%', '125% IoC for 10ms @ 50%'],
+  },
+  3: {
+    code: '11b', summary: '200/175/150% IoC overload profile',
+    steps: ['200% IoC for 1ms @ 5%', '175% IoC for 2ms @ 10%', '150% IoC for 10ms @ 50%'],
+  },
+};
+
+/**
+ * 「消息类型 -> UI 分类」映射，用于给表格上色。
+ * 归类维度：握手 / 能力 / 电源协商 / 控制 / 数据 / 厂商 / 告警 / 错误
+ */
+const MSG_CATEGORY = {
+  'GOOD CRC': 'handshake',
+  'PING': 'handshake',
+  'Source_Cap': 'capability',
+  'Sink_Cap': 'capability',
+  'Source_Capabilities_Extended': 'capability',
+  'Sink_Capabilities_Extended': 'capability',
+  'Source_Info': 'capability',
+  'EPR_Source_Capabilities': 'capability',
+  'EPR_Sink_Capabilities': 'capability',
+  'Request': 'negotiate',
+  'EPR_Request': 'negotiate',
+  'ACCEPT': 'negotiate',
+  'REJECT': 'negotiate',
+  'PS RDY': 'negotiate',
+  'GOTO MIN': 'negotiate',
+  'Wait': 'negotiate',
+  'PPS_Status': 'negotiate',
+  'EPR_Mode': 'negotiate',
+  'Not_Supported': 'negotiate',
+  'Soft_Reset': 'control',
+  'Data_Reset': 'control',
+  'Data_Reset_Complete': 'control',
+  'DR_Swap': 'control',
+  'PR_Swap': 'control',
+  'VCONN_Swap': 'control',
+  'FR_Swap': 'control',
+  'Get_Source_Cap_Extended': 'control',
+  'Get_Sink_Cap_Extended': 'control',
+  'Get_Source_Info': 'control',
+  'Get_Status': 'control',
+  'Get_PPS_Status': 'control',
+  'Get_Country_Codes': 'control',
+  'Get_Country_Info': 'control',
+  'Get_Revision': 'control',
+  'Get_Battery_Cap': 'control',
+  'Get_Battery_Status': 'control',
+  'Battery_Capabilities': 'control',
+  'Get_Manufacturer_Info': 'control',
+  'Extended_Control': 'control',
+  'Revision': 'control',
+  'VDM': 'vendor',
+  'BIST': 'data',
+  'Battery_Status': 'data',
+  'Status': 'data',
+  'Country_Codes': 'data',
+  'Country_Info': 'data',
+  'Manufacturer_Info': 'data',
+  'Enter_USB': 'data',
+  'Alert': 'alert',
+  'Security_Request': 'security',
+  'Security_Response': 'security',
+  'Firmware_Update_Request': 'security',
+  'Firmware_Update_Response': 'security',
+  'Vendor_Defined_Extended': 'vendor',
+};
+
+/* ══════ src/js/core/pd.js ══════ */
+/**
+ * pd.js — USB Power Delivery 报文解码器
+ *
+ * 与 ATK-C（sigrok usb_power_delivery）解码语义逐字段对齐：
+ *   4B5B 符号 -> SOP 帧同步 -> 16bit Header -> N×32bit Data Object
+ *   -> CRC32(zlib) 校验 -> EOP -> 逐对象语义解析（PDO / RDO / VDM / 扩展消息）
+ *
+ * 输入是 BMC 解码器产出的比特序列，输出结构化的 packet 对象。
+ */
+
+
+
+// ── zlib 兼容 CRC32 ─────────────────────────────────────────────────────
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+
+function crc32(bytes) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+
+const fmtNum = (v) => {
+  if (Number.isInteger(v)) return String(v);
+  // 去掉浮点尾巴，例如 15.000000000000002 -> 15
+  const r = Math.round(v * 1000) / 1000;
+  return String(r);
+};
+const u32 = (b) => [b & 0xFF, (b >>> 8) & 0xFF, (b >>> 16) & 0xFF, (b >>> 24) & 0xFF];
+const flagVal = (enabled, t = 'Supported', f = 'Not supported') => enabled ? `1 (${t})` : `0 (${f})`;
+
+const SOP_ALIAS = { 'SOP1': "SOP'", 'SOP2': "SOP''" };
+
+class PdDecoder {
+  /**
+   * @param {{sampleRate:number}} opts
+   */
+  constructor({ sampleRate }) {
+    this.sampleRate = sampleRate;
+    this.reset();
+  }
+
+  reset() {
+    this.packetSeq = 0;
+    this.storedPdos = { source: {}, sink: {} };
+    this.pdoMeta = { source: {}, sink: {} };
+    this.capMark = new Array(14).fill(0);
+    this.lastSopPowerRole = 'SRC';
+    this.eprCapState = {};
+  }
+
+  // ── 4B5B / 位读取 ─────────────────────────────────────────────────────
+  _sym(i) {
+    const b = this.bits;
+    return DEC4B5B[(b[i] & 1) | ((b[i + 1] & 1) << 1) | ((b[i + 2] & 1) << 2)
+      | ((b[i + 3] & 1) << 3) | ((b[i + 4] & 1) << 4)];
+  }
+
+  _byte() {
+    const i = this.idx;
+    if (this.bits.length - i <= 10) { this.warn('Truncated', '!'); return 0x0BAD; }
+    const k0 = this._sym(i), k1 = this._sym(i + 5);
+    this.idx += 10;
+    return (k0 & 0x0F) | ((k1 & 0x0F) << 4);
+  }
+
+  _short() {
+    if (this.bits.length - this.idx <= 20) { this.warn('Truncated packet', 'TRUNC!'); return 0x0BAD; }
+    let val = 0;
+    for (let i = 0; i < 4; i++) {
+      const s = this._sym(this.idx + i * 5);
+      if (s > 0xF) { this.warn(`Invalid symbol: ${s}`, 'SYM!'); return 0x0BAD; }
+      val |= (s << (4 * i));
+    }
+    this.idx += 20;
+    return val >>> 0;
+  }
+
+  _word() {
+    const lo = this._short(), hi = this._short();
+    if (lo === 0x0BAD || hi === 0x0BAD) { this.warn('Failed to read word', 'WORD!'); return 0x0BAD0BAD; }
+    return ((hi << 16) | lo) >>> 0;
+  }
+
+  _findCorruptedSop(k) {
+    for (const seq of SOP_SEQUENCES) {
+      let same = 0;
+      for (let i = 0; i < k.length; i++) if (k[i] === seq[i]) same++;
+      if (same >= 3) return START_OF_PACKETS[seq.join()];
+    }
+    return null;
+  }
+
+  /** 从比特流中扫描出 SOP，返回包头起始下标（-1 表示不是报文） */
+  _scanSop() {
+    for (let i = 0; i < this.bits.length - 19; i++) {
+      const k = [this._sym(i), this._sym(i + 5), this._sym(i + 10), this._sym(i + 15)];
+      let sym = START_OF_PACKETS[k.join()];
+      if (!sym) sym = this._findCorruptedSop(k);
+      if (sym) {
+        this.sopBitOffset = i;
+        if (sym === 'Hard Reset' || sym === 'Cable Reset') {
+          this.specialPacket = sym;
+          this.packetSop = null;
+          return -1;
+        }
+        this.packetSop = sym;
+        return i + 20;
+      }
+    }
+    this.warn('No start of packet found', 'XXX');
+    return -1;
+  }
+
+  // ── Header 字段 ───────────────────────────────────────────────────────
+  headExt() { return this.headRev() === 3 ? ((this.head >>> 15) & 1) : 0; }
+  headId() { return (this.head >>> 9) & 7; }
+  headPowerRole() { return (this.head >>> 8) & 1; }
+  headDataRole() { return (this.head >>> 5) & 1; }
+  headRev() { return ((this.head >>> 6) & 3) + 1; }
+  headType() { return this.headRev() === 3 ? (this.head & 0x1F) : (this.head & 0xF); }
+  headCount() { return (this.head >>> 12) & 7; }
+
+  warn(longm, shortm) { if (this.warnings.length < 12) this.warnings.push({ long: longm, short: shortm }); }
+
+  _computeCrc() {
+    let bytes;
+    if (this.headExt() === 1) {
+      bytes = [this.head & 0xFF, (this.head >>> 8) & 0xFF];
+      bytes = bytes.concat(this.crcBytes || []);
+    } else {
+      bytes = [this.head & 0xFF, (this.head >>> 8) & 0xFF];
+      for (const d of this.dataWords) bytes = bytes.concat(u32(d));
+    }
+    return crc32(bytes);
+  }
+
+  // ── 主解码入口 ────────────────────────────────────────────────────────
+  /**
+   * @param {{bits:number[], edges:number[], startSample:number, endSample:number, bitrate:number}} raw
+   * @param {number} channel
+   * @returns {object|null}
+   */
+  decode(raw, channel = 0) {
+    this.bits = raw.bits;
+    this.edges = raw.edges;
+    this.idx = 0;
+    this.warnings = [];
+    this.dataWords = [];
+    this.extData = [];
+    this.extDataSizes = [];
+    this.crcBytes = null;
+    this.packetSop = null;
+    this.specialPacket = null;
+    this.text = '';
+    this.details = [];
+    this.summaryParts = [];
+
+    const hdrIdx = this._scanSop();
+
+    // Hard Reset / Cable Reset 是独立的短报文，没有 header
+    if (hdrIdx < 0 && this.specialPacket) {
+      this.packetSeq++;
+      const tms = raw.startSample / this.sampleRate * 1000;
+      this.text = `#${this.packetSeq} (${tms.toFixed(4)}ms): ${this.specialPacket}`;
+      return this._makePacket(raw, channel, {
+        sop: this.specialPacket,
+        msgType: this.specialPacket,
+        msgKind: 'special',
+        role: this.lastSopPowerRole,
+        summary: this.specialPacket === 'Hard Reset' ? '收到 Hard Reset' : '收到 Cable Reset',
+        category: 'control',
+        nObjects: 0,
+        header: null,
+        crcOk: null,
+      });
+    }
+    if (hdrIdx < 0) return null;
+
+    this.packetSeq++;
+    const tstampMs = raw.startSample / this.sampleRate * 1000;
+    this.text += `#${this.packetSeq} (${tstampMs.toFixed(4)}ms): `;
+
+    this.idx = hdrIdx;
+    this.head = this._short();
+    if (this.head === 0x0BAD) return null;
+
+    // 消息类型短名
+    const t = this.headType();
+    let shortm, isExt = this.headExt() === 1;
+    if (isExt) shortm = EXT_TYPES[t] ?? 'EXT???';
+    else if (this.headCount() === 0) shortm = CTRL_TYPES[t] ?? 'CTR???';
+    else shortm = DATA_TYPES[t] ?? 'DAT???';
+
+    // 方向（Port Power Role）
+    let role;
+    if (this.packetSop === 'SOP') {
+      role = this.headPowerRole() ? 'SRC' : 'SNK';
+      this.lastSopPowerRole = role;
+      if (this.headDataRole() !== this.headPowerRole()) role += this.headDataRole() ? '/DFP' : '/UFP';
+    } else if (this.packetSop === "SOP'" || this.packetSop === "SOP''"
+      || this.packetSop === "SOP' Debug" || this.packetSop === "SOP'' Debug") {
+      role = this.headPowerRole() ? 'Plug' : this.lastSopPowerRole;
+    } else {
+      role = this.lastSopPowerRole;
+    }
+
+    const longm = `(r${this.headRev()}) ${role}[${this.headId()}]: ${shortm}`;
+    this.text += longm;
+
+    if (isExt) {
+      this.extHead = this._short();
+      this.chunked = !!((this.extHead >>> 15) & 1);
+      this.chunkNum = (this.extHead >>> 11) & 0x0F;
+      this.reqChunk = !!((this.extHead >>> 10) & 1);
+      this.dataSize = this.extHead & 0x1FF;
+      this._decodeExtendedPayload(t, raw);
+    } else {
+      for (let i = 0; i < this.headCount(); i++) {
+        const w = this._word();
+        this.dataWords.push(w);
+        this._payload(i, t);
+      }
+    }
+
+    // CRC
+    const crc = this._word();
+    const calc = this._computeCrc();
+    const crcOk = crc === calc;
+    if (!crcOk) this.warn(`Bad CRC ${hex8(crc)} != ${hex8(calc)}`, 'CRC!');
+
+    // EOP
+    let eop = false;
+    if (this.bits.length >= this.idx + 5 && this._sym(this.idx) === EOP_SYM) { eop = true; this.idx += 5; }
+    else this.warn('No EOP', 'EOP!');
+
+    const summaryParts = this.summaryParts.filter(Boolean);
+    const summary = summaryParts.join(' ; ');
+
+    return this._makePacket(raw, channel, {
+      sop: this.packetSop,
+      msgType: shortm,
+      msgKind: isExt ? 'ext' : (this.headCount() === 0 ? 'control' : 'data'),
+      msgTypeRaw: t,
+      role,
+      header: this.head,
+      extHeader: isExt ? this.extHead : null,
+      msgId: this.headId(),
+      rev: this.headRev(),
+      powerRole: this.headPowerRole(),
+      dataRole: this.headDataRole(),
+      nObjects: this.headCount(),
+      crc,
+      crcCalc: calc,
+      crcOk,
+      eop,
+      summary,
+      category: MSG_CATEGORY[shortm] ?? (isExt ? 'data' : 'control'),
+    });
+  }
+
+  _makePacket(raw, channel, o) {
+    const bytes = [];
+    for (const w of this.dataWords) bytes.push(...u32(w));
+    return {
+      seq: this.packetSeq,
+      channel,
+      ...o,
+      startSample: raw.startSample,
+      endSample: raw.endSample,
+      timeMs: raw.startSample / this.sampleRate * 1000,
+      endTimeMs: raw.endSample / this.sampleRate * 1000,
+      durationUs: (raw.endSample - raw.startSample) / this.sampleRate * 1e6,
+      bitrate: raw.bitrate,
+      dataWords: this.dataWords.slice(),
+      dataBytes: bytes,
+      dataHex: bytes.map((b) => b.toString(16).padStart(2, '0').toUpperCase()).join(' '),
+      details: this.details,
+      warnings: this.warnings.slice(),
+      text: this.text,
+    };
+  }
+
+  // ── 载荷解析 ──────────────────────────────────────────────────────────
+  _pushDetail(key, value) { this.details.push({ key, value: String(value) }); }
+
+  _payload(idx, t) {
+    this.summaryParts = this.summaryParts || [];
+    const dataVal = this.dataWords[idx];
+    let summary = '';
+    if (t === 2) summary = this._rdo(dataVal);
+    else if (t === 9) {
+      summary = idx === 0 ? this._rdo(dataVal) : this._pdo(dataVal, idx + 1, false, 'source');
+    } else if (t === 1 || t === 4) {
+      summary = this._pdo(dataVal, idx + 1, false, t === 1 ? 'source' : 'sink');
+    } else if (t === 15) summary = this._vdm(idx, dataVal);
+    else if (t === 3) summary = this._bist(idx, dataVal);
+    else if (t === 10) summary = this._eprMode(idx, dataVal);
+    else if (t === 5) summary = this._batteryStatus(dataVal);
+    else if (t === 6) summary = this._alert(dataVal);
+    else if (t === 8) summary = this._enterUsb(dataVal);
+    else if (t === 11) summary = this._sourceInfo(dataVal);
+    else if (t === 12) summary = this._revision(dataVal);
+    else summary = `[${idx + 1}] 0x${hex8(dataVal)}`;
+    if (summary) this.summaryParts.push(summary);
+    this.text += ` - ${summary}`;
+  }
+
+  _decodeExtendedPayload(t, raw) {
+    this.summaryParts = [];
+    const capacity = Math.max(this.headCount() * 4 - 2, 0);
+    const payloadSize = this._extChunkPayloadSize(capacity);
+    const chunkOffset = this.chunked ? this.chunkNum * 26 : 0;
+    const payloadBytes = [];
+    for (let i = 0; i < payloadSize; i++) payloadBytes.push(this._byte());
+    const padBytes = Math.max(capacity - payloadSize, 0);
+    for (let i = 0; i < padBytes; i++) this._byte();
+
+    this.crcBytes = [this.extHead & 0xFF, (this.extHead >>> 8) & 0xFF]
+      .concat(payloadBytes, new Array(padBytes).fill(0));
+
+    // 按 4 字节分组还原为 32bit 对象（需要考虑 chunk 偏移导致的非对齐）
+    const groups = [];
+    if (payloadSize > 0) {
+      let first = 4 - (chunkOffset % 4);
+      if (first === 0) first = 4;
+      first = Math.min(first, payloadSize);
+      let consumed = 0;
+      while (consumed < payloadSize) {
+        const g = consumed === 0 ? first : Math.min(4, payloadSize - consumed);
+        groups.push(g);
+        consumed += g;
+      }
+    }
+    const bytesToU32 = (arr) => {
+      let v = 0;
+      for (let i = 0; i < Math.min(arr.length, 4); i++) v |= (arr[i] & 0xFF) << (8 * i);
+      return v >>> 0;
+    };
+    let bi = 0;
+    groups.forEach((g, i) => {
+      const val = bytesToU32(payloadBytes.slice(bi, bi + g));
+      this.extData.push(val);
+      this.extDataSizes.push(g);
+      bi += g;
+      this._payloadExtended(i, t, val);
+    });
+  }
+
+  _extChunkPayloadSize(capacity) {
+    if (this.reqChunk) return 0;
+    if (this.chunked) {
+      const off = this.chunkNum * 26;
+      return Math.min(Math.max(this.dataSize - off, 0), capacity);
+    }
+    return Math.min(this.dataSize, capacity);
+  }
+
+  _extBytes(idx) {
+    const size = idx < this.extDataSizes.length ? this.extDataSizes[idx] : 4;
+    return { bytes: u32(this.extData[idx]).slice(0, size), partial: size < 4 };
+  }
+
+  _payloadExtended(idx, t, val) {
+    let summary = `[${idx + 1}] `;
+    if (val === 0 && t !== 15 && t !== 17 && t !== 18) { this.summaryParts.push(summary + '0'); return; }
+    if (t === 16) summary += this._extControl(idx, val);
+    else if (t === 17 || t === 18) summary += this._eprCapDev(t, idx, val, t === 17 ? 'source' : 'sink');
+    else if (t === 1) summary += this._srcCapExt(val, idx);
+    else if (t === 2) summary += this._statusExt(val, idx);
+    else if (t === 12) summary += this._ppsStatusExt(val, idx);
+    else if (t === 14) summary += this._countryCodesExt(val, idx);
+    else if (t === 15) summary += this._snkCapExt(val, idx);
+    else summary += `Unhandled ext type: ${t}`;
+    this.summaryParts.push(summary);
+    this.text += ` - ${summary}`;
+  }
+
+  // ── PDO ───────────────────────────────────────────────────────────────
+  _pdo(pdo, idx, isEpr = false, role = 'source') {
+    const t1 = (pdo >>> 30) & 0x3;
+    const VM = 0.05, CM = 0.01, PM = 0.25;
+    const roleName = role === 'source' ? 'Source' : 'Sink';
+    this.capMark[idx] = t1;
+    this._pushDetail('Object', `PDO #${idx}`);
+    this._pushDetail('Raw', `0x${hex8(pdo)}`);
+    this._pushDetail('Power Range', isEpr ? 'EPR' : 'SPR');
+    this._pushDetail('Role', roleName);
+    const meta = { type: t1, role, isEpr, kind: 'unknown' };
+    let summary, name;
+
+    if (t1 === 0) {
+      name = isEpr ? 'EPR_Fixed' : 'Fixed';
+      const mv = ((pdo >>> 10) & 0x3FF) * VM;
+      const ma = (pdo & 0x3FF) * CM;
+      summary = `[${name}] ${fmtNum(mv)}V ${fmtNum(ma)}A (${fmtNum(mv * ma)}W)`;
+      this._pushDetail('Supply Type[B31-30]', `00b Fixed Supply PDO`);
+      this._pushDetail('Voltage[B19-10]', `${fmtNum(mv)} V`);
+      if (role === 'source' && !isEpr) {
+        this._pushDetail('Maximum Current[B9-0]', `${fmtNum(ma)} A`);
+        this._pushDetail('Maximum Power', `${fmtNum(mv * ma)} W`);
+        this._pushDetail('Dual-Role Power[B29]', flagVal((pdo >>> 29) & 1));
+        this._pushDetail('USB Suspend Supported[B28]', flagVal((pdo >>> 28) & 1));
+        this._pushDetail('Unconstrained Power[B27]', flagVal((pdo >>> 27) & 1));
+        this._pushDetail('USB Communications Capable[B26]', flagVal((pdo >>> 26) & 1));
+        this._pushDetail('Dual-Role Data[B25]', flagVal((pdo >>> 25) & 1));
+        this._pushDetail('Unchunked Ext Msg[B24]', flagVal((pdo >>> 24) & 1));
+        this._pushDetail('EPR Capable[B23]', flagVal((pdo >>> 23) & 1));
+        this._pushDetail('Reserved[B22]', (pdo >>> 22) & 1);
+        this._peakDetails('Peak Current', (pdo >>> 20) & 0x3, 'B21-20');
+      } else if (role === 'source' && isEpr) {
+        this._pushDetail('Maximum Current[B9-0]', `${fmtNum(ma)} A`);
+        this._pushDetail('Maximum Power', `${fmtNum(mv * ma)} W`);
+        this._pushDetail('Reserved[B29-23]', '0x' + ((pdo >>> 23) & 0x7F).toString(16).padStart(2, '0').toUpperCase());
+        this._peakDetails('Peak Current', (pdo >>> 20) & 0x3, 'B21-20');
+      } else if (role === 'sink' && !isEpr) {
+        this._pushDetail('Operational Current[B9-0]', `${fmtNum(ma)} A`);
+        this._pushDetail('Dual-Role Power[B29]', flagVal((pdo >>> 29) & 1));
+        this._pushDetail('Higher Capability[B28]', flagVal((pdo >>> 28) & 1));
+        this._pushDetail('Unconstrained Power[B27]', flagVal((pdo >>> 27) & 1));
+        this._pushDetail('USB Communications Capable[B26]', flagVal((pdo >>> 26) & 1));
+        this._pushDetail('Dual-Role Data[B25]', flagVal((pdo >>> 25) & 1));
+        this._pushDetail('FRS Current[B24-23]', this._frsText((pdo >>> 23) & 0x3));
+        this._pushDetail('Reserved[B22-20]', (pdo >>> 20) & 0x7);
+      } else if (role === 'sink' && isEpr) {
+        this._pushDetail('Operational Current[B9-0]', `${fmtNum(ma)} A`);
+        this._pushDetail('Reserved[B29-20]', '0x' + ((pdo >>> 20) & 0x3FF).toString(16).padStart(3, '0').toUpperCase());
+      } else {
+        this._pushDetail('Current[B9-0]', `${fmtNum(ma)} A`);
+        this._pushDetail('Power', `${fmtNum(mv * ma)} W`);
+        this._pushDetail('Upper Bits[B29-20]', '0x' + ((pdo >>> 20) & 0x3FF).toString(16).padStart(3, '0').toUpperCase());
+      }
+      this.storedPdos[role][idx] = `${name} ${fmtNum(mv)}V`;
+      meta.kind = 'fixed';
+    } else if (t1 === 1) {
+      name = isEpr ? 'EPR_Battery' : 'Battery';
+      const minv = ((pdo >>> 10) & 0x3FF) * VM;
+      const maxv = ((pdo >>> 20) & 0x3FF) * VM;
+      const mw = (pdo & 0x3FF) * PM;
+      summary = `[${name}] ${fmtNum(minv)}/${fmtNum(maxv)}V ${fmtNum(mw)}W`;
+      this._pushDetail('Supply Type[B31-30]', `01b Battery PDO`);
+      this._pushDetail('Maximum Voltage[B29-20]', `${fmtNum(maxv)} V`);
+      this._pushDetail('Minimum Voltage[B19-10]', `${fmtNum(minv)} V`);
+      this._pushDetail(role === 'source' ? 'Maximum Allowable Power[B9-0]' : 'Operational Power[B9-0]', `${fmtNum(mw)} W`);
+      this.storedPdos[role][idx] = `${name} ${fmtNum(minv)}/${fmtNum(maxv)}V`;
+      meta.kind = 'battery';
+    } else if (t1 === 2) {
+      name = isEpr ? 'EPR_Variable' : 'Variable';
+      const minv = ((pdo >>> 10) & 0x3FF) * VM;
+      const maxv = ((pdo >>> 20) & 0x3FF) * VM;
+      const ma = (pdo & 0x3FF) * CM;
+      summary = `[${name}] ${fmtNum(minv)}/${fmtNum(maxv)}V ${fmtNum(ma)}A`;
+      this._pushDetail('Supply Type[B31-30]', `10b Variable Supply PDO`);
+      this._pushDetail('Maximum Voltage[B29-20]', `${fmtNum(maxv)} V`);
+      this._pushDetail('Minimum Voltage[B19-10]', `${fmtNum(minv)} V`);
+      this._pushDetail(role === 'source' ? 'Maximum Current[B9-0]' : 'Operational Current[B9-0]', `${fmtNum(ma)} A`);
+      this.storedPdos[role][idx] = `${name} ${fmtNum(minv)}/${fmtNum(maxv)}V`;
+      meta.kind = 'variable';
+    } else if (t1 === 3) {
+      const t2 = (pdo >>> 28) & 0x3;
+      meta.apdoType = t2;
+      if (t2 === 0) {
+        name = 'PPS';
+        const minv = ((pdo >>> 8) & 0xFF) * 0.1;
+        const maxv = ((pdo >>> 17) & 0xFF) * 0.1;
+        const ma = (pdo & 0x7F) * 0.05;
+        const limited = (pdo >>> 27) & 1;
+        summary = `[PPS] ${fmtNum(minv)}/${fmtNum(maxv)}V ${fmtNum(ma)}A${limited ? ' [limited]' : ''}`;
+        this._pushDetail('Supply Type[B31-30]', '11b Augmented PDO');
+        this._pushDetail('APDO Type[B29-28]', '00b SPR PPS');
+        this._pushDetail('PPS Power Limited[B27]', flagVal(limited));
+        this._pushDetail('Reserved[B26-25]', (pdo >>> 25) & 0x3);
+        this._pushDetail('Maximum Voltage[B24-17]', `${fmtNum(maxv)} V`);
+        this._pushDetail('Reserved[B16]', (pdo >>> 16) & 1);
+        this._pushDetail('Minimum Voltage[B15-8]', `${fmtNum(minv)} V`);
+        this._pushDetail('Reserved[B7]', (pdo >>> 7) & 1);
+        this._pushDetail(role === 'source' ? 'Maximum Current[B6-0]' : 'Required Current[B6-0]', `${fmtNum(ma)} A`);
+        this._pushDetail('Approx Power @ Vmax', `${fmtNum(maxv * ma)} W`);
+        this.storedPdos[role][idx] = `PPS ${fmtNum(minv)}/${fmtNum(maxv)}V`;
+        meta.kind = 'pps';
+      } else if (t2 === 1) {
+        name = 'EPR_AVS';
+        const minv = ((pdo >>> 8) & 0xFF) * 0.1;
+        const maxv = ((pdo >>> 17) & 0x1FF) * 0.1;
+        const pdp = (pdo & 0xFF);
+        summary = `[EPR_AVS] ${fmtNum(minv)}~${fmtNum(maxv)}V (${fmtNum(pdp)}W)`;
+        this._pushDetail('Supply Type[B31-30]', '11b Augmented PDO');
+        this._pushDetail('APDO Type[B29-28]', '01b EPR AVS');
+        this._peakDetails('Peak Current', (pdo >>> 26) & 0x3, 'B27-26');
+        this._pushDetail('Maximum Voltage[B25-17]', `${fmtNum(maxv)} V`);
+        this._pushDetail('Reserved[B16]', (pdo >>> 16) & 1);
+        this._pushDetail('Minimum Voltage[B15-8]', `${fmtNum(minv)} V`);
+        this._pushDetail('PDP[B7-0]', `${fmtNum(pdp)} W`);
+        this._pushDetail('Approx Current @ Vmax', `${fmtNum(maxv > 0 ? pdp / maxv : 0)} A`);
+        this.storedPdos[role][idx] = `EPR_AVS ${fmtNum(minv)}-${fmtNum(maxv)}V ${fmtNum(pdp)}W`;
+        meta.kind = 'epr_avs';
+      } else if (t2 === 2) {
+        name = 'SPR_AVS';
+        const c15 = ((pdo >>> 10) & 0x3FF) * 0.01;
+        const c20 = (pdo & 0x3FF) * 0.01;
+        summary = `[SPR_AVS] 9~20V 15V:${fmtNum(c15)}A 20V:${fmtNum(c20)}A`;
+        this._pushDetail('Supply Type[B31-30]', '11b Augmented PDO');
+        this._pushDetail('APDO Type[B29-28]', '10b SPR AVS');
+        if (role === 'source') {
+          this._peakDetails('Peak Current', (pdo >>> 26) & 0x3, 'B27-26');
+          this._pushDetail('Reserved[B25-20]', (pdo >>> 20) & 0x3F);
+        } else {
+          this._pushDetail('Reserved[B27-20]', (pdo >>> 20) & 0xFF);
+        }
+        this._pushDetail('Current @ 9V-15V[B19-10]', `${fmtNum(c15)} A`);
+        this._pushDetail('Current @ 15V-20V[B9-0]', `${fmtNum(c20)} A`);
+        this.storedPdos[role][idx] = 'SPR_AVS 9-20V';
+        meta.kind = 'spr_avs';
+      } else {
+        name = 'Reserved_APDO';
+        summary = `[Reserved_APDO] [raw: ${hex8(pdo)}]`;
+        this._pushDetail('Supply Type[B31-30]', '11b Augmented PDO');
+        this._pushDetail('APDO Type[B29-28]', `1${t2.toString(2).padStart(2, '0')}b Reserved`);
+        this.storedPdos[role][idx] = `Reserved_APDO [raw:${hex8(pdo)}]`;
+        meta.kind = 'reserved_apdo';
+      }
+    } else {
+      name = 'Reserved';
+      summary = `[Reserved] [raw: ${hex8(pdo)}]`;
+      this.storedPdos[role][idx] = `Reserved [raw:${hex8(pdo)}]`;
+    }
+
+    this.pdoMeta[role][idx] = meta;
+    this.lastPdoName = name;
+    return summary;
+  }
+
+  _peakDetails(field, mode, range) {
+    const info = PEAK_CURRENT_DETAILS[mode] ?? PEAK_CURRENT_DETAILS[0];
+    this._pushDetail(`${field}[${range}]`, `${info.code} ${info.summary}`);
+    info.steps.forEach((s, i) => this._pushDetail(`Peak Profile ${i + 1}`, s));
+  }
+
+  _frsText(v) {
+    return {
+      0: '00b Fast Role Swap not supported',
+      1: '01b Default USB Port',
+      2: '10b 1.5A @ 5V',
+      3: '11b 3.0A @ 5V',
+    }[v] ?? 'Unknown';
+  }
+
+  // ── RDO ───────────────────────────────────────────────────────────────
+  _getRolePdoRef(pos, role) {
+    if (pos in this.storedPdos[role]) {
+      return [this.storedPdos[role][pos], this.pdoMeta[role][pos] ?? { kind: 'unknown' }];
+    }
+    return ['Unknown PDO', { kind: 'unknown' }];
+  }
+
+  _rdo(rdo) {
+    const pos = (rdo >>> 28) & 0x0F;
+    if (pos === 0 || pos >= 0x0E) {
+      const s = `(RDO Invalid Position ${pos})`;
+      this._pushDetail('Object Position[B31-28]', `${pos} (invalid)`);
+      this._pushDetail('Raw', `0x${hex8(rdo)}`);
+      return s;
+    }
+    const [refPdo, meta] = this._getRolePdoRef(pos, 'source');
+    const kind = meta.kind ?? 'unknown';
+    const giveBack = (rdo >>> 27) & 1;
+
+    if (refPdo === 'Unknown PDO' && kind === 'unknown') {
+      const s = `(RDO ${pos}: 未识别到 SOURCE CAP 包，无法解析)`;
+      this._pushDetail('Object Position[B31-28]', pos);
+      this._pushDetail('Referenced PDO', '未识别到 SOURCE CAP 包');
+      this._pushDetail('*Ref', '无');
+      this._pushDetail('Raw', `0x${hex8(rdo)}`);
+      return s;
+    }
+
+    this._pushDetail('Object Position[B31-28]', pos);
+    this._pushDetail('Referenced PDO', refPdo);
+    this._pushDetail('*Ref', '实时');
+    this._pushDetail('Raw', `0x${hex8(rdo)}`);
+    this._pushDetail('GiveBack[B27]', flagVal(giveBack, 'Deprecated bit set', 'Deprecated bit clear'));
+    this._pushDetail('Capability Mismatch[B26]', flagVal((rdo >>> 26) & 1));
+    this._pushDetail('USB Communications Capable[B25]', flagVal((rdo >>> 25) & 1));
+    this._pushDetail('No USB Suspend[B24]', flagVal((rdo >>> 24) & 1));
+    this._pushDetail('Unchunked Ext Msg[B23]', flagVal((rdo >>> 23) & 1));
+    this._pushDetail('EPR Capable[B22]', flagVal((rdo >>> 22) & 1));
+
+    let s;
+    if (kind === 'pps') {
+      const ov = ((rdo >>> 9) & 0x0FFF) * 0.02;
+      const oa = (rdo & 0x7F) * 0.05;
+      s = `(RDO ${pos}: ${refPdo}) ${fmtNum(ov)}V ${fmtNum(oa)}A`;
+      this._pushDetail('Reserved[B21]', (rdo >>> 21) & 1);
+      this._pushDetail('Output Voltage[B20-9]', `${fmtNum(ov)} V`);
+      this._pushDetail('Reserved[B8-7]', (rdo >>> 7) & 3);
+      this._pushDetail('Operating Current[B6-0]', `${fmtNum(oa)} A`);
+    } else if (kind === 'spr_avs' || kind === 'epr_avs') {
+      const ov = ((rdo >>> 9) & 0x0FFF) * 0.025;
+      const oa = (rdo & 0x7F) * 0.05;
+      s = `(RDO ${pos}: ${refPdo}) ${fmtNum(ov)}V ${fmtNum(oa)}A`;
+      this._pushDetail('Reserved[B21]', (rdo >>> 21) & 1);
+      this._pushDetail('Output Voltage[B20-9]', `${fmtNum(ov)} V`);
+      this._pushDetail('Reserved[B8-7]', (rdo >>> 7) & 3);
+      this._pushDetail('Operating Current[B6-0]', `${fmtNum(oa)} A`);
+    } else if (kind === 'battery') {
+      const ow = ((rdo >>> 10) & 0x3FF) * 0.25;
+      const mw = (rdo & 0x3FF) * 0.25;
+      s = `(RDO ${pos}: ${refPdo}) op ${fmtNum(ow)}W max ${fmtNum(mw)}W`;
+      this._pushDetail('Reserved[B21-20]', (rdo >>> 20) & 3);
+      this._pushDetail('Operating Power[B19-10]', `${fmtNum(ow)} W`);
+      this._pushDetail('Maximum Operating Power[B9-0]', `${fmtNum(mw)} W`);
+    } else {
+      const oa = ((rdo >>> 10) & 0x3FF) * 0.01;
+      const ma = (rdo & 0x3FF) * 0.01;
+      s = `(RDO ${pos}: ${refPdo}) op ${fmtNum(oa)}A max ${fmtNum(ma)}A`;
+      this._pushDetail('Reserved[B21-20]', (rdo >>> 20) & 3);
+      this._pushDetail('Operating Current[B19-10]', `${fmtNum(oa)} A`);
+      this._pushDetail('Maximum Operating Current[B9-0]', `${fmtNum(ma)} A`);
+    }
+    return s;
+  }
+
+  // ── 其余数据消息 ──────────────────────────────────────────────────────
+  _batteryStatus(data) {
+    const capacity = (data >>> 16) & 0xFFFF;
+    const info = (data >>> 8) & 0xFF;
+    const chargeState = (info >>> 2) & 0x3;
+    const chargeText = ['Charging', 'Discharging', 'Idle', 'Reserved'][chargeState];
+    const capText = capacity === 0xFFFF ? 'Unknown' : `${fmtNum(capacity * 0.1)} Wh`;
+    const s = `Capacity:${capText} Present:${(info >>> 1) & 1 ? 'Y' : 'N'} Status:${chargeText}`;
+    this._pushDetail('Battery Present Capacity[B31-16]', capText);
+    this._pushDetail('Invalid Battery Ref[B8]', flagVal(info & 1, 'Invalid', 'Valid'));
+    this._pushDetail('Battery Present[B9]', flagVal((info >>> 1) & 1));
+    this._pushDetail('Charging Status[B11-10]', chargeText);
+    this._pushDetail('Reserved Info[B15-12]', '0x' + ((info >>> 4) & 0xF).toString(16).toUpperCase());
+    this._pushDetail('Reserved[B7-0]', '0x' + (data & 0xFF).toString(16).padStart(2, '0').toUpperCase());
+    return s;
+  }
+
+  _alert(data) {
+    const bits = (data >>> 24) & 0xFF;
+    const names = {
+      1: 'Battery Status Change', 2: 'OCP', 3: 'OTP', 4: 'Operating Condition Change',
+      5: 'Source Input Change', 6: 'OVP', 7: 'Extended Alert',
+    };
+    const on = [];
+    for (const [bit, nm] of Object.entries(names)) if (bits & (1 << bit)) on.push(nm);
+    const s = 'Alerts:' + (on.length ? on.join(', ') : ' None');
+    this._pushDetail('Type of Alert[B31-24]', '0x' + bits.toString(16).padStart(2, '0').toUpperCase());
+    this._pushDetail('Battery Status Change[B25]', flagVal(bits & (1 << 1)));
+    this._pushDetail('OCP Event[B26]', flagVal(bits & (1 << 2)));
+    this._pushDetail('OTP Event[B27]', flagVal(bits & (1 << 3)));
+    this._pushDetail('Operating Condition Change[B28]', flagVal(bits & (1 << 4)));
+    this._pushDetail('Source Input Change[B29]', flagVal(bits & (1 << 5)));
+    this._pushDetail('OVP Event[B30]', flagVal(bits & (1 << 6)));
+    this._pushDetail('Extended Alert[B31]', flagVal(bits & (1 << 7)));
+    this._pushDetail('Fixed Batteries[B23-20]', '0x' + ((data >>> 20) & 0xF).toString(16).toUpperCase());
+    this._pushDetail('Hot Swappable Batteries[B19-16]', '0x' + ((data >>> 16) & 0xF).toString(16).toUpperCase());
+    this._pushDetail('Reserved[B15-0]', '0x' + (data & 0xFFFF).toString(16).padStart(4, '0').toUpperCase());
+    return s;
+  }
+
+  _enterUsb(data) {
+    const mode = (data >>> 28) & 0x7;
+    const speed = (data >>> 21) & 0x7;
+    const ctype = (data >>> 19) & 0x3;
+    const ccur = (data >>> 17) & 0x3;
+    const modeText = { 0: 'USB 2.0', 1: 'USB 3.2', 2: 'USB4' }[mode] ?? 'Reserved';
+    const speedText = {
+      0: 'USB 2.0 only', 1: 'USB 3.2 Gen1', 2: 'USB 3.2 Gen2 / USB4 Gen2',
+      3: 'USB4 Gen3', 4: 'USB4 Gen4',
+    }[speed] ?? 'Reserved';
+    const typeText = {
+      0: 'Passive', 1: 'Active Re-timer', 2: 'Active Re-driver', 3: 'Optically Isolated',
+    }[ctype] ?? 'Reserved';
+    const curText = { 0: 'VBUS not supported', 1: 'Reserved', 2: '3A', 3: '5A' }[ccur] ?? 'Reserved';
+    const s = `${modeText} ${speedText} ${typeText}`;
+    this._pushDetail('USB Mode[B30-28]', modeText);
+    this._pushDetail('USB4 DRD[B26]', flagVal((data >>> 26) & 1));
+    this._pushDetail('USB3 DRD[B25]', flagVal((data >>> 25) & 1));
+    this._pushDetail('Cable Speed[B23-21]', speedText);
+    this._pushDetail('Cable Type[B20-19]', typeText);
+    this._pushDetail('Cable Current[B18-17]', curText);
+    this._pushDetail('PCIe Support[B16]', flagVal((data >>> 16) & 1));
+    this._pushDetail('DP Support[B15]', flagVal((data >>> 15) & 1));
+    this._pushDetail('TBT Support[B14]', flagVal((data >>> 14) & 1));
+    this._pushDetail('Host Present[B13]', flagVal((data >>> 13) & 1));
+    return s;
+  }
+
+  _sourceInfo(data) {
+    const portType = (data >>> 31) & 1;
+    const typeText = portType ? 'Guaranteed Capability Port' : 'Managed Capability Port';
+    const maxPdp = (data >>> 16) & 0xFF, presPdp = (data >>> 8) & 0xFF, repPdp = data & 0xFF;
+    const s = `${typeText} Max:${maxPdp}W Present:${presPdp}W Reported:${repPdp}W`;
+    this._pushDetail('Port Type[B31]', typeText);
+    this._pushDetail('Port Maximum PDP[B23-16]', `${maxPdp} W`);
+    this._pushDetail('Port Present PDP[B15-8]', `${presPdp} W`);
+    this._pushDetail('Port Reported PDP[B7-0]', `${repPdp} W`);
+    return s;
+  }
+
+  _revision(data) {
+    const rm = (data >>> 28) & 0xF, rn = (data >>> 24) & 0xF;
+    const vm = (data >>> 20) & 0xF, vn = (data >>> 16) & 0xF;
+    const s = `Revision ${rm}.${rn} Version ${vm}.${vn}`;
+    this._pushDetail('Revision.major[B31-28]', rm);
+    this._pushDetail('Revision.minor[B27-24]', rn);
+    this._pushDetail('Version.major[B23-20]', vm);
+    this._pushDetail('Version.minor[B19-16]', vn);
+    return s;
+  }
+
+  _vdm(idx, data) {
+    const vid = (data >>> 16) & 0xFFFF;
+    const struct = (data >>> 15) & 1;
+    if (idx === 0) {
+      let txt = 'VDM';
+      this._pushDetail('Object', 'VDO #1');
+      this._pushDetail('SVID[B31-16]', '0x' + vid.toString(16).padStart(4, '0').toUpperCase());
+      this._pushDetail('Structured[B15]', flagVal(struct));
+      if (struct) {
+        const cmd = data & 0x1F;
+        const ack = (data >>> 6) & 3;
+        const pos = (data >>> 8) & 7;
+        const verMajor = (data >>> 13) & 3;
+        const verMinor = (data >>> 11) & 3;
+        const majorText = { 0: 'Version 1.0 (Deprecated)', 1: 'Version 2.x' }[verMajor] ?? 'Reserved';
+        const minorText = cmd <= 15
+          ? ({ 0: 'Version 2.0', 1: 'Version 2.1' }[verMinor] ?? 'Reserved')
+          : `Defined by SVID (${verMinor.toString(2).padStart(2, '0')}b)`;
+        txt = `${VDM_ACK[ack]} ${VDM_CMDS[cmd] ?? 'cmd?'}${pos ? ` pos ${pos}` : ''}`;
+        this._pushDetail('Structured VDM Version Major[B14-13]', `${majorText} (${verMajor.toString(2).padStart(2, '0')}b)`);
+        this._pushDetail('Structured VDM Version Minor[B12-11]', minorText);
+        this._pushDetail('Object Position[B10-8]', pos);
+        this._pushDetail('Command Type[B7-6]', VDM_ACK[ack]);
+        this._pushDetail('Command[B4-0]', `${VDM_CMDS[cmd] ?? 'Unknown'} (${cmd})`);
+      } else {
+        txt = `unstruct [${(data & 0x7FFF).toString(16).padStart(4, '0')}]`;
+        this._pushDetail('Payload[B14-0]', '0x' + (data & 0x7FFF).toString(16).padStart(4, '0').toUpperCase());
+      }
+      return `${txt} SVID:${vid.toString(16).padStart(4, '0')}`;
+    }
+    this._pushDetail('Object', `VDO #${idx + 1}`);
+    this._pushDetail('Payload', `0x${hex8(data)}`);
+    return `VDO:${hex8(data)}`;
+  }
+
+  _bist(idx, data) {
+    const mode = data >>> 28;
+    const counter = data & 0xFFFF;
+    let modeName = BIST_MODES[mode] ?? 'INVALID';
+    if (mode === 2) modeName = `Counter[= ${counter}]`;
+    const s = idx === 0 ? `mode ${modeName}` : 'invalid BRO';
+    this._pushDetail('Object', `BIST Data Object #${idx + 1}`);
+    this._pushDetail('Mode[B31-28]', `${modeName} (${mode})`);
+    this._pushDetail('Counter[B15-0]', counter);
+    return s;
+  }
+
+  _eprMode(idx, data) {
+    const action = (data >>> 24) & 0xFF;
+    const field = (data >>> 16) & 0xFF;
+    let txt = EPR_MODE_ACTION[action] ?? 'Unknown';
+    if (action === 4) txt += '  ' + (EPR_MODE_DATA[field] ?? 'Unknown cause');
+    this._pushDetail('Object', `EPR Mode Data Object #${idx + 1}`);
+    this._pushDetail('Action[B31-24]', `${EPR_MODE_ACTION[action] ?? 'Unknown'} (${action})`);
+    this._pushDetail('Data[B23-16]', `${EPR_MODE_DATA[field] ?? 'Unknown cause'} (${field})`);
+    return txt;
+  }
+
+  // ── 扩展消息 ──────────────────────────────────────────────────────────
+  _presentTempFlag(v) {
+    return { 0: 'Not supported', 1: 'Normal', 2: 'Warning', 3: 'Over temperature' }[v] ?? 'Reserved';
+  }
+
+  _statusExt(val, idx) {
+    const b = u32(val);
+    if (idx === 0) {
+      const tempText = b[0] === 0 ? 'Not supported' : (b[0] === 1 ? '<2C' : `${b[0]}C`);
+      const powerState = b[3] & 0x7;
+      const powerText = {
+        0: 'Status not supported', 1: 'S0', 2: 'Modern Standby', 3: 'S3',
+        4: 'S4', 5: 'S5', 6: 'G3',
+      }[powerState] ?? 'Reserved';
+      const indText = { 0: 'Off LED', 1: 'On LED', 2: 'Blinking LED', 3: 'Breathing LED' }[(b[3] >>> 3) & 0x7] ?? 'Reserved';
+      const s = `Temp:${tempText} Input:0x${b[1].toString(16).padStart(2, '0').toUpperCase()} State:${powerText}`;
+      this._pushDetail('Internal Temp[Byte0]', tempText);
+      this._pushDetail('External Power[Byte1.Bit1]', flagVal((b[1] >>> 1) & 1));
+      this._pushDetail('External Power Type[Byte1.Bit2]', (b[1] >>> 2) & 1 ? 'AC' : 'DC');
+      this._pushDetail('Internal Battery[Byte1.Bit3]', flagVal((b[1] >>> 3) & 1));
+      this._pushDetail('Internal Non-Battery[Byte1.Bit4]', flagVal((b[1] >>> 4) & 1));
+      this._pushDetail('Present Battery Input[Byte2]', '0x' + b[2].toString(16).padStart(2, '0').toUpperCase());
+      this._pushDetail('New Power State[Byte3.B2-0]', powerText);
+      this._pushDetail('State Indicator[Byte3.B5-3]', indText);
+      return s;
+    }
+    const tempStatus = b[1] & 0x3;
+    const s = `Events:0x${b[0].toString(16).padStart(2, '0').toUpperCase()} Temp:${['Normal', 'Warning', 'Over temperature', 'Reserved'][tempStatus]} PowerStatus:${b[2]}`;
+    this._pushDetail('Event Flags[Byte4]', '0x' + b[0].toString(16).padStart(2, '0').toUpperCase());
+    this._pushDetail('Temperature Status[Byte5.B1-0]', ['Normal', 'Warning', 'Over temperature', 'Reserved'][tempStatus]);
+    this._pushDetail('Power Status[Byte6]', b[2]);
+    return s;
+  }
+
+  _ppsStatusExt(val, idx) {
+    if (idx !== 0) return 'Reserved';
+    const ov = val & 0xFFFF, oi = (val >>> 16) & 0xFF, flags = (val >>> 24) & 0xFF;
+    const vText = ov === 0xFFFF ? 'Not supported' : `${fmtNum(ov * 0.02)} V`;
+    const iText = oi === 0xFF ? 'Not supported' : `${fmtNum(oi * 0.05)} A`;
+    const s = `V:${vText} I:${iText} PTF:${this._presentTempFlag((flags >>> 1) & 3)}`;
+    this._pushDetail('Output Voltage[Byte1-0]', vText);
+    this._pushDetail('Output Current[Byte2]', iText);
+    this._pushDetail('PTF[Byte3.B2-1]', this._presentTempFlag((flags >>> 1) & 3));
+    this._pushDetail('OMF[Byte3.B3]', (flags >>> 3) & 1 ? 'Current Limit' : 'Constant Voltage');
+    return s;
+  }
+
+  _countryCodesExt(val, idx) {
+    const b = u32(val);
+    if (idx === 0) {
+      const len = b[0];
+      const codes = [];
+      for (const i of [2]) {
+        if (codes.length >= len) break;
+        codes.push(String.fromCharCode(b[i]) + String.fromCharCode(b[i + 1]));
+      }
+      this._pushDetail('Length[Byte0]', len);
+      codes.forEach((c, i2) => this._pushDetail(`Country ${i2 + 1}`, c));
+      return `Count:${len} ${codes.join(' ')}`;
+    }
+    const codes = [];
+    for (const i of [0, 2]) {
+      if (b[i] === 0 || b[i + 1] === 0) continue;
+      codes.push(String.fromCharCode(b[i]) + String.fromCharCode(b[i + 1]));
+    }
+    codes.forEach((c, i2) => this._pushDetail(`Country ${idx * 2 + i2 + 1}`, c));
+    return codes.length ? codes.join(' ') : 'No codes';
+  }
+
+  _extControl(idx, val) {
+    const { bytes, partial } = this._extBytes(idx);
+    const typeByte = bytes[0] ?? 0, dataByte = bytes[1] ?? 0;
+    const txt = typeByte in EXT_CONTROL_MSG_TYPES ? EXT_CONTROL_MSG_TYPES[typeByte] : `Unknown Extended Control Type ${typeByte}`;
+    this._pushDetail('Object', `Extended Control Data Object #${idx + 1}`);
+    this._pushDetail('Control Type[Byte0]', `${EXT_CONTROL_MSG_TYPES[typeByte] ?? 'Unknown'} (${typeByte})`);
+    this._pushDetail('Data Byte[Byte1]', '0x' + dataByte.toString(16).padStart(2, '0').toUpperCase());
+    if (partial) this._pushDetail('*Pending', 'ECDB is truncated in this packet');
+    return txt;
+  }
+
+  _eprCapDev(t, idx, val, role) {
+    const key = `${t}`;
+    const state = this.eprCapState[key] ?? (this.eprCapState[key] = { nextIndex: 1, pendingBytes: null, pendingIndex: null });
+    if (this.chunkNum === 0 && idx === 0) {
+      state.pendingBytes = null; state.pendingIndex = null; state.nextIndex = 1;
+    }
+    const { bytes, partial } = this._extBytes(idx);
+    if (this.chunkNum === 0) {
+      if (partial) {
+        const pi = state.nextIndex;
+        state.pendingBytes = bytes.slice();
+        state.pendingIndex = pi;
+        return `[PDO #${pi}] 不完整`;
+      }
+      const objPos = state.nextIndex; state.nextIndex++;
+      return this._eprCapPdo(val, objPos, role);
+    }
+    if (idx === 0) {
+      if (state.pendingBytes && state.pendingBytes.length === 2 && state.pendingIndex != null) {
+        const merged = state.pendingBytes.concat(bytes).slice(0, 4);
+        let full = 0;
+        for (let i = 0; i < merged.length; i++) full |= merged[i] << (8 * i);
+        const pi = state.pendingIndex;
+        state.pendingBytes = null; state.pendingIndex = null;
+        state.nextIndex = pi + 1;
+        this._pushDetail('*Merged', '前包补全');
+        return this._eprCapPdo(full >>> 0, pi, role);
+      }
+      return '[[续包] 缺少前包2字节尾部]';
+    }
+    const objPos = state.nextIndex; state.nextIndex++;
+    return this._eprCapPdo(val, objPos, role);
+  }
+
+  _eprCapPdo(pdo, objPos, role) {
+    if (objPos <= 7 && pdo === 0) {
+      this._pushDetail('Object', `PDO #${objPos}`);
+      this._pushDetail('Padding', '未使用的SPR槽位为零填充');
+      return `[SPR_Padding] PDO #${objPos} 零填充`;
+    }
+    const supplyType = (pdo >>> 30) & 0x3;
+    const fixedVoltage = ((pdo >>> 10) & 0x3FF) * 0.05;
+    let isEpr = objPos >= 8;
+    if (!isEpr) {
+      if (supplyType === 0 && fixedVoltage > 20.0) isEpr = true;
+      else if (supplyType === 3 && ((pdo >>> 28) & 0x3) === 1) isEpr = true;
+    }
+    return this._pdo(pdo, objPos, isEpr, role);
+  }
+
+  _srcCapExt(val, idx) {
+    if (idx === 0) {
+      const vid = val & 0xFFFF, pid = (val >>> 16) & 0xFFFF;
+      this._pushDetail('Vendor ID[B15-0]', '0x' + vid.toString(16).padStart(4, '0').toUpperCase());
+      this._pushDetail('Product ID[B31-16]', '0x' + pid.toString(16).padStart(4, '0').toUpperCase());
+      return `VID:0x${vid.toString(16).padStart(4, '0').toUpperCase()} PID:0x${pid.toString(16).padStart(4, '0').toUpperCase()}`;
+    }
+    if (idx === 1) {
+      this._pushDetail('XID[B31-0]', `0x${hex8(val)}`);
+      return `XID:0x${hex8(val)}`;
+    }
+    if (idx === 2) {
+      const fw = val & 0xFF, hw = (val >>> 8) & 0xFF, vreg = (val >>> 16) & 0xFF, holdup = (val >>> 24) & 0xFF;
+      const load = (vreg & 3) === 0 ? '150mA' : ((vreg & 3) === 1 ? '500mA' : 'RSVD');
+      const ioc = ((vreg >>> 2) & 1) === 0 ? '25%' : '90%';
+      const holdStr = holdup === 0 ? 'Not supported' : `${holdup}ms`;
+      this._pushDetail('FW Version[7-0]', fw);
+      this._pushDetail('HW Version[15-8]', hw);
+      this._pushDetail('Load Step[17-16]', load);
+      this._pushDetail('IOC Percent[18]', ioc);
+      this._pushDetail('Holdup Time[31-24]', holdStr);
+      return `FW:${fw} HW:${hw} Load:${load} IOC:${ioc} Hold:${holdStr}`;
+    }
+    if (idx === 3) {
+      const comp = val & 0xFF, touch = (val >>> 8) & 0xFF, peak = (val >>> 16) & 0xFFFF;
+      const lps = comp & 1 ? 'Y' : 'N', ps1 = comp & 2 ? 'Y' : 'N', ps2 = comp & 4 ? 'Y' : 'N';
+      const low = touch & 1 ? 'Y' : 'N', gnd = touch & 2 ? 'Y' : 'N', pe = touch & 4 ? 'Y' : 'N';
+      const ol = Math.min((peak & 0x1F) * 10, 250), period = ((peak >>> 5) & 0x3F) * 20;
+      const duty = ((peak >>> 11) & 0xF) * 5, droop = (peak >>> 15) & 1 ? 'Y' : 'N';
+      this._pushDetail('Compliance LPS[0]', lps);
+      this._pushDetail('Compliance PS1[1]', ps1);
+      this._pushDetail('Compliance PS2[2]', ps2);
+      this._pushDetail('Touch Low Current[8]', low);
+      this._pushDetail('Touch Ground Pin[9]', gnd);
+      this._pushDetail('Touch PE[10]', pe);
+      this._pushDetail('PeakCurrent1 Overload', `${ol}%`);
+      this._pushDetail('PeakCurrent1 Period', `${period} ms`);
+      this._pushDetail('PeakCurrent1 Duty', `${duty}%`);
+      this._pushDetail('PeakCurrent1 Vdroop', droop);
+      return `Comp:LPS=${lps} PS1=${ps1} PS2=${ps2} Peak1:${ol}%/${period}ms/${duty}%`;
+    }
+    if (idx === 4) {
+      const pc2 = val & 0xFFFF, pc3 = (val >>> 16) & 0xFFFF;
+      const f = (p) => ({
+        ol: Math.min((p & 0x1F) * 10, 250), per: ((p >>> 5) & 0x3F) * 20,
+        duty: ((p >>> 11) & 0xF) * 5, droop: (p >>> 15) & 1 ? 'Y' : 'N',
+      });
+      const a = f(pc2), b2 = f(pc3);
+      this._pushDetail('PeakCurrent2 Overload', `${a.ol}%`);
+      this._pushDetail('PeakCurrent3 Overload', `${b2.ol}%`);
+      return `Peak2:${a.ol}%/${a.per}ms/${a.duty}% Peak3:${b2.ol}%/${b2.per}ms/${b2.duty}%`;
+    }
+    if (idx === 5) {
+      const touchTemp = val & 0xFF, srcInputs = (val >>> 8) & 0xFF, batts = (val >>> 16) & 0xFF, spr = (val >>> 24) & 0x7F;
+      const tempStr = { 0: '60950', 1: '62368-1', 2: '62368-2' }[touchTemp] ?? 'RSVD';
+      const ext = srcInputs & 1 ? 'Y' : 'N';
+      const intB = srcInputs & 4 ? 'Y' : 'N';
+      const hot = (batts >>> 4) & 0xF, fixed = batts & 0xF;
+      this._pushDetail('Touch Temp Standard[7-0]', tempStr);
+      this._pushDetail('External Supply[8]', ext);
+      this._pushDetail('Internal Battery[10]', intB);
+      this._pushDetail('Hot Swappable Batteries[19-16]', hot);
+      this._pushDetail('Fixed Batteries[23-20]', fixed);
+      this._pushDetail('SPR PDP Rating[30-24]', `${spr} W`);
+      return `Temp:${tempStr} Ext:${ext} Batt:${intB} Slots:H${hot}/F${fixed} SPR:${spr}`;
+    }
+    if (idx === 6) {
+      const epr = val & 0x7F;
+      this._pushDetail('EPR PDP Rating[6-0]', `${epr} W`);
+      return `EPR:${epr}`;
+    }
+    this._pushDetail('Raw', `0x${hex8(val)}`);
+    return 'N/A';
+  }
+
+  _snkCapExt(val, idx) {
+    const b = u32(val);
+    const pdp = (v) => `${v} W`;
+    if (idx === 0) {
+      const vid = b[0] | (b[1] << 8), pid = b[2] | (b[3] << 8);
+      this._pushDetail('Vendor ID[Byte1-0]', '0x' + vid.toString(16).padStart(4, '0').toUpperCase());
+      this._pushDetail('Product ID[Byte3-2]', '0x' + pid.toString(16).padStart(4, '0').toUpperCase());
+      return `VID:0x${vid.toString(16).padStart(4, '0').toUpperCase()} PID:0x${pid.toString(16).padStart(4, '0').toUpperCase()}`;
+    }
+    if (idx === 1) {
+      this._pushDetail('XID[Byte7-4]', `0x${hex8(val)}`);
+      return `XID:0x${hex8(val)}`;
+    }
+    if (idx === 2) {
+      const skedb = b[2], loadStep = b[3] & 3;
+      const loadText = ['150 mA/us (default)', '500 mA/us', 'Reserved', 'Reserved'][loadStep];
+      this._pushDetail('FW Version[Byte8]', b[0]);
+      this._pushDetail('HW Version[Byte9]', b[1]);
+      this._pushDetail('SKEDB Version[Byte10]', skedb === 1 ? 'Version 1.0 (1)' : `Reserved (${skedb})`);
+      this._pushDetail('Load Step[Byte11.B1-0]', loadText);
+      return `FW:${b[0]} HW:${b[1]} SKEDB:${skedb} Load:${loadText}`;
+    }
+    if (idx === 3) {
+      const load = b[0] | (b[1] << 8);
+      const overload = load & 0x1F;
+      const period = (load >>> 5) & 0x3F, duty = (load >>> 11) & 0xF;
+      const droop = (load >>> 15) & 1;
+      const comp = b[2], touchTemp = b[3];
+      const tempText = ['Not applicable', 'IEC 60950-1', 'IEC 62368-1 TS1', 'IEC 62368-1 TS2'][touchTemp] ?? 'Reserved';
+      this._pushDetail('Percent Overload[Byte12-13.B4-0]', `${Math.min(overload, 25) * 10} %`);
+      this._pushDetail('Overload Period[Byte12-13.B10-5]', overload ? `${period * 20} ms` : 'Ignored when overload=0');
+      this._pushDetail('Duty Cycle[Byte12-13.B14-11]', overload ? `${duty * 5} %` : 'Ignored when overload=0');
+      this._pushDetail('Can Tolerate VBUS Droop[Byte13.B15]', flagVal(droop));
+      this._pushDetail('Compliance Requires LPS[Byte14.B0]', flagVal(comp & 1));
+      this._pushDetail('Compliance Requires PS1[Byte14.B1]', flagVal((comp >>> 1) & 1));
+      this._pushDetail('Compliance Requires PS2[Byte14.B2]', flagVal((comp >>> 2) & 1));
+      this._pushDetail('Touch Temp[Byte15]', `${tempText} (${touchTemp})`);
+      return `Load:${Math.min(overload, 25) * 10}% Touch:${tempText}`;
+    }
+    if (idx === 4) {
+      const hot = (b[0] >>> 4) & 0xF, fixed = b[0] & 0xF, modes = b[1];
+      this._pushDetail('Hot Swappable Battery Slots[Byte16.B7-4]', hot);
+      this._pushDetail('Fixed Batteries[Byte16.B3-0]', fixed);
+      this._pushDetail('PPS Charging Supported[Byte17.B0]', flagVal(modes & 1));
+      this._pushDetail('VBUS Powered[Byte17.B1]', flagVal((modes >>> 1) & 1));
+      this._pushDetail('AC Supply Powered[Byte17.B2]', flagVal((modes >>> 2) & 1));
+      this._pushDetail('Battery Powered[Byte17.B3]', flagVal((modes >>> 3) & 1));
+      this._pushDetail('AVS Supported[Byte17.B5]', flagVal((modes >>> 5) & 1));
+      this._pushDetail('SPR Sink Minimum PDP[Byte18]', pdp(b[2] & 0x7F));
+      this._pushDetail('SPR Sink Operational PDP[Byte19]', pdp(b[3] & 0x7F));
+      return `Batt:${fixed} fixed/${hot} hot PPS:${modes & 1 ? 'Y' : 'N'} AVS:${(modes >>> 5) & 1 ? 'Y' : 'N'} SPR:${b[2] & 0x7F}/${b[3] & 0x7F}W`;
+    }
+    if (idx === 5) {
+      this._pushDetail('SPR Sink Maximum PDP[Byte20]', pdp(b[0] & 0x7F));
+      this._pushDetail('EPR Sink Minimum PDP[Byte21]', pdp(b[1]));
+      this._pushDetail('EPR Sink Operational PDP[Byte22]', pdp(b[2]));
+      this._pushDetail('EPR Sink Maximum PDP[Byte23]', pdp(b[3]));
+      return `SPR Max:${b[0] & 0x7F}W EPR Min/Op/Max:${b[1]}/${b[2]}/${b[3]}W`;
+    }
+    this._pushDetail('Raw', `0x${hex8(val)}`);
+    return 'Reserved';
+  }
+}
+
+function hex8(v) { return (v >>> 0).toString(16).padStart(8, '0').toUpperCase(); }
+
+/* ══════ src/js/core/pipeline.js ══════ */
+/**
+ * pipeline.js — 把 .atkcc 变成 PD 报文列表的完整流水线
+ *
+ *   解压分块 -> 位流(1bit/采样) -> BMC 边沿状态机 -> 4B5B/PD 解析 -> 报文对象
+ *
+ * 全程流式处理，逐块回调进度，支持中断（长抓包可随时停止）。
+ */
+
+
+
+
+
+/**
+ * @param {AtkccCapture} capture
+ * @param {number} channel
+ * @param {{inflate:Function, onProgress?:Function, shouldStop?:()=>boolean}} opts
+ * @returns {Promise<{packets:object[], stats:object}>}
+ */
+async function decodeChannel(capture, channel, opts) {
+  const { inflate, onProgress, shouldStop } = opts;
+  const sampleRate = capture.meta.sampleRate;
+  const ch = capture.meta.channelMap.get(channel);
+  if (!ch) throw new Error(`通道 ${channel} 不存在`);
+
+  const bmc = new BmcDecoder({ sampleRate });
+  const pd = new PdDecoder({ sampleRate });
+  const ex = new EdgeExtractor({ bitOrder: opts.bitOrder || 'lsb' });
+  const packets = [];
+
+  const limit = capture.effectiveSampleLimit(channel);
+  let sampleBase = 0;
+  let trimmed = 0;
+  let edges = 0;
+
+  const emit = (raw) => {
+    edges += raw.edges.length;
+    const pkt = pd.decode(raw, channel);
+    if (pkt) packets.push(pkt);
+  };
+
+  for (let i = 0; i < ch.chunks.length; i++) {
+    if (shouldStop?.()) break;
+    let data = await capture.readChunk(channel, i, inflate);
+    if (!data) continue;
+
+    const isLast = i === ch.chunks.length - 1;
+    let keep = data.length;
+    if (limit > 0) {
+      const remainBytes = Math.ceil((limit - sampleBase) / 8);
+      if (remainBytes < keep) keep = Math.max(0, remainBytes);
+    }
+    if (isLast) {
+      const t = AtkccCapture.trimTrailingZeros(data);
+      if (t < keep) { trimmed += keep - t; keep = t; }
+    }
+    data = data.subarray(0, keep);
+
+    ex.push(data, sampleBase, (edge) => {
+      const p = bmc.pushEdge(edge);
+      if (p) emit(p);
+    });
+    sampleBase += data.length * 8;
+
+    onProgress?.({
+      channel,
+      chunk: i + 1,
+      chunks: ch.chunks.length,
+      ratio: (i + 1) / ch.chunks.length,
+      packets: packets.length,
+      samples: sampleBase,
+    });
+
+    // 让出主线程，避免长任务卡死 UI
+    if ((i & 7) === 7) await new Promise((r) => setTimeout(r, 0));
+  }
+
+  // 收尾：补一个虚拟边沿，让最后一个包也能落地
+  if (!shouldStop?.()) {
+    ex.flush((edge) => {
+      const p = bmc.pushEdge(edge, true);
+      if (p) emit(p);
+    }, bmc.maxbit + 1);
+  }
+
+  // 按采样点排序，并分配序号
+  packets.sort((a, b) => a.startSample - b.startSample);
+  packets.forEach((p, i) => { p.index = i; });
+
+  return {
+    packets,
+    stats: {
+      channel,
+      totalSamples: sampleBase,
+      durationSec: sampleBase / sampleRate,
+      edges,
+      trimmedBytes: trimmed,
+      packetCount: packets.length,
+      badCrc: packets.filter((p) => p.crcOk === false).length,
+      warnings: packets.reduce((s, p) => s + (p.warnings?.length ?? 0), 0),
+    },
+  };
+}
+
+// ── bus.ini 模拟量轨迹 ────────────────────────────────────────────────
+
+/** 取某个采样点处的 VBUS/IBUS（阶梯保持） */
+function busAt(bus, sample) {
+  if (!bus || !bus.length) return { vbus: 0, ibus: 0 };
+  let lo = 0, hi = bus.length - 1, ans = 0;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (bus[mid].sample <= sample) { ans = mid; lo = mid + 1; } else hi = mid - 1;
+  }
+  return bus[ans];
+}
+
+/**
+ * 把 bus.ini 展开成等间隔序列，用于画图。
+ * @returns {{t0:number, dt:number, vbus:Float64Array, ibus:Float64Array, min:number, max:number, vmax:number, imax:number}}
+ */
+function buildBusSeries(bus, totalSamples, sampleRate, targetPoints = 3000) {
+  if (!bus || !bus.length) {
+    return { t0: 0, dt: 0, vbus: new Float64Array(0), ibus: new Float64Array(0), vmax: 0, imax: 0 };
+  }
+  const step = Math.max(1, Math.floor(totalSamples / targetPoints));
+  const n = Math.floor(totalSamples / step) + 1;
+  const vbus = new Float64Array(n);
+  const ibus = new Float64Array(n);
+  let vmax = 0, imax = 0;
+  let j = 0;
+  for (let i = 0; i < n; i++) {
+    const s = i * step;
+    while (j + 1 < bus.length && bus[j + 1].sample <= s) j++;
+    vbus[i] = bus[j].vbus;
+    ibus[i] = bus[j].ibus;
+    if (vbus[i] > vmax) vmax = vbus[i];
+    if (ibus[i] > imax) imax = ibus[i];
+  }
+  return { t0: 0, step, n, vbus, ibus, vmax, imax, sampleRate };
+}
+
+/** 取一段采样区间内的原始电平，用于波形视图（压缩为 min/max 包络） */
+async function readWaveform(capture, channel, inflate, startSample, endSample, maxPoints = 1200) {
+  const ch = capture.meta.channelMap.get(channel);
+  if (!ch) return null;
+  const startByte = Math.floor(startSample / 8);
+  const endByte = Math.min(Math.ceil(endSample / 8), ch.totalBytes);
+  const firstChunk = Math.floor(startByte / 1048576);
+  const lastChunk = Math.floor((endByte - 1) / 1048576);
+
+  const span = Math.max(1, endSample - startSample);
+  const bucket = Math.max(1, Math.ceil(span / maxPoints));
+  const points = [];
+  let cur = { s: startSample, hi: 0, lo: 1 };
+
+  const consumeRun = (level, len, sample) => {
+    // 把一段电平塞进桶里
+    let bucketIdx = Math.floor((sample - startSample) / bucket);
+    // 简化：只记录该桶内是否出现过高低
+    if (bucketIdx >= maxPoints) bucketIdx = maxPoints - 1;
+    while (points.length <= bucketIdx) {
+      points.push({ s: startSample + points.length * bucket, hi: 0, lo: 1 });
+    }
+    const p = points[bucketIdx];
+    if (level) p.hi = 1; else p.lo = 0;
+  };
+
+  for (let ci = firstChunk; ci <= lastChunk; ci++) {
+    const data = await capture.readChunk(channel, ci, inflate);
+    if (!data) continue;
+    const chunkBase = ci * 1048576 * 8;
+    for (let b = 0; b < data.length; b++) {
+      const bitBase = chunkBase + b * 8;
+      if (bitBase + 8 <= startSample || bitBase >= endSample) continue;
+      const byte = data[b];
+      if (byte === 0xFF) { consumeRun(1, 8, bitBase); continue; }
+      if (byte === 0x00) { consumeRun(0, 8, bitBase); continue; }
+      for (let k = 0; k < 8; k++) {          // LSB 优先：bit0 时间最早
+        const bit = (byte >> k) & 1;
+        const s = bitBase + k;
+        if (s < startSample || s >= endSample) continue;
+        consumeRun(bit, 1, s);
+      }
+    }
+  }
+  return { points, bucket, startSample, endSample, sampleRate: capture.meta.sampleRate };
+}
+
+/* ══════ src/js/core/inflate.js ══════ */
+/**
+ * inflate.js — 环境自适应的 raw deflate 解压
+ *
+ * 浏览器 / Electron 渲染进程：DecompressionStream('deflate-raw')
+ * Node：node:zlib
+ *
+ * 对外只暴露一个 makeInflator() -> (raw, expectedSize) => Promise<Uint8Array>
+ */
+
+/** 浏览器实现（Chrome 103+ / Safari 16.4+ / Electron 均可） */
+function makeBrowserInflator() {
+  const supported = typeof DecompressionStream === 'function';
+  return async function inflateRaw(raw, expectedSize) {
+    if (expectedSize === 0) return new Uint8Array(0);
+    if (!supported) throw new Error('当前环境不支持 DecompressionStream');
+    // 拷贝一份，避免 subarray 视图被流式读取时被回收
+    const input = raw.slice();
+    const ds = new DecompressionStream('deflate-raw');
+    const stream = new Blob([input]).stream().pipeThrough(ds);
+    const buf = await new Response(stream).arrayBuffer();
+    return new Uint8Array(buf);
+  };
+}
+
+/** Node 实现 */
+async function makeNodeInflator() {
+  const zlib = await import('node:zlib');
+  return function inflateRaw(raw, expectedSize) {
+    const out = zlib.inflateRawSync(Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength));
+    if (expectedSize && out.length !== expectedSize) {
+      // 尺寸不符时仍然返回，交由上层判断
+      return new Uint8Array(out.buffer, out.byteOffset, out.length);
+    }
+    return new Uint8Array(out.buffer, out.byteOffset, out.length);
+  };
+}
+
+/** 自动挑选实现 */
+async function makeAutoInflator() {
+  const isNode = typeof process !== 'undefined' && process.versions && process.versions.node
+    && typeof window === 'undefined';
+  if (isNode) return await makeNodeInflator();
+  return makeBrowserInflator();
+}
+
+/* ══════ src/ui/app.js ══════ */
+/**
+ * app.js — PDScope 前端主程序
+ *
+ * 纯客户端实现：所有解析都在浏览器/渲染进程里完成（ZIP + inflate + BMC + PD），
+ * 因此同一份代码可以：
+ *   · 由 tools/serve.mjs 通过 http://127.0.0.1 打开
+ *   · 打包成单文件 dist/PDScope.html 直接双击运行（macOS / Windows / Linux 通用）
+ *   · 由 Electron 外壳承载
+ */
+
+
+
+
+
+/* ═══════════════════════ 小工具 ═══════════════════════ */
+const $  = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const el = (tag, cls, txt) => {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (txt != null) n.textContent = txt;
+  return n;
+};
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+function fmtTime(ms) {
+  const s = ms / 1000;
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${sec.toFixed(3).padStart(6, '0')}`;
+}
+const fmtSize = (n) => n > 1048576 ? (n / 1048576).toFixed(2) + ' MB' : (n / 1024).toFixed(1) + ' KB';
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+/** 报文颜色分类（用于「报文类别」筛选 + 字体配色） */
+function kindOf(p) {
+  if (p.crcOk === false) return 'Error';
+  if (p.msgType === 'VDM') return 'VDM';
+  if (p.msgKind === 'ext') return 'Extended';
+  if (p.msgKind === 'data') return 'Data';
+  if (p.msgKind === 'special') return 'Error';
+  return 'Control';
+}
+const CAT_CLASS = { Control: 'cat-Control', Data: 'cat-Data', Extended: 'cat-Extended', VDM: 'cat-VDM', Error: 'cat-Error' };
+
+/** 是否属于「功率协商」/「状态切换」这两类关注点 */
+const POWER_TYPES = /Source_Cap|Request|EPR_Request|EPR_Mode|PPS|BIST|Source_Capabilities_Extended|EPR_Source|EPR_Sink|Sink_Cap/i;
+const ENTER_TYPES = /PS RDY|VDM|Alert|Status|Source_Info|Revision|Enter_USB|Discover|Sink_Cap|Notify/i;
+
+/* ═══════════════════════ 状态 ═══════════════════════ */
+const S = {
+  cap: null,
+  meta: null,
+  fileName: '',
+  fileSize: 0,
+  channel: 0,
+  packets: [],
+  view: [],          // 过滤 + 排序后的结果
+  stats: null,
+  busSeries: null,
+  selected: -1,
+  cancel: false,
+  filters: {
+    roles: new Set(['SRC', 'SNK', 'Plug']),
+    sops: new Set(['SOP', "SOP'", "SOP''", 'Hard Reset', 'Cable Reset']),
+    cats: new Set(['Control', 'Data', 'Extended', 'VDM', 'Error']),
+    types: new Set(),          // 空 = 全部
+    hideGoodCrc: true,
+    onlyBad: false,
+    onlyPower: false,
+    onlyEnter: false,
+    q: '',
+    tFrom: 0,
+    tTo: 1,
+  },
+  sort: { k: 'index', asc: true },
+  rowH: 30,
+  viewMode: 'all',
+  chActivity: new Map(),
+};
+
+const inflate = makeBrowserInflator();
+
+/* ═══════════════════════ 主题 ═══════════════════════ */
+function setTheme(t) {
+  document.documentElement.dataset.theme = t;
+  try { localStorage.setItem('pdscope.theme', t); } catch {}
+}
+(function initTheme() {
+  let t = null;
+  try { t = localStorage.getItem('pdscope.theme'); } catch {}
+  if (!t) t = window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  setTheme(t);
+})();
+$('#btnTheme').addEventListener('click', () => {
+  setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+  drawTimeline();
+});
+
+/* ═══════════════════════ Toast / 进度 ═══════════════════════ */
+function toast(msg, kind = '') {
+  const t = el('div', 'toast ' + kind, msg);
+  $('#toastWrap').appendChild(t);
+  setTimeout(() => { t.style.opacity = '0'; t.style.transition = 'opacity .3s'; }, 2600);
+  setTimeout(() => t.remove(), 3000);
+}
+function showProgress(title, sub) {
+  $('#progTitle').textContent = title;
+  $('#progSub').textContent = sub || '';
+  $('#progBar').style.width = '0%';
+  $('#progress').classList.add('show');
+}
+const setProgress = (r, sub) => {
+  $('#progBar').style.width = (clamp(r, 0, 1) * 100).toFixed(1) + '%';
+  if (sub != null) $('#progSub').textContent = sub;
+};
+const hideProgress = () => $('#progress').classList.remove('show');
+$('#progCancel').addEventListener('click', () => { S.cancel = true; });
+
+/* ═══════════════════════ 打开文件 ═══════════════════════ */
+$('#btnOpen').addEventListener('click', () => $('#fileInput').click());
+$('#btnOpen2')?.addEventListener('click', () => $('#fileInput').click());
+$('#fileInput').addEventListener('change', (e) => {
+  const f = e.target.files?.[0];
+  if (f) loadFile(f);
+  e.target.value = '';
+});
+
+// 拖拽
+let dragDepth = 0;
+addEventListener('dragenter', (e) => { e.preventDefault(); if (++dragDepth === 1) $('#drop').classList.add('show'); });
+addEventListener('dragover', (e) => e.preventDefault());
+addEventListener('dragleave', (e) => { e.preventDefault(); if (--dragDepth <= 0) { dragDepth = 0; $('#drop').classList.remove('show'); } });
+addEventListener('drop', (e) => {
+  e.preventDefault(); dragDepth = 0; $('#drop').classList.remove('show');
+  const f = e.dataTransfer?.files?.[0];
+  if (f) loadFile(f);
+});
+
+/** 打开一份抓包：读字节 -> 解析容器 -> 选通道 -> 解码 */
+async function loadFile(file) {
+  S.cancel = false;
+  showProgress('正在读取文件…', file.name);
+  try {
+    const t0 = performance.now();
+    const buf = new Uint8Array(await file.arrayBuffer());
+    setProgress(0.05, `${fmtSize(buf.length)} 已载入，解析容器…`);
+
+    const cap = await AtkccCapture.open(buf, { inflate });
+    S.cap = cap; S.meta = cap.meta;
+    S.fileName = file.name; S.fileSize = buf.length;
+
+    const chs = cap.meta.channels;
+    // 多通道时扫描活动度，自动挑一个「有报文」的通道
+    let pick = chs[0].channel;
+    if (chs.length > 1) {
+      showProgress('正在扫描各通道活动度…', `${chs.length} 个通道`);
+      S.chActivity = new Map();
+      for (let i = 0; i < chs.length; i++) {
+        const r = await scanChannelActivity(cap, chs[i].channel, inflate, 3);
+        S.chActivity.set(chs[i].channel, r.activity);
+        setProgress(0.05 + 0.25 * (i + 1) / chs.length, `通道 ${chs[i].channel}：${r.activity} 个活动字节`);
+      }
+      let best = chs[0], bestA = -1;
+      for (const c of chs) { const a = S.chActivity.get(c.channel) ?? 0; if (a > bestA) { bestA = a; best = c; } }
+      pick = best.channel;
+    }
+
+    renderMeta();
+    renderChannels();
+    await decodeAndShow(pick);
+    const dt = Math.round(performance.now() - t0);
+    toast(`解析完成 · ${S.packets.length} 条报文 · ${dt} ms`, 'ok');
+  } catch (err) {
+    console.error(err);
+    toast('解析失败：' + (err?.message || err), 'err');
+    hideProgress();
+  }
+}
+
+/** 解码指定通道并刷新整个界面 */
+async function decodeAndShow(channel) {
+  if (!S.cap) return;
+  S.cancel = false;
+  S.channel = channel;
+  showProgress(`正在解码通道 ${channel}…`, 'BMC 位流 → 4B5B → PD 报文');
+
+  const t0 = performance.now();
+  const { packets, stats } = await decodeChannel(S.cap, channel, {
+    inflate,
+    bitOrder: 'lsb',
+    shouldStop: () => S.cancel,
+    onProgress: (p) => setProgress(0.3 + 0.65 * p.ratio, `分块 ${p.chunk}/${p.chunks} · 已解出 ${p.packets} 条`),
+  });
+
+  // 附上 VBUS / IBUS
+  const bus = S.cap.meta.bus;
+  for (const p of packets) {
+    let v = 0, i = 0;
+    if (bus && bus.length) {
+      let lo = 0, hi = bus.length - 1, ans = 0;
+      while (lo <= hi) { const m = (lo + hi) >> 1; if (bus[m].sample <= p.startSample) { ans = m; lo = m + 1; } else hi = m - 1; }
+      v = bus[ans].vbus; i = bus[ans].ibus;
+    }
+    p.vbus = v; p.ibus = i;
+    p.kind = kindOf(p);
+  }
+  S.packets = packets;
+  S.stats = stats;
+  S.decodedMs = Math.round(performance.now() - t0);
+
+  // 时间轴数据
+  const total = stats.totalSamples || S.cap.meta.totalSamples || 1;
+  S.busSeries = buildBusSeries(bus, total, S.cap.meta.sampleRate, 2400);
+  S.totalSamples = total;
+
+  buildTypeList();
+  resetTimeRange();
+  applyFilters(true);
+  renderMeta();
+  renderChannels();
+  setProgress(1, '完成');
+  hideProgress();
+  drawTimeline();
+}
+
+/* ═══════════════════════ 顶栏元信息 / 通道 ═══════════════════════ */
+function renderMeta() {
+  const chip = $('#fileChip');
+  $('#fileName').textContent = S.fileName || '未打开抓包文件';
+  chip.title = `${S.fileName}  ·  ${fmtSize(S.fileSize)}`;
+  chip.classList.toggle('has', !!S.fileName);
+
+  const box = $('#metaChips');
+  box.innerHTML = '';
+  if (!S.meta) { $('#btnExport').disabled = true; return; }
+  const m = S.meta;
+  const add = (k, v) => box.appendChild(Object.assign(el('span', 'mchip'), { innerHTML: `${k} <b>${v}</b>` }));
+  add('采样率', (m.sampleRate / 1e6).toFixed(2) + ' MHz');
+
+  const dur = (S.totalSamples || m.totalSamples) / m.sampleRate;
+  add('时长', dur >= 60 ? (dur / 60).toFixed(2) + ' min' : dur.toFixed(2) + ' s');
+  if (S.packets.length) {
+    add('报文', S.packets.length);
+    if (S.stats?.badCrc) add('CRC 错误', `<span style="color:var(--bad)">${S.stats.badCrc}</span>`);
+  }
+  if (m.channels.length > 1) add('通道', m.channels.length);
+}
+
+function renderChannels() {
+  const box = $('#chList');
+  box.innerHTML = '';
+  if (!S.meta) { $('#chHint').textContent = ''; return; }
+  const chs = S.meta.channels;
+  $('#chHint').textContent = chs.length > 1 ? `${chs.length} 个通道（已按活动度排序）` : '';
+
+  const list = [...chs].sort((a, b) => (S.chActivity.get(b.channel) ?? 0) - (S.chActivity.get(a.channel) ?? 0));
+  for (const c of list) {
+    const b = el('button', 'chitem' + (c.channel === S.channel ? ' is-on' : ''));
+    b.innerHTML = `<b>CH${c.channel}</b><span>${c.chunks.length} 块</span>`
+      + (S.chActivity.has(c.channel) ? `<span class="act">${S.chActivity.get(c.channel)}</span>` : '');
+    b.title = `${c.totalSamples} 采样点 ≈ ${(c.totalSamples / S.meta.sampleRate).toFixed(2)} s`;
+    b.addEventListener('click', () => { if (c.channel !== S.channel) decodeAndShow(c.channel); });
+    box.appendChild(b);
+  }
+}
+
+/* ═══════════════════════ 筛选 ═══════════════════════ */
+function buildTypeList() {
+  const counts = new Map();
+  for (const p of S.packets) counts.set(p.msgType, (counts.get(p.msgType) || 0) + 1);
+  const arr = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+
+  const body = $('#msBody');
+  body.innerHTML = '';
+  for (const [t, n] of arr) {
+    const lab = el('label', 'ms-item');
+    const cb = el('input'); cb.type = 'checkbox'; cb.value = t;
+    cb.addEventListener('change', () => {
+      if (cb.checked) S.filters.types.add(t); else S.filters.types.delete(t);
+      updateMsHead(arr.length);
+      applyFilters();
+    });
+    const dot = el('span', 'dot');
+    dot.style.background = catColor(kindOf({ msgType: t, msgKind: guessKind(t) }));
+    lab.append(cb, dot, el('span', '', t), el('span', 'cnt', String(n)));
+    body.appendChild(lab);
+  }
+  updateMsHead(arr.length);
+}
+function guessKind(t) {
+  if (t === 'VDM') return 'data';
+  if (/GOOD CRC|ACCEPT|REJECT|PING|PS RDY|GOTO MIN|Swap|Wait|Soft_Reset|Data_Reset|Not_Supported|FR_Swap|Get_/.test(t)) return 'control';
+  if (/Extended|_Info$|Status|Battery|Country|Manufacturer|Security|Firmware|Revision/.test(t)) return 'ext';
+  return 'data';
+}
+function catColor(k) {
+  const v = getComputedStyle(document.documentElement).getPropertyValue('--' + ({ Control: 'ctrl', Data: 'data', Extended: 'ext', VDM: 'vdm', Error: 'err' }[k] || 'ctrl'));
+  return v.trim() || '#888';
+}
+function updateMsHead(total) {
+  const n = S.filters.types.size;
+  $('#msHead').innerHTML = (n === 0 ? '全部类型' : `已选 ${n} 种`) + ` <span class="caret"></span>`;
+}
+$('#msHead').addEventListener('click', () => $('#msBody').classList.toggle('open'));
+addEventListener('click', (e) => {
+  if (!e.target.closest('#fType')) $('#msBody').classList.remove('open');
+});
+
+// 角色 / SOP / 类别 chips
+function wireChips(sel, set) {
+  $$(sel + ' .chip').forEach((c) => c.addEventListener('click', () => {
+    const v = c.dataset.v;
+    if (set.has(v)) { set.delete(v); c.classList.remove('is-on'); }
+    else { set.add(v); c.classList.add('is-on'); }
+    applyFilters();
+  }));
+}
+wireChips('#fRole', S.filters.roles);
+wireChips('#fSop', S.filters.sops);
+wireChips('#fCat', S.filters.cats);
+
+// 开关
+const sw = (id, key) => $(id).addEventListener('change', (e) => { S.filters[key] = e.target.checked; applyFilters(); });
+sw('#fHideGoodCrc', 'hideGoodCrc');
+sw('#fOnlyBad', 'onlyBad');
+sw('#fOnlyPower', 'onlyPower');
+sw('#fOnlyEnter', 'onlyEnter');
+
+// 搜索
+let qTimer;
+$('#fSearch').addEventListener('input', (e) => {
+  clearTimeout(qTimer);
+  qTimer = setTimeout(() => { S.filters.q = e.target.value.trim(); applyFilters(); }, 160);
+});
+$$('[data-kw]').forEach((b) => b.addEventListener('click', () => {
+  $('#fSearch').value = b.dataset.kw; S.filters.q = b.dataset.kw; applyFilters();
+}));
+
+// 视图分段
+$$('#viewSeg .seg-item').forEach((b) => b.addEventListener('click', () => {
+  $$('#viewSeg .seg-item').forEach((x) => x.classList.remove('is-on'));
+  b.classList.add('is-on');
+  S.viewMode = b.dataset.v;
+  applyFilters();
+}));
+
+// 排序
+$$('.th').forEach((th) => th.addEventListener('click', () => {
+  const k = th.dataset.k;
+  if (!k) return;
+  if (S.sort.k === k) S.sort.asc = !S.sort.asc; else { S.sort.k = k; S.sort.asc = true; }
+  $$('.th').forEach((x) => x.classList.remove('sorted', 'asc'));
+  th.classList.add('sorted'); if (S.sort.asc) th.classList.add('asc');
+  applyFilters();
+}));
+
+// 时间范围
+function resetTimeRange() { S.filters.tFrom = 0; S.filters.tTo = 1; $('#tFrom').value = 0; $('#tTo').value = 1000; }
+$('#tFrom').addEventListener('input', (e) => {
+  const v = +e.target.value; if (v > +$('#tTo').value) $('#tTo').value = v;
+  S.filters.tFrom = +$('#tFrom').value / 1000; S.filters.tTo = +$('#tTo').value / 1000; applyFilters();
+});
+$('#tTo').addEventListener('input', (e) => {
+  const v = +e.target.value; if (v < +$('#tFrom').value) $('#tFrom').value = v;
+  S.filters.tFrom = +$('#tFrom').value / 1000; S.filters.tTo = +$('#tTo').value / 1000; applyFilters();
+});
+$('#btnClearTime').addEventListener('click', () => { resetTimeRange(); applyFilters(); });
+$('#btnCurView').addEventListener('click', applyTimeRangeFromView);
+
+$('#btnReset').addEventListener('click', () => {
+  const f = S.filters;
+  f.roles = new Set(['SRC', 'SNK', 'Plug']);
+  f.sops = new Set(['SOP', "SOP'", "SOP''", 'Hard Reset', 'Cable Reset']);
+  f.cats = new Set(['Control', 'Data', 'Extended', 'VDM', 'Error']);
+  f.types = new Set();
+  f.hideGoodCrc = true; f.onlyBad = false; f.onlyPower = false; f.onlyEnter = false; f.q = '';
+  resetTimeRange();
+  $('#fHideGoodCrc').checked = true; $('#fOnlyBad').checked = false;
+  $('#fOnlyPower').checked = false; $('#fOnlyEnter').checked = false; $('#fSearch').value = '';
+  $('#msBody').querySelectorAll('input').forEach((c) => (c.checked = false));
+  updateMsHead();
+  $$('#fRole .chip, #fSop .chip, #fCat .chip').forEach((c) => c.classList.add('is-on'));
+  S.viewMode = 'all';
+  $$('#viewSeg .seg-item').forEach((x, i) => x.classList.toggle('is-on', i === 0));
+  applyFilters();
+});
+
+/* ── 过滤核心 ── */
+function applyFilters(keepScroll) {
+  const f = S.filters;
+  const tb = S.totalSamples || 1;
+  const q = f.q.toLowerCase();
+  const out = [];
+  for (const p of S.packets) {
+    if (!f.roles.has(p.role)) continue;
+    if (!f.sops.has(p.sop)) continue;
+    if (!f.cats.has(p.kind)) continue;
+    if (f.types.size && !f.types.has(p.msgType)) continue;
+    if (f.hideGoodCrc && p.msgType === 'GOOD CRC') continue;
+    if (f.onlyBad && p.crcOk !== false) continue;
+    if (f.onlyPower && !POWER_TYPES.test(p.msgType)) continue;
+    if (f.onlyEnter && !ENTER_TYPES.test(p.msgType)) continue;
+    const t = p.startSample / tb;
+    if (t < f.tFrom - 1e-9 || t > f.tTo + 1e-9) continue;
+    if (q) {
+      const hay = (p.msgType + ' ' + (p.summary || '') + ' ' + (p.dataHex || '') + ' ' + p.sop + ' ' + p.role).toLowerCase();
+      if (!hay.includes(q)) continue;
+    }
+    if (S.viewMode === 'neg' && !(POWER_TYPES.test(p.msgType) || ENTER_TYPES.test(p.msgType))) continue;
+    if (S.viewMode === 'err' && p.crcOk !== false) continue;
+    out.push(p);
+  }
+
+  // 排序
+  const k = S.sort.k, dir = S.sort.asc ? 1 : -1;
+  out.sort((a, b) => {
+    let x = a[k], y = b[k];
+    if (x == null) x = -1; if (y == null) y = -1;
+    if (typeof x === 'string') return dir * x.localeCompare(y);
+    return dir * (x - y);
+  });
+
+  S.view = out;
+  updateCounters();
+  if (!keepScroll) $('#tbody').scrollTop = 0;
+  renderTable();
+  renderTimeHint();
+}
+
+function updateCounters() {
+  const c = { SRC: 0, SNK: 0, Plug: 0 };
+  for (const p of S.packets) if (c[p.role] != null) c[p.role]++;
+  $('#cSrc').textContent = c.SRC; $('#cSnk').textContent = c.SNK; $('#cPlug').textContent = c.Plug;
+
+  const total = S.packets.length, shown = S.view.length;
+  const bad = S.packets.filter((p) => p.crcOk === false).length;
+  $('#statLine').innerHTML = S.packets.length
+    ? `显示 <b>${shown}</b> / ${total} 条报文`
+      + (shown !== total ? ` <span style="color:var(--tx-3)">（已屏蔽 ${total - shown} 条）</span>` : '')
+      + (bad ? ` · <span class="bad">CRC 错误 ${bad}</span>` : ' · <span style="color:var(--ok)">CRC 全通过</span>')
+      + (S.decodedMs ? ` · <span style="color:var(--tx-3)">解码 ${S.decodedMs} ms</span>` : '')
+    : '等待打开抓包文件…';
+  $('#btnExport').disabled = !S.packets.length;
+}
+function renderTimeHint() {
+  const tb = S.totalSamples || 1;
+  const f = S.filters;
+  $('#tRangeHint').textContent = (f.tFrom > 0 || f.tTo < 1)
+    ? `${(f.tFrom * tb / (S.meta?.sampleRate || 1)).toFixed(2)}–${(f.tTo * tb / (S.meta?.sampleRate || 1)).toFixed(2)} s`
+    : '';
+}
+function applyTimeRangeFromView() {
+  if (!S.view.length) return;
+  const tb = S.totalSamples || 1;
+  const a = Math.min(...S.view.map((p) => p.startSample)) / tb;
+  const b = Math.max(...S.view.map((p) => p.endSample)) / tb;
+  S.filters.tFrom = a; S.filters.tTo = b;
+  $('#tFrom').value = Math.round(a * 1000); $('#tTo').value = Math.round(b * 1000);
+  applyFilters();
+}
+
+/* ═══════════════════════ 报文表（虚拟滚动） ═══════════════════════ */
+const OVERSCAN = 8;
+function renderTable() {
+  const tbody = $('#tbody');
+  const vph = $('#vph'), vrows = $('#vrows');
+  const n = S.view.length;
+
+  $('#emptyState').style.display = n ? 'none' : (S.packets.length ? 'none' : 'flex');
+  if (!n) {
+    if (S.packets.length) {
+      $('#emptyState').style.display = 'flex';
+      $('#emptyState').querySelector('h3').textContent = '当前筛选条件下没有报文';
+      $('#emptyState').querySelector('p').textContent = '试试放宽左侧的方向 / 类型 / 时间筛选，或点「重置全部筛选」。';
+    }
+    vph.style.height = '0px'; vrows.innerHTML = ''; vrows.style.transform = 'translateY(0)';
+    return;
+  }
+  const RH = S.rowH;
+  vph.style.height = n * RH + 'px';
+
+  const top = tbody.scrollTop;
+  const h = tbody.clientHeight;
+  let start = clamp(Math.floor(top / RH) - OVERSCAN, 0, Math.max(0, n - 1));
+  let end = clamp(Math.ceil((top + h) / RH) + OVERSCAN, 0, n);
+
+  vrows.style.transform = `translateY(${start * RH}px)`;
+  const frag = document.createDocumentFragment();
+  for (let i = start; i < end; i++) frag.appendChild(rowEl(S.view[i], i));
+  vrows.replaceChildren(frag);
+}
+let rafPending = false;
+$('#tbody').addEventListener('scroll', () => {
+  if (rafPending) return;
+  rafPending = true;
+  requestAnimationFrame(() => { rafPending = false; renderTable(); });
+});
+
+function rowEl(p, i) {
+  const r = el('div', 'tr' + (i === S.selected ? ' sel' : '') + (p.crcOk === false ? ' bad' : ''));
+  r.dataset.i = i;
+  const cls = CAT_CLASS[p.kind] || '';
+  const hex = p.dataHex || '';
+  const note = highlight(p.summary || '');
+  r.innerHTML =
+    `<div class="td num">${p.index}</div>`
+  + `<div class="td"><span class="pill sop">${esc(p.sop)}</span></div>`
+  + `<div class="td type ${cls}">${esc(p.msgType)}</div>`
+  + `<div class="td num">${p.msgId ?? ''}</div>`
+  + `<div class="td"><span class="pill ${p.role}">${esc(p.role)}</span></div>`
+  + `<div class="td num">${p.nObjects ?? ''}</div>`
+  + `<div class="td time">${fmtTime(p.timeMs)}</div>`
+  + `<div class="td bus">${p.vbus.toFixed(3)} V <em>/</em> ${p.ibus.toFixed(3)} A</div>`
+  + `<div class="td mono">${highlightHex(hex)}</div>`
+  + `<div class="td note">${note || (p.crcOk === false ? '<span style="color:var(--err)">CRC 校验失败</span>' : '')}</div>`;
+  r.addEventListener('click', () => select(i, true));
+  r.addEventListener('dblclick', () => { document.body.classList.remove('detail-collapsed'); select(i, true); });
+  return r;
+}
+function highlight(s) {
+  if (!S.filters.q || !s) return esc(s);
+  const q = S.filters.q;
+  const idx = s.toLowerCase().indexOf(q.toLowerCase());
+  if (idx < 0) return esc(s);
+  return esc(s.slice(0, idx)) + '<span class="mark">' + esc(s.slice(idx, idx + q.length)) + '</span>' + esc(s.slice(idx + q.length));
+}
+function highlightHex(h) {
+  if (!h) return '';
+  if (!S.filters.q) return esc(h);
+  const q = S.filters.q.replace(/\s+/g, '').toLowerCase();
+  const flat = h.replace(/\s+/g, '').toLowerCase();
+  if (!q || !flat.includes(q)) return esc(h);
+  return '<b>' + esc(h) + '</b>';
+}
+
+/* ═══════════════════════ 选中 & 详情 ═══════════════════════ */
+function select(i, scrollIntoView) {
+  S.selected = i;
+  const p = S.view[i];
+  if (!p) return;
+  document.body.classList.remove('detail-collapsed');
+  $$('#vrows .tr').forEach((r) => r.classList.toggle('sel', +r.dataset.i === i));
+  if (scrollIntoView) {
+    const tbody = $('#tbody'), RH = S.rowH, top = tbody.scrollTop, h = tbody.clientHeight;
+    const y = i * RH;
+    if (y < top + RH) tbody.scrollTop = Math.max(0, y - RH * 2);
+    else if (y + RH > top + h) tbody.scrollTop = y + RH * 3 - h;
+  }
+  renderDetail(p);
+  if ($('#tlFollow').checked) drawTimeline(p);
+}
+function navDetail(d) {
+  if (!S.view.length) return;
+  let i = S.selected + d;
+  if (i < 0) i = 0; if (i >= S.view.length) i = S.view.length - 1;
+  select(i, true);
+}
+$('#btnDetailNavPrev').addEventListener('click', () => navDetail(-1));
+$('#btnDetailNavNext').addEventListener('click', () => navDetail(1));
+$('#btnDetailClose').addEventListener('click', () => document.body.classList.add('detail-collapsed'));
+
+function renderDetail(p) {
+  const box = $('#detailBody');
+  const cls = CAT_CLASS[p.kind] || '';
+  const h = [];
+
+  h.push(`<div class="dhero ${p.crcOk === false ? 'dhero-bad' : ''}">
+    <div class="t1 ${cls}">${esc(p.msgType)}</div>
+    <div class="t2">#${p.index} · ${esc(p.sop)} · ${esc(p.role)} · ID ${p.msgId ?? '-'} · r${p.rev} · ${fmtTime(p.timeMs)}</div>
+  </div>`);
+
+  if (p.warnings?.length) {
+    for (const w of p.warnings) h.push(`<div class="dwarn err"><b>!</b><span>${esc(w.long || w.short || w)}</span></div>`);
+  }
+
+  // 概览
+  h.push(`<div class="dsec"><h5>链路概览</h5><div class="dgrid">
+    ${cell('VBUS', p.vbus.toFixed(3) + ' V')}
+    ${cell('IBUS', p.ibus.toFixed(3) + ' A')}
+    ${cell('起始时间', fmtTime(p.timeMs))}
+    ${cell('报文时长', p.durationUs.toFixed(1) + ' µs')}
+    ${cell('数据对象', String(p.nObjects ?? 0))}
+    ${cell('实测码率', (p.bitrate / 1000).toFixed(1) + ' kbps')}
+  </div></div>`);
+
+  // 报文头位域
+  h.push(`<div class="dsec"><h5>报文头 (16 bit)</h5><div class="dbits">
+    ${bit('B15', 'Extended', bid(p.header, 15, 15), p.msgKind === 'ext' ? '扩展消息' : '标准消息')}
+    ${bit('B14-12', 'Object 数', bid(p.header, 12, 14), String(p.nObjects ?? 0))}
+    ${bit('B11-9', 'Message ID', bid(p.header, 9, 11), String(p.msgId ?? 0))}
+    ${bit('B8', 'Power Role', bid(p.header, 8, 8), p.powerRole ? '1 · Source' : '0 · Sink')}
+    ${bit('B7-6', 'Spec Revision', bid(p.header, 6, 7), `${bid(p.header, 6, 7)} · PD ${p.rev === 3 ? '3.x' : '2.0'}`)}
+    ${bit('B5', 'Data Role', bid(p.header, 5, 5), p.dataRole ? '1 · DFP' : '0 · UFP')}
+    ${bit('B4-0', 'Message Type', bid(p.header, 0, 4), `${p.msgTypeRaw ?? 0} · ${p.msgType}`)}
+  </div></div>`);
+
+  if (p.extHeader != null) {
+    h.push(`<div class="dsec"><h5>扩展报文头 (16 bit)</h5><div class="dbits">
+      ${bit('B15', 'Chunked', bid(p.extHeader, 15, 15), (p.extHeader >> 15) & 1 ? '分块' : '不分块')}
+      ${bit('B14-11', 'Chunk Number', bid(p.extHeader, 11, 14), String((p.extHeader >> 11) & 0xf))}
+      ${bit('B10', 'Request Chunk', bid(p.extHeader, 10, 10), String((p.extHeader >> 10) & 1))}
+      ${bit('B9-0', 'Data Size', bid(p.extHeader, 0, 9), String(p.extHeader & 0x3ff) + ' B')}
+    </div></div>`);
+  }
+
+  // 原始数据
+  if (p.dataHex) {
+    h.push(`<div class="dsec"><h5>数据对象 (hex)</h5><div class="dobj"><div class="dobj-b hx">${esc(p.dataHex)}</div></div></div>`);
+  }
+
+  // 逐字段解析（按 Object 分组）
+  const groups = groupDetails(p.details || []);
+  for (const g of groups) {
+    if (!g.title) {
+      h.push(`<div class="dsec"><h5>字段解析</h5><div class="dbits">${g.items.map(([k, v]) => `<div class="dbit"><div class="bk">${esc(k)}</div><div class="bv">${esc(v)}</div></div>`).join('')}</div></div>`);
+    } else {
+      h.push(`<div class="dsec"><h5>${esc(g.title)}</h5><div class="dbits">${g.items.map(([k, v]) => `<div class="dbit"><div class="bk">${esc(k)}</div><div class="bv">${esc(v)}</div></div>`).join('')}</div></div>`);
+    }
+  }
+
+  h.push(`<div class="dsec"><h5>解析文本</h5><div class="dobj"><div class="dobj-b hx">${esc(p.text || '')}</div></div></div>`);
+
+  box.innerHTML = h.join('');
+  box.scrollTop = 0;
+}
+const cell = (k, v) => `<div class="dcell"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`;
+function bid(v, lo, hi) { const n = hi - lo + 1; return '0b' + (((v ?? 0) >> lo) & ((1 << n) - 1)).toString(2).padStart(n, '0'); }
+function bit(name, label, raw, dec) {
+  return `<div class="dbit"><div class="bk">${esc(name)} · ${esc(label)}</div><div class="bv"><u>${esc(raw)}</u> → ${esc(dec)}</div></div>`;
+}
+/** 把扁平 details 按 "Object: PDO #n" 切成组 */
+function groupDetails(details) {
+  const groups = [];
+  let cur = null;
+  for (const d of details) {
+    if (d.key === 'Object') { cur = { title: String(d.value), items: [] }; groups.push(cur); continue; }
+    if (!cur) { cur = { title: null, items: [] }; if (!groups.includes(cur)) groups.push(cur); }
+    if (cur.title === null) {
+      cur.items.push([d.key, d.value]);
+    } else {
+      cur.items.push([d.key, d.value]);
+    }
+  }
+  return groups.filter((g) => g.items.length || g.title);
+}
+
+/* ═══════════════════════ 时间轴 ═══════════════════════ */
+const cv = $('#busCanvas');
+let TL = { x0: 0, y0: 0, w: 0, h: 0, dpr: 1, drag: null };
+function drawTimeline(selPkt) {
+  const s = S.busSeries;
+  const box = cv.parentElement;
+  const w = box.clientWidth || 600;
+  const hgt = Math.max(60, box.clientHeight - 28);
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = Math.round(w * dpr); cv.height = Math.round(hgt * dpr);
+  cv.style.height = hgt + 'px';
+  const g = cv.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, hgt);
+
+  const cs = getComputedStyle(document.documentElement);
+  const cLine = cs.getPropertyValue('--line').trim();
+  const cTx3 = cs.getPropertyValue('--tx-3').trim();
+  const cAccent = cs.getPropertyValue('--accent').trim();
+  const cData = cs.getPropertyValue('--data').trim();
+  const cSnk = cs.getPropertyValue('--snk').trim();
+  const cSrc = cs.getPropertyValue('--src').trim();
+  const cPlug = cs.getPropertyValue('--plug').trim();
+
+  const padL = 42, padR = 42, padT = 8, padB = 16;
+  const x0 = padL, y0 = padT, W = Math.max(10, w - padL - padR), H = Math.max(10, hgt - padT - padB);
+  TL = { x0, y0, w: W, h: H, dpr };
+
+  // 网格
+  g.strokeStyle = cLine; g.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = y0 + (H * i) / 4;
+    g.beginPath(); g.moveTo(x0, y + .5); g.lineTo(x0 + W, y + .5); g.stroke();
+  }
+
+  if (!s || !s.n) {
+    g.fillStyle = cTx3; g.font = '11px sans-serif';
+    g.fillText(S.cap ? '该抓包没有 bus.ini 模拟量数据' : '打开抓包后显示 VBUS / IBUS', x0 + 8, y0 + H / 2);
+    return;
+  }
+
+  const N = s.n;
+  const xs = (i) => x0 + (i / (N - 1)) * W;
+  const vmax = Math.max(5, s.vmax * 1.12);
+  const imax = Math.max(0.5, s.imax * 1.12);
+  const yV = (v) => y0 + H - (v / vmax) * H;
+  const yI = (v) => y0 + H - (v / imax) * H;
+
+  // 填充 VBUS
+  g.beginPath();
+  g.moveTo(x0, y0 + H);
+  for (let i = 0; i < N; i++) g.lineTo(xs(i), yV(s.vbus[i]));
+  g.lineTo(x0 + W, y0 + H); g.closePath();
+  g.fillStyle = hexA(cAccent, .16); g.fill();
+
+  // VBUS 线
+  g.beginPath();
+  for (let i = 0; i < N; i++) i ? g.lineTo(xs(i), yV(s.vbus[i])) : g.moveTo(xs(i), yV(s.vbus[i]));
+  g.strokeStyle = cAccent; g.lineWidth = 1.7; g.stroke();
+
+  // IBUS 线
+  g.beginPath();
+  for (let i = 0; i < N; i++) i ? g.lineTo(xs(i), yI(s.ibus[i])) : g.moveTo(xs(i), yI(s.ibus[i]));
+  g.strokeStyle = cData; g.lineWidth = 1.3; g.setLineDash([3, 2]); g.stroke(); g.setLineDash([]);
+
+  // 坐标轴刻度
+  g.fillStyle = cTx3; g.font = '10px ui-monospace, monospace';
+  for (let i = 0; i <= 4; i++) {
+    const y = y0 + (H * i) / 4;
+    g.textAlign = 'right'; g.fillText((vmax * (1 - i / 4)).toFixed(1) + 'V', x0 - 5, y + 3);
+    g.textAlign = 'left'; g.fillText((imax * (1 - i / 4)).toFixed(2) + 'A', x0 + W + 5, y + 3);
+  }
+
+  // 报文刻度
+  const tb = S.totalSamples || 1;
+  const f = S.filters;
+  for (const p of S.packets) {
+    const t = p.startSample / tb;
+    if (t < f.tFrom || t > f.tTo) continue;
+    const x = x0 + t * W;
+    const col = p.role === 'SRC' ? cSrc : p.role === 'SNK' ? cSnk : cPlug;
+    g.strokeStyle = hexA(col, p.crcOk === false ? .95 : .5);
+    g.lineWidth = p.crcOk === false ? 1.6 : 1;
+    const hh = p.crcOk === false ? H : H * .45;
+    g.beginPath(); g.moveTo(x, y0 + H - hh); g.lineTo(x, y0 + H); g.stroke();
+  }
+
+  // 时间范围遮罩
+  if (f.tFrom > 0) { g.fillStyle = hexA('#000', .18); g.fillRect(x0, y0, f.tFrom * W, H); }
+  if (f.tTo < 1) { g.fillStyle = hexA('#000', .18); g.fillRect(x0 + f.tTo * W, y0, (1 - f.tTo) * W, H); }
+
+  // 选中标记
+  const sel = selPkt || S.view[S.selected];
+  if (sel) {
+    const x = x0 + (sel.startSample / tb) * W;
+    g.strokeStyle = cAccent; g.lineWidth = 1.4;
+    g.beginPath(); g.moveTo(x, y0); g.lineTo(x, y0 + H); g.stroke();
+    g.beginPath(); g.arc(x, y0 + 4, 2.6, 0, 7); g.fillStyle = cAccent; g.fill();
+  }
+
+  TL.timeToX = (t) => x0 + t * W;
+  TL.xToTime = (x) => clamp((x - x0) / W, 0, 1);
+}
+function hexA(hex, a) {
+  hex = (hex || '#888').replace('#', '');
+  if (hex.length === 3) hex = hex.split('').map((c) => c + c).join('');
+  const n = parseInt(hex, 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
+// 时间轴交互：拖拽缩放 / 点击选中
+cv.addEventListener('mousedown', (e) => {
+  if (!S.busSeries) return;
+  const r = cv.getBoundingClientRect();
+  TL.drag = { x: e.clientX - r.left, moved: false, a: TL.xToTime(e.clientX - r.left) };
+});
+addEventListener('mousemove', (e) => {
+  if (!TL.drag) return;
+  const r = cv.getBoundingClientRect();
+  const x = clamp(e.clientX - r.left, TL.x0, TL.x0 + TL.w);
+  if (Math.abs(x - TL.drag.x) > 3) TL.drag.moved = true;
+  if (TL.drag.moved) {
+    drawTimeline();
+    const g = cv.getContext('2d');
+    g.fillStyle = hexA(getComputedStyle(document.documentElement).getPropertyValue('--accent').trim(), .22);
+    const a = Math.min(TL.drag.x, x), b = Math.max(TL.drag.x, x);
+    g.fillRect(a, TL.y0, b - a, TL.h);
+  }
+});
+addEventListener('mouseup', (e) => {
+  if (!TL.drag) return;
+  const r = cv.getBoundingClientRect();
+  const x = clamp(e.clientX - r.left, TL.x0, TL.x0 + TL.w);
+  const d = TL.drag; TL.drag = null;
+  if (d.moved) {
+    const a = Math.min(d.a, TL.xToTime(x)), b = Math.max(d.a, TL.xToTime(x));
+    S.filters.tFrom = a; S.filters.tTo = b;
+    $('#tFrom').value = Math.round(a * 1000); $('#tTo').value = Math.round(b * 1000);
+    applyFilters(true); drawTimeline();
+  } else {
+    // 就近选中
+    if (!S.view.length) return;
+    const t = TL.xToTime(x);
+    let best = 0, bd = Infinity;
+    for (let i = 0; i < S.view.length; i++) { const dd = Math.abs(S.view[i].startSample / (S.totalSamples || 1) - t); if (dd < bd) { bd = dd; best = i; } }
+    select(best, true);
+  }
+});
+cv.addEventListener('mousemove', (e) => {
+  const r = cv.getBoundingClientRect();
+  const x = e.clientX - r.left, y = e.clientY - r.top;
+  const tip = $('#tlTip');
+  if (!S.busSeries || x < TL.x0 || x > TL.x0 + TL.w) { tip.style.display = 'none'; return; }
+  const t = TL.xToTime(x);
+  const i = clamp(Math.round(t * (S.busSeries.n - 1)), 0, S.busSeries.n - 1);
+  const sec = (t * (S.totalSamples || 1)) / (S.meta?.sampleRate || 1);
+  tip.textContent = `${sec.toFixed(3)}s  ${S.busSeries.vbus[i].toFixed(3)}V  ${S.busSeries.ibus[i].toFixed(3)}A`;
+  tip.style.display = 'block';
+  tip.style.left = x + 'px';
+  tip.style.top = (y - 6) + 'px';
+});
+cv.addEventListener('mouseleave', () => ($('#tlTip').style.display = 'none'));
+$('#btnTlFit').addEventListener('click', () => { resetTimeRange(); applyFilters(true); drawTimeline(); });
+addEventListener('resize', () => drawTimeline());
+
+/* ═══════════════════════ 视图控制 ═══════════════════════ */
+$('#btnToggleSide').addEventListener('click', () => { document.body.classList.toggle('side-collapsed'); setTimeout(drawTimeline, 200); });
+$('#btnDense').addEventListener('click', (e) => {
+  S.rowH = S.rowH === 30 ? 23 : 30;
+  document.documentElement.style.setProperty('--rh', S.rowH + 'px');
+  e.target.textContent = S.rowH === 30 ? '紧凑' : '舒适';
+  renderTable();
+});
+$('#btnDense').textContent = '紧凑';
+
+/* ═══════════════════════ 导出 ═══════════════════════ */
+$('#btnExport').addEventListener('click', () => {
+  const wrap = el('div', 'overlay show');
+  wrap.innerHTML = `<div class="prog-card"><div class="prog-title">导出报文</div>
+    <div class="row gap center" style="margin-top:6px">
+      <button class="btn primary" data-f="csv">CSV（当前筛选 ${S.view.length} 条）</button>
+      <button class="btn" data-f="json">JSON（全部 ${S.packets.length} 条）</button>
+    </div>
+    <div class="row center mt6"><button class="btn tiny" data-f="cancel">取消</button></div></div>`;
+  wrap.addEventListener('click', (e) => {
+    const f = e.target.dataset.f;
+    if (!f) return;
+    if (f !== 'cancel') exportAs(f);
+    wrap.remove();
+  });
+  document.body.appendChild(wrap);
+});
+function exportAs(fmt) {
+  const base = (S.fileName || 'pdscope').replace(/\.atkcc$/i, '');
+  let blob, name;
+  if (fmt === 'csv') {
+    const head = ['#', 'SOP', 'MsgType', 'ID', 'Direction', 'Objects', 'Elapsed', 'Time(ms)', 'VBUS(V)', 'IBUS(A)', 'Data', 'CRC', 'Note'];
+    const rows = S.view.map((p) => [
+      p.index, p.sop, p.msgType, p.msgId ?? '', p.role, p.nObjects ?? '', fmtTime(p.timeMs), p.timeMs.toFixed(4),
+      p.vbus.toFixed(4), p.ibus.toFixed(4), p.dataHex || '',
+      p.crcOk === null ? '' : p.crcOk ? 'OK' : 'BAD', (p.summary || '').replace(/"/g, '""'),
+    ]);
+    const csv = '\uFEFF' + [head, ...rows].map((r) => r.map((c) => `"${c}"`).join(',')).join('\r\n');
+    blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    name = `${base}-ch${S.channel}.csv`;
+  } else {
+    blob = new Blob([JSON.stringify({
+      file: S.fileName, channel: S.channel, sampleRate: S.meta?.sampleRate,
+      totalSamples: S.totalSamples, stats: S.stats, packets: S.packets,
+    }, null, 2)], { type: 'application/json' });
+    name = `${base}-ch${S.channel}.json`;
+  }
+  const a = el('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  toast(`已导出 ${name}`, 'ok');
+}
+
+/* ═══════════════════════ 示例（仅在本地服务模式下可用） ═══════════════════════ */
+async function initSamples() {
+  const btn = $('#btnDemo');
+  if (!btn) return;
+  try {
+    const r = await fetch('api/samples', { cache: 'no-store' });
+    if (!r.ok) throw 0;
+    const list = await r.json();
+    if (!Array.isArray(list) || !list.length) throw 0;
+    btn.addEventListener('click', async () => {
+      const pick = list[0];
+      showProgress('正在载入示例…', pick.name);
+      const resp = await fetch('api/sample?name=' + encodeURIComponent(pick.name));
+      const buf = new Uint8Array(await resp.arrayBuffer());
+      await loadFile(new File([buf], pick.name));
+    });
+    btn.title = `示例：${list.map((x) => x.name).join(', ')}`;
+  } catch {
+    btn.style.display = 'none';
+  }
+}
+
+/* ═══════════════════════ 快捷键 ═══════════════════════ */
+addEventListener('keydown', (e) => {
+  if (e.target.matches('input,textarea')) return;
+  const mod = e.ctrlKey || e.metaKey;
+  if (mod && e.key.toLowerCase() === 'o') { e.preventDefault(); $('#fileInput').click(); }
+  else if (e.key === 'ArrowDown') { e.preventDefault(); navDetail(1); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); navDetail(-1); }
+  else if (e.key === 'Escape') { document.body.classList.add('detail-collapsed'); setTimeout(drawTimeline, 200); }
+  else if (e.key === '/') { e.preventDefault(); $('#fSearch').focus(); }
+  else if (e.key === 't' || e.key === 'T') {
+    setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+    drawTimeline();
+  }
+  else if (e.key === 'g') { $('#fHideGoodCrc').checked = !$('#fHideGoodCrc').checked; S.filters.hideGoodCrc = $('#fHideGoodCrc').checked; applyFilters(); }
+});
+
+/* 初始化 */
+document.documentElement.style.setProperty('--rh', S.rowH + 'px');
+initSamples();
+requestAnimationFrame(() => drawTimeline());
+
+})();
+</script>
+</body>
+</html>

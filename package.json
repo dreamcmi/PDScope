@@ -1,0 +1,59 @@
+{
+  "name": "pdscope",
+  "productName": "PDScope",
+  "version": "1.0.0",
+  "description": "USB Power Delivery 抓包解析上位机 — 直接解析正点原子 ATK-C (.atkcc) 抓包文件",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "author": "PDScope",
+  "license": "MIT",
+  "scripts": {
+    "serve": "node tools/serve.mjs",
+    "build": "node tools/build-standalone.mjs",
+    "start": "npm run build && electron .",
+    "electron": "electron .",
+    "cli": "node tools/cli.js",
+    "selftest": "node tools/selftest.js",
+    "e2e": "node tools/e2e.mjs",
+    "test": "node tools/selftest.js && node tools/e2e.mjs",
+    "dist:win": "npm run build && electron-builder --win --x64",
+    "dist:mac": "npm run build && electron-builder --mac --universal",
+    "dist:linux": "npm run build && electron-builder --linux AppImage"
+  },
+  "devDependencies": {
+    "electron": "^32.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.pdscope.app",
+    "productName": "PDScope",
+    "files": [
+      "electron/**/*",
+      "src/**/*",
+      "dist/PDScope.html",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.developer-tools"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Development"
+    }
+  }
+}

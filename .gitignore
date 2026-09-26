@@ -1,0 +1,118 @@
+# ══════════════════════════════════════════════════════════════════
+#  ATKDecom / PDScope  .gitignore
+#  规则说明：注释 + 分节，便于日后增删。以 / 结尾表示只匹配目录。
+# ══════════════════════════════════════════════════════════════════
+
+# ── 1. 抓包数据 ───────────────────────────────────────────────────
+# 正点原子 PD 抓包原始文件（二进制，体积大且属取样数据，不入库）
+*.atkcc
+*.atkcc.*
+
+# ── 2. 图片 / 截图 ────────────────────────────────────────────────
+# 官方上位机对照截图、界面自检截图等，一律不入库
+*.png
+*.jpg
+*.jpeg
+*.jfif
+*.gif
+*.bmp
+*.webp
+*.tif
+*.tiff
+*.ico
+*.icns
+*.heic
+*.avif
+*.raw
+*.psd
+*.ai
+
+# 若日后需要提交某个图片资源（如 logo / 打包图标），用 ! 单独放行。
+# 注意：.gitignore 是「后写的规则覆盖先写的」，放行规则必须写在忽略规则之后。
+!PDScope/build/icon.ico
+!PDScope/build/icon.icns
+!PDScope/build/icon.png
+!PDScope/src/ui/assets/**
+# 例如：!PDScope/src/ui/assets/logo.svg
+
+# ── 3. 编辑器 / IDE ───────────────────────────────────────────────
+.vscode/
+.idea/
+.vs/
+.fleet/
+*.code-workspace
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+*~
+
+# ── 4. 智能体 / 本地工作区（含记忆与技能，属本机私有） ─────────────
+.workbuddy/
+.claude/
+.cursor/
+.aider*
+.continue/
+
+# ── 5. 临时 / 中间过程目录 ────────────────────────────────────────
+# _probe 为容器格式与位序的逆向探针脚本；_explore 为解码参数扫描留档
+# （不带中间斜杠 = 任意层级同名目录都命中；如需入库，注释掉下面两行）
+_probe/
+_explore/
+tmp/
+temp/
+.tmp/
+.cache/
+.turbo/
+.parcel-cache/
+.sass-cache/
+*.tmp
+*.bak
+*.orig
+*.rej
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+
+# ── 6. 依赖 / 运行时 ──────────────────────────────────────────────
+node_modules/
+jspm_packages/
+bower_components/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# ── 7. 构建产物 ───────────────────────────────────────────────────
+# 注1：dist/PDScope.html 是「单文件免安装版」交付物，故刻意不忽略 dist。
+#      如需改为不跟踪，取消下面两行注释即可：
+# PDScope/dist/
+# !PDScope/dist/PDScope.html
+# 注2：PDScope/build/ 存放 electron-builder 的图标与打包资源，属源文件，必须跟踪，
+#      因此这里不忽略它，只忽略其打包输出 out/ 与 release/。
+
+PDScope/out/
+PDScope/release/
+PDScope/*.asar
+PDScope/*.asar.unpacked/
+.electron-builder-cache/
+
+# ── 8. 操作系统垃圾文件 ───────────────────────────────────────────
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+desktop.ini
+$RECYCLE.BIN/
+*.stackdump

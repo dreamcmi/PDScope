@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PDScope · USB PD 抓包解析上位机</title>
+<link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+<div class="app">
+
+  <!-- ── 顶栏 ─────────────────────────────────────────────── -->
+  <header class="appbar">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
+        <rect x="1" y="1" width="30" height="30" rx="9" fill="url(#lg)"/>
+        <defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#3b82f6"/><stop offset="1" stop-color="#8b5cf6"/>
+        </linearGradient></defs>
+        <path d="M9 16.5h4.2l1.8-5 2.4 9 1.7-4h4" fill="none" stroke="#fff"
+              stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <div class="brand-txt">
+        <b>PDScope</b>
+        <span>USB Power Delivery 抓包解析</span>
+      </div>
+    </div>
+
+    <div class="file-chip" id="fileChip" title="">
+      <svg viewBox="0 0 16 16" class="i"><path d="M3 2h6l4 4v8a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1Zm5.5.5V7H12" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
+      <span id="fileName">未打开抓包文件</span>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="meta-chips" id="metaChips"></div>
+
+    <button class="btn ghost icon-only" title="切换主题（快捷键 T）" id="btnTheme">
+      <svg viewBox="0 0 16 16" class="i"><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="8" cy="8" r="2.6" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>
+    </button>
+
+    <button class="btn ghost" id="btnExport" disabled>
+      <svg viewBox="0 0 16 16" class="i"><path d="M8 1.8v8.4M4.8 7l3.2 3.2L11.2 7M2.5 12.5h11" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      导出
+    </button>
+
+    <button class="btn primary" id="btnOpen">
+      <svg viewBox="0 0 16 16" class="i"><path d="M1.8 12.5V3.6a.9.9 0 0 1 .9-.9h3.1l1.4 1.6h6.1a.9.9 0 0 1 .9.9v7.3a.9.9 0 0 1-.9.9H2.7a.9.9 0 0 1-.9-.9Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+      打开抓包
+    </button>
+    <input type="file" id="fileInput" accept=".atkcc,.bin,.zip" hidden />
+  </header>
+
+  <!-- ── 主体 ─────────────────────────────────────────────── -->
+  <div class="body" id="appBody">
+
+    <!-- 左侧筛选 -->
+    <aside class="sidebar" id="sidebar">
+      <div class="side-scroll">
+
+        <section class="fgroup">
+          <h4>通道 <span class="hint" id="chHint"></span></h4>
+          <div class="chlist" id="chList"></div>
+        </section>
+
+        <section class="fgroup">
+          <h4>数据方向</h4>
+          <div class="chips" id="fRole">
+            <button class="chip role-src is-on" data-v="SRC">Source <i id="cSrc">0</i></button>
+            <button class="chip role-snk is-on" data-v="SNK">Sink <i id="cSnk">0</i></button>
+            <button class="chip role-plug is-on" data-v="Plug">线缆 Plug <i id="cPlug">0</i></button>
+          </div>
+        </section>
+
+        <section class="fgroup">
+          <h4>SOP 类型</h4>
+          <div class="chips" id="fSop">
+            <button class="chip is-on" data-v="SOP">SOP</button>
+            <button class="chip is-on" data-v="SOP'">SOP&prime;</button>
+            <button class="chip is-on" data-v="SOP''">SOP&Prime;</button>
+            <button class="chip is-on" data-v="Hard Reset">Hard Reset</button>
+            <button class="chip is-on" data-v="Cable Reset">Cable Reset</button>
+          </div>
+        </section>
+
+        <section class="fgroup">
+          <h4>报文类别</h4>
+          <div class="chips" id="fCat">
+            <button class="chip cat-ctrl is-on" data-v="Control">控制</button>
+            <button class="chip cat-data is-on" data-v="Data">数据</button>
+            <button class="chip cat-ext is-on" data-v="Extended">扩展</button>
+            <button class="chip cat-vdm is-on" data-v="VDM">VDM</button>
+            <button class="chip cat-err is-on" data-v="Error">异常</button>
+          </div>
+        </section>
+
+        <section class="fgroup">
+          <h4>快速过滤</h4>
+          <label class="switch"><input type="checkbox" id="fHideGoodCrc" checked /><span></span>屏蔽 GOOD CRC 心跳包</label>
+          <label class="switch"><input type="checkbox" id="fOnlyBad" /><span></span>只看 CRC 错误</label>
+          <label class="switch"><input type="checkbox" id="fOnlyPower" /><span></span>只看功率协商（Source_Cap / Request / PPS）</label>
+          <label class="switch"><input type="checkbox" id="fOnlyEnter" /><span></span>只看状态切换（PS_RDY / VDM / Alert）</label>
+        </section>
+
+        <section class="fgroup">
+          <h4>报文类型</h4>
+          <div class="multisel" id="fType">
+            <button class="ms-head" id="msHead">全部类型 <span class="caret"></span></button>
+            <div class="ms-body" id="msBody"></div>
+          </div>
+        </section>
+
+        <section class="fgroup">
+          <h4>时间窗口 <span class="hint" id="tRangeHint"></span></h4>
+          <div class="range-row">
+            <input type="range" id="tFrom" min="0" max="1000" value="0" />
+            <input type="range" id="tTo" min="0" max="1000" value="1000" />
+          </div>
+          <div class="row gap">
+            <button class="btn tiny" id="btnClearTime">全时段</button>
+            <button class="btn tiny" id="btnCurView">当前视图</button>
+          </div>
+        </section>
+
+        <section class="fgroup">
+          <h4>关键字</h4>
+          <input class="text" id="fSearch" placeholder="消息名 / 数据hex / 备注…" />
+          <div class="row gap wrap mt6">
+            <button class="btn tiny" data-kw="PPS">PPS</button>
+            <button class="btn tiny" data-kw="AVS">AVS</button>
+            <button class="btn tiny" data-kw="VID">VID</button>
+            <button class="btn tiny" data-kw="Alert">Alert</button>
+            <button class="btn tiny" data-kw="CRC">CRC</button>
+          </div>
+        </section>
+
+        <button class="btn block" id="btnReset">重置全部筛选</button>
+      </div>
+    </aside>
+
+    <!-- 中间：报文表 + 时间轴 -->
+    <main class="main">
+      <div class="toolbar">
+        <button class="btn ghost icon-only" id="btnToggleSide" title="折叠筛选栏">
+          <svg viewBox="0 0 16 16" class="i"><path d="M2 3h12M2 8h12M2 13h12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+        </button>
+        <div class="stat" id="statLine">等待打开抓包文件…</div>
+        <div class="spacer"></div>
+        <div class="seg" id="viewSeg">
+          <button class="seg-item is-on" data-v="all">全部</button>
+          <button class="seg-item" data-v="neg">协商流程</button>
+          <button class="seg-item" data-v="err">异常</button>
+        </div>
+        <div class="density" title="行高">
+          <button class="btn tiny" id="btnDense">紧凑</button>
+        </div>
+      </div>
+
+      <div class="table-wrap" id="tableWrap">
+        <div class="thead" id="thead">
+          <div class="th c-idx"    data-k="index">#</div>
+          <div class="th c-sop"    data-k="sop">SOP</div>
+          <div class="th c-type"   data-k="msgType">报文类型</div>
+          <div class="th c-id"     data-k="msgId">ID</div>
+          <div class="th c-role"   data-k="role">方向</div>
+          <div class="th c-obj"    data-k="nObj">Obj</div>
+          <div class="th c-time"   data-k="timeMs">时间</div>
+          <div class="th c-bus"    data-k="vbus">VBUS / IBUS</div>
+          <div class="th c-data"   data-k="dataHex">数据 (hex)</div>
+          <div class="th c-note">解析详情</div>
+        </div>
+        <div class="tbody" id="tbody">
+          <div class="vph" id="vph"></div>
+          <div class="vrows" id="vrows"></div>
+        </div>
+        <div class="empty" id="emptyState">
+          <svg viewBox="0 0 64 64" class="empty-art"><rect x="8" y="14" width="48" height="36" rx="6" fill="none" stroke="currentColor" stroke-width="1.6" opacity=".5"/><path d="M18 32h7l3-7 4 14 3-7h11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <h3>打开一份 .atkcc 抓包文件</h3>
+          <p>由正点原子 ATK-C 抓取的 PD 数据，直接解析、可视化、逐字段溯源。</p>
+          <div class="row gap center">
+            <button class="btn primary" id="btnOpen2">选择文件</button>
+            <button class="btn" id="btnDemo">载入示例</button>
+          </div>
+          <p class="tiny-note">也可以把 .atkcc 文件直接拖进窗口</p>
+        </div>
+      </div>
+
+      <div class="timeline" id="timeline">
+        <div class="tl-head">
+          <span class="tl-title">VBUS / IBUS 时间轴</span>
+          <div class="spacer"></div>
+          <label class="switch sm"><input type="checkbox" id="tlFollow" checked /><span></span>跟随选中</label>
+          <button class="btn tiny" id="btnTlFit">适应宽度</button>
+        </div>
+        <canvas id="busCanvas"></canvas>
+        <div class="tl-tip" id="tlTip"></div>
+      </div>
+    </main>
+
+    <!-- 右侧详情 -->
+    <aside class="detail" id="detail">
+      <div class="detail-head">
+        <b>报文详情</b>
+        <div class="spacer"></div>
+        <button class="btn ghost icon-only" id="btnDetailNavPrev" title="上一条"><svg viewBox="0 0 16 16" class="i"><path d="M10 3.5 5.5 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <button class="btn ghost icon-only" id="btnDetailNavNext" title="下一条"><svg viewBox="0 0 16 16" class="i"><path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <button class="btn ghost icon-only" id="btnDetailClose" title="收起"><svg viewBox="0 0 16 16" class="i"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+      </div>
+      <div class="detail-body" id="detailBody">
+        <div class="detail-empty">点击左侧任意报文查看逐位解析</div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- 拖拽蒙层 -->
+  <div class="drop" id="drop">
+    <div class="drop-inner">
+      <svg viewBox="0 0 48 48" class="i"><path d="M24 8v24M14 24l10 10 10-10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <b>松开以解析这份抓包</b>
+      <span>.atkcc / .zip</span>
+    </div>
+  </div>
+
+  <!-- 进度蒙层 -->
+  <div class="overlay" id="progress">
+    <div class="prog-card">
+      <div class="prog-title" id="progTitle">正在解析…</div>
+      <div class="bar"><i id="progBar"></i></div>
+      <div class="prog-sub" id="progSub"></div>
+      <button class="btn tiny" id="progCancel">取消</button>
+    </div>
+  </div>
+
+  <div class="toast-wrap" id="toastWrap"></div>
+</div>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>
