@@ -34,7 +34,7 @@
     "targets": "all",
     "category": "DeveloperTool",
     "shortDescription": "USB PD 抓包解析上位机",
-    "longDescription": "直接解析正点原子 ATK-C 的 .atkcc 抓包文件，跨平台（Windows / macOS / Linux）。",
+    "longDescription": "解析正点原子 ATK-C 的 .atkcc 与 POWER-Z 的 .sqlite 两种 PD 抓包，跨平台（Windows / macOS / Linux）。",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

@@ -77,10 +77,22 @@ async function forceRepaint(cdp) {
   await sleep(260);
 }
 
-let pass = 0, fail = 0;
+let pass = 0, fail = 0, skipped = 0;
 const check = (name, ok, extra = '') => {
   if (ok) { pass++; log(`  \u2714 ${name}${extra ? '  ' + extra : ''}`); }
   else { fail++; log(`  \u2718 ${name}${extra ? '  ' + extra : ''}`); }
+};
+/**
+ * 明确「跳过」而不是静默不跑，也不是判失败。
+ *
+ * 用在「该断言对这份样本不成立」的场合 —— 典型是 UFCS 样本：文件载入成功、
+ * 模拟量照画，但本工程没实现它的语义解析，所以一条报文都没有，
+ * 凡是依赖「列表里有行」的断言都无从谈起。跳过要计入汇总，好让人看得出
+ * 这次跑的不是完整覆盖，避免「全绿」被误读成「所有断言都过了」。
+ */
+const skip = (name, why) => {
+  skipped++;
+  log(`  \u2298 ${name}  （跳过：${why}）`);
 };
 
 /* ── 启动浏览器 ──────────────────────────────────────── */
@@ -256,73 +268,145 @@ try {
 
   if (willLoad) {
     if (!DROP) await cdp.eval(`document.querySelector('#btnDemo').click()`);
+    // 解码结束有两个合法终态：解出了报文（「显示 N / M 条」），
+    // 或文件载入成功但一条都没解出来（「已读入 N 条原始帧 … 语义解析未实现」）。
+    const DONE = /显示|已读入/;
     let stat = '';
     for (let i = 0; i < 120; i++) {
       await sleep(500);
       stat = await cdp.eval(`document.querySelector('#statLine').textContent || ''`);
-      if (/显示/.test(stat)) break;
+      if (DONE.test(stat)) break;
     }
-    check('抓包解码完成', /显示/.test(stat), stat.replace(/\s+/g, ' ').trim());
+    check('抓包解码完成', DONE.test(stat) && !/等待打开/.test(stat), stat.replace(/\s+/g, ' ').trim());
 
     const shown = await cdp.eval(`(document.querySelector('#statLine').textContent.match(/显示\\s*(\\d+)/)||[])[1]`);
-    check('解析出报文', Number(shown) > 0, `显示 ${shown} 条`);
+    const noticeText = await cdp.eval(`(()=>{const n=document.querySelector('#notice');return n && !n.hidden ? n.innerText.replace(/\\s+/g,' ').trim() : '';})()`);
 
-    const rows = await cdp.eval(`document.querySelectorAll('#vrows .tr').length`);
-    check('虚拟滚动渲染出行', rows > 0, `${rows} 行可见`);
+    // ── 「零报文」是一条正经路径，不是失败 ──
+    // 分析仪抓到了本工程未实现语义解析的协议（UFCS）：原始帧照收、模拟量照画、
+    // 只是没有报文可列。此时「列表里有行」类断言无从谈起，必须显式跳过：
+    // 早先这里直接 `document.querySelector('#vrows .tr').click()`，
+    // 在 0 行时报 `Cannot read properties of null`，把「本来就该是空的列表」
+    // 伪装成脚本崩溃，看不出根因。
+    const rowless = Number(shown || 0) === 0 && !!noticeText;
 
-    const total = await cdp.eval(`(document.querySelector('#statLine').textContent.match(/\\/\\s*(\\d+)\\s*条/)||[])[1]`);
-    check('GOOD CRC 被默认屏蔽', Number(shown) < Number(total), `显示 ${shown} / 全部 ${total}`);
-
-    const firstRow = await cdp.eval(`(()=>{const r=document.querySelector('#vrows .tr');return r?r.innerText.replace(/\\s+/g,' ').trim():'';})()`);
-    check('首行内容合理', /Source_Cap|VDM|Request|PS RDY|SOP/.test(firstRow), firstRow.slice(0, 90));
-
-    const dirPills = await cdp.eval(`document.querySelectorAll('#vrows .pill').length`);
-    check('方向标识已渲染', dirPills > 0, `${dirPills} 个标签`);
-
-    // 采样率不是写死的：界面要显示「数值 + 来源」（文件声明 / 波形实测 / 默认值 / 手动指定）
+    // 采样率不是写死的：界面要显示「数值 + 来源」（文件声明 / 波形实测 / 默认值 / 手动指定）。
+    // 分析仪导出（POWER-Z）只有毫秒时间戳，量级是 kHz，来源标「分析仪时间戳」。
     const rateChip = await cdp.eval(`(() => {
       const c = [...document.querySelectorAll('#metaChips .mchip')].find((x) => /采样率/.test(x.textContent));
       return c ? { text: c.textContent.replace(/\\s+/g, ' ').trim(), tag: (c.querySelector('.mtag') || {}).textContent || '' } : null;
     })()`);
-    check('采样率已解析并标出来源', !!rateChip && /MHz/.test(rateChip.text)
-      && /文件声明|波形实测|默认值|手动指定/.test(rateChip.tag), rateChip ? rateChip.text : '未找到采样率 chip');
+    check('采样率已解析并标出来源', !!rateChip && /MHz|kHz/.test(rateChip.text)
+      && /文件声明|波形实测|默认值|手动指定|分析仪时间戳/.test(rateChip.tag), rateChip ? rateChip.text : '未找到采样率 chip');
 
-    /* 3. 点击一行 -> 详情 */
-    await cdp.eval(`document.querySelector('#vrows .tr').click()`);
-    await sleep(400);
-    const detail = await cdp.eval(`document.querySelector('#detailBody').innerText.replace(/\\s+/g,' ').trim().slice(0,160)`);
-    check('详情面板已填充', /报文头|链路概览|字段解析/.test(detail), detail.slice(0, 80));
-    const bitRows = await cdp.eval(`document.querySelectorAll('#detailBody .dbit').length`);
-    check('位域表已渲染', bitRows > 3, `${bitRows} 个位域行`);
+    if (rowless) {
+      check('零报文已如实说明原因', /尚未实现|未实现/.test(noticeText), noticeText.slice(0, 90));
 
-    /* 4. 过滤：只留 Sink */
-    await cdp.eval(`document.querySelector('#fRole .chip[data-v="SRC"]').click()`);
-    await sleep(400);
-    const sinkStat = await cdp.eval(`document.querySelector('#statLine').textContent.replace(/\\s+/g,' ').trim()`);
-    check('方向过滤生效', /显示/.test(sinkStat) && Number((sinkStat.match(/显示\s*(\d+)/)||[])[1]) > 0, sinkStat.slice(0, 60));
+      const rawChip = await cdp.eval(`(()=>{const c=[...document.querySelectorAll('#metaChips .mchip')].find(x=>/原始帧/.test(x.textContent));return c?c.textContent.replace(/\\s+/g,' ').trim():'';})()`);
+      const rawN = Number(((rawChip.match(/原始帧\s*(\d+)/) || [])[1]) || 0);
+      check('原始帧计数已显示', rawN > 0, rawChip);
 
-    /* 5. 搜索（先重置筛选，保证断言有意义） */
-    await cdp.eval(`document.querySelector('#btnReset').click()`);
-    await sleep(400);
-    const resetStat = await cdp.eval(`(document.querySelector('#statLine').textContent.match(/显示\\s*(\\d+)/)||[])[1]`);
-    check('重置筛选恢复全部', Number(resetStat) > 0, `${resetStat} 条`);
-    // 取第 2 行（非 GOOD CRC）的报文类型作为搜索词，保证断言与数据无关
-    const probe = await cdp.eval(`(()=>{const r=document.querySelectorAll('#vrows .tr')[1];return r?r.children[2].textContent.trim():'';})()`);
-    await cdp.eval(`(()=>{const i=document.querySelector('#fSearch');i.value=${JSON.stringify(probe)};i.dispatchEvent(new Event('input',{bubbles:true}));})()`);
-    await sleep(500);
-    const qStat = await cdp.eval(`document.querySelector('#statLine').textContent.replace(/\\s+/g,' ').trim()`);
-    const qRows = await cdp.eval(`document.querySelectorAll('#vrows .tr').length`);
-    const qHit = await cdp.eval(`(()=>{const s=[...document.querySelectorAll('#vrows .tr')].map(r=>r.children[2].textContent.trim());return s.every(t=>t===${JSON.stringify(probe)});})()`);
-    check('关键字搜索生效', /显示/.test(qStat) && qRows > 0 && Number((qStat.match(/显示\s*(\d+)/)||[])[1]) <= Number(resetStat) && qHit === true,
-      `搜索「${probe}」→ ${(qStat.match(/显示\s*(\d+)/) || [])[1]} 条`);
+      // 空列表也要说清「为什么空」，且必须是「协议未实现」这一种说法，
+      // 不能退化成「筛选后为空」——两者话术混用会让人以为是自己筛掉了报文
+      const emptyText = await cdp.eval(`(()=>{const e=document.querySelector('#emptyState');return e && e.style.display!=='none' ? e.innerText.replace(/\\s+/g,' ').trim() : '';})()`);
+      check('空列表给出解释', /未实现/.test(emptyText) && !/当前筛选条件下没有报文/.test(emptyText), emptyText.slice(0, 90));
 
-    /* 清除搜索，回到完整列表 */
-    await cdp.eval(`(()=>{const i=document.querySelector('#fSearch');i.value='';i.dispatchEvent(new Event('input',{bubbles:true}));})()`);
-    await sleep(400);
+      for (const nm of ['解析出报文', '虚拟滚动渲染出行', 'GOOD CRC 被默认屏蔽', '首行内容合理',
+        '方向标识已渲染', '点击一行 → 详情面板', '位域表已渲染', '方向过滤生效',
+        '重置筛选恢复全部', '关键字搜索生效']) skip(nm, '该样本无报文（协议语义未实现）');
+    } else {
+      check('解析出报文', Number(shown) > 0, `显示 ${shown} 条`);
+
+      const rows = await cdp.eval(`document.querySelectorAll('#vrows .tr').length`);
+      check('虚拟滚动渲染出行', rows > 0, `${rows} 行可见`);
+
+      const total = await cdp.eval(`(document.querySelector('#statLine').textContent.match(/\\/\\s*(\\d+)\\s*条/)||[])[1]`);
+      check('GOOD CRC 被默认屏蔽', Number(shown) < Number(total), `显示 ${shown} / 全部 ${total}`);
+
+      const firstRow = await cdp.eval(`(()=>{const r=document.querySelector('#vrows .tr');return r?r.innerText.replace(/\\s+/g,' ').trim():'';})()`);
+      check('首行内容合理', /Source_Cap|VDM|Request|PS RDY|SOP/.test(firstRow), firstRow.slice(0, 90));
+
+      const dirPills = await cdp.eval(`document.querySelectorAll('#vrows .pill').length`);
+      check('方向标识已渲染', dirPills > 0, `${dirPills} 个标签`);
+
+      /* 3. 点击一行 -> 详情 */
+      await cdp.eval(`document.querySelector('#vrows .tr').click()`);
+      await sleep(400);
+      const detail = await cdp.eval(`document.querySelector('#detailBody').innerText.replace(/\\s+/g,' ').trim().slice(0,160)`);
+      check('详情面板已填充', /报文头|链路概览|字段解析/.test(detail), detail.slice(0, 80));
+      const bitRows = await cdp.eval(`document.querySelectorAll('#detailBody .dbit').length`);
+      check('位域表已渲染', bitRows > 3, `${bitRows} 个位域行`);
+
+      /* 4. 过滤：只留 Sink */
+      await cdp.eval(`document.querySelector('#fRole .chip[data-v="SRC"]').click()`);
+      await sleep(400);
+      const sinkStat = await cdp.eval(`document.querySelector('#statLine').textContent.replace(/\\s+/g,' ').trim()`);
+      check('方向过滤生效', /显示/.test(sinkStat) && Number((sinkStat.match(/显示\s*(\d+)/)||[])[1]) > 0, sinkStat.slice(0, 60));
+    }
+
+    /* 5. 搜索与筛选复位（都要有行才有意义） */
+    if (!rowless) {
+      // 先重置筛选，保证后面的断言有意义
+      await cdp.eval(`document.querySelector('#btnReset').click()`);
+      await sleep(400);
+      const resetStat = await cdp.eval(`(document.querySelector('#statLine').textContent.match(/显示\\s*(\\d+)/)||[])[1]`);
+      check('重置筛选恢复全部', Number(resetStat) > 0, `${resetStat} 条`);
+      // 取第 2 行（非 GOOD CRC）的报文类型作为搜索词，保证断言与数据无关
+      const probe = await cdp.eval(`(()=>{const r=document.querySelectorAll('#vrows .tr')[1];return r?r.children[2].textContent.trim():'';})()`);
+      await cdp.eval(`(()=>{const i=document.querySelector('#fSearch');i.value=${JSON.stringify(probe)};i.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+      await sleep(500);
+      const qStat = await cdp.eval(`document.querySelector('#statLine').textContent.replace(/\\s+/g,' ').trim()`);
+      const qRows = await cdp.eval(`document.querySelectorAll('#vrows .tr').length`);
+      const qHit = await cdp.eval(`(()=>{const s=[...document.querySelectorAll('#vrows .tr')].map(r=>r.children[2].textContent.trim());return s.every(t=>t===${JSON.stringify(probe)});})()`);
+      check('关键字搜索生效', /显示/.test(qStat) && qRows > 0 && Number((qStat.match(/显示\s*(\d+)/)||[])[1]) <= Number(resetStat) && qHit === true,
+        `搜索「${probe}」→ ${(qStat.match(/显示\s*(\d+)/) || [])[1]} 条`);
+
+      /* 清除搜索，回到完整列表 */
+      await cdp.eval(`(()=>{const i=document.querySelector('#fSearch');i.value='';i.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+      await sleep(400);
+    }
 
     /* 6. 时间轴有内容 */
     const tlPainted = await cdp.eval(`(()=>{const c=document.querySelector('#busCanvas');const g=c.getContext('2d');const d=g.getImageData(0,0,c.width,c.height).data;let n=0;for(let i=3;i<d.length;i+=4*97)if(d[i]>0)n++;return n;})()`);
     check('时间轴已绘制', tlPainted > 20, `${tlPainted} 个非空采样`);
+
+    /* 6.5 分析仪导出（POWER-Z 的 .sqlite）专属：来源标注 / CRC 口径 / 差分线视图 */
+    const isPz = /\.sqlite$/i.test(DROP || '');
+    if (isPz) {
+      const srcChip = await cdp.eval(`(()=>{const c=[...document.querySelectorAll('#metaChips .mchip')].find(x=>/来源/.test(x.textContent));return c?c.textContent.replace(/\\s+/g,' ').trim():'';})()`);
+      check('标注数据来源为 POWER-Z', /POWER-Z/.test(srcChip), srcChip);
+
+      if (rowless) {
+        skip('CRC 口径如实（未记录而非全通过）', '该样本无报文，状态栏不涉及 CRC');
+        skip('显示插入/拔出事件', '该样本无连接/断开事件');
+      } else {
+        // 分析仪不存 CRC：界面必须说「未记录」，绝不能报「全通过」
+        const crcText = await cdp.eval(`document.querySelector('#statLine').textContent.replace(/\\s+/g,' ').trim()`);
+        check('CRC 口径如实（未记录而非全通过）', /CRC 未记录/.test(crcText) && !/CRC 全通过/.test(crcText), crcText.slice(0, 100));
+
+        const connChip = await cdp.eval(`(()=>{const c=[...document.querySelectorAll('#metaChips .mchip')].find(x=>/插拔/.test(x.textContent));return c?c.textContent.replace(/\\s+/g,' ').trim():'';})()`);
+        check('显示插入/拔出事件', /插拔/.test(connChip), connChip);
+      }
+
+      // 「差分线」那一档：只有分析仪导出才有这两路额外模拟量。
+      // 档名跟着文件走 —— USB PD 是 CC1/CC2（取 CC 线），UFCS 是 DP/DM，不能写死。
+      const isUfcs = /UFCS/.test(srcChip);
+      const wantAux = isUfcs ? /DP \/ DM/ : /CC1 \/ CC2/;
+      const segVisible = await cdp.eval(`(()=>{const s=document.querySelector('#tlSeg');return !!s && !s.hidden && s.querySelectorAll('.seg-item').length===2;})()`);
+      check('差分线视图可切换', segVisible === true, `档名「${await cdp.eval(`document.querySelector('#tlSegAux').textContent.trim()`)}」`);
+      const titleBefore = await cdp.eval(`document.querySelector('#tlTitle').textContent.trim()`);
+      await cdp.eval(`document.querySelector('#tlSeg .seg-item[data-v="aux"]').click()`);
+      await sleep(400);
+      const titleAfter = await cdp.eval(`document.querySelector('#tlTitle').textContent.trim()`);
+      const auxPainted = await cdp.eval(`(()=>{const c=document.querySelector('#busCanvas');const g=c.getContext('2d');const d=g.getImageData(0,0,c.width,c.height).data;let n=0;for(let i=3;i<d.length;i+=4*97)if(d[i]>0)n++;return n;})()`);
+      check(`切到差分线（${isUfcs ? 'DP / DM' : 'CC1 / CC2'}）后重绘`,
+        wantAux.test(titleAfter) && titleAfter !== titleBefore && auxPainted > 20,
+        `「${titleBefore}」→「${titleAfter}」`);
+      await cdp.eval(`document.querySelector('#tlSeg .seg-item[data-v="power"]').click()`);
+      await sleep(300);
+      const titleBack = await cdp.eval(`document.querySelector('#tlTitle').textContent.trim()`);
+      check('切回电压/电流', /VBUS \/ IBUS/.test(titleBack), titleBack);
+    }
 
     /* 7. 主题切换 */
     await cdp.eval(`document.querySelector('#btnTheme').click()`);
@@ -365,7 +449,11 @@ try {
     await cdp.eval(`document.querySelector('#btnDetailClose').click()`);
     await sleep(340);
     const wCol = await detailWidth();
-    await cdp.eval(`document.querySelector('#vrows .tr').click()`);
+    // 收起后右缘必须出现展开把手 —— 零报文样本（UFCS）里「点一行重开」这条路是断的，
+    // 没有把手面板就永久丢失了，所以这条断言对两种样本都成立、都必须过。
+    const railVisible = await cdp.eval(`(()=>{const r=document.querySelector('#btnDetailOpen');return !!r && getComputedStyle(r).display!=='none' && r.getBoundingClientRect().width>0;})()`);
+    check('收起后右缘出现展开把手', railVisible === true);
+    await cdp.eval(rowless ? `document.querySelector('#btnDetailOpen').click()` : `document.querySelector('#vrows .tr').click()`);
     await sleep(340);
     const wBack = await detailWidth();
     check('收起后可还原宽度', wCol === 0 && wBack === w1, `收起 ${wCol} → 还原 ${wBack} px`);
@@ -419,6 +507,7 @@ try {
 
 log('');
 log(`  ─────────────────────────────────────────────`);
-log(`  ${pass} 通过, ${fail} 失败`);
+log(`  ${pass} 通过, ${fail} 失败${skipped ? `, ${skipped} 跳过` : ''}`);
+if (skipped) log('  （跳过项是该样本上无从进行的断言，不代表通过）');
 log('');
 process.exit(fail ? 1 : 0);

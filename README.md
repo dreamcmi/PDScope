@@ -2,8 +2,16 @@
 
 **USB Power Delivery 抓包解析上位机**
 
-直接打开正点原子 ATK-C 的 `.atkcc` 抓包文件，把 CC 线上的 BMC 波形还原成逐条 PD 报文，
-并逐字段溯源。解析与界面全部在前端完成 —— **零依赖、零网络、不上传任何数据**。
+直接打开抓包文件，把 PD 报文还原出来并逐字段溯源。两种来源都支持，**按文件内容自动分流**：
+
+| 来源 | 文件 | 存的是什么 | 解析路径 |
+| ---- | ---- | ---------- | -------- |
+| 正点原子 **ATK-C** | `.atkcc` | CC 线的原始电平采样（ZIP + 1bit/采样） | 分块 → 边沿 → BMC → 4B5B → PD 报文 |
+| **POWER-Z**（ChargerLAB） | `.sqlite` | 分析仪**已经解好的逻辑字节** + ADC 采样序列 | SQLite 读表 → Raw blob 拆事件 → 同一套 PD 语义解析 |
+
+两条路径解出来的报文对象**同形**，所以界面、筛选、详情、时间轴、导出只有一处分叉。
+
+解析与界面全部在前端完成 —— **零依赖、零网络、不上传任何数据**。
 
 支持 **Windows / macOS / Linux**。
 
@@ -21,6 +29,7 @@
 * [CI 构建：](#ci-构建10-个目标一次出齐)
 * [界面功能](#界面功能)
 * [`.atkcc` 格式（逆向结论）](#atkcc-格式逆向结论)
+* [`.sqlite` 格式（POWER-Z 导出）](#sqlite-格式power-z-导出)
 * [PD 协议解析库](#pd-协议解析库)
 * [目录结构](#目录结构)
 * [自检](#自检)
@@ -37,7 +46,7 @@
 
 |                | **单文件 HTML 版**              | **Tauri 桌面版**                        |
 | -------------- | ------------------------------- | --------------------------------------- |
-| 产物           | `dist/PDScope.html`（约 250 KB，自包含） | `pdscope.exe`（约 3.1 MB）              |
+| 产物           | `dist/PDScope.html`（约 320 KB，自包含） | `pdscope.exe`（约 3.1 MB）              |
 | 怎么运行       | 双击，用系统默认浏览器打开      | 双击 exe                                |
 | 需要先装什么   | **什么都不用装**                | 系统自带的 WebView 即可，别无其他       |
 | 原生菜单       | 无（用页面内快捷键）            | 有（中文菜单 + F11 全屏 / F12 开发者工具） |
@@ -65,7 +74,7 @@
 
 ```bash
 node tools/build-standalone.mjs         # 生成 dist/PDScope.html
-# 双击 dist/PDScope.html，把 .atkcc 拖进窗口
+# 双击 dist/PDScope.html，把 .atkcc / .sqlite 拖进窗口
 ```
 
 **想要一个真正的桌面应用** → 走形态二：
@@ -90,12 +99,12 @@ node tools/build-standalone.mjs
 
 | 平台        | 操作                                                                                     |
 | ----------- | ---------------------------------------------------------------------------------------- |
-| **Windows** | 双击 `PDScope.html` → 用默认浏览器（通常是 Edge）打开 → 把 `.atkcc` 拖进窗口。想固定入口就右键「发送到 → 桌面快捷方式」。 |
+| **Windows** | 双击 `PDScope.html` → 用默认浏览器（通常是 Edge）打开 → 把抓包文件拖进窗口。想固定入口就右键「发送到 → 桌面快捷方式」。 |
 | **macOS**   | 双击即可。若默认浏览器是 Safari，需要 **Safari 16.4+**；老系统请右键 →「打开方式」→ Chrome/Edge。 |
 | **Linux**   | 双击（部分桌面环境会问用什么程序打开，选浏览器），或终端 `xdg-open dist/PDScope.html`。   |
 
-不管哪个平台，都有两种喂文件的方式：**把 `.atkcc` 拖进窗口**，或点界面上的「选择文件」
-（快捷键 `Ctrl/⌘+O`）。
+不管哪个平台，都有两种喂文件的方式：**把抓包文件拖进窗口**，或点界面上的「选择文件」
+（快捷键 `Ctrl/⌘+O`）。`.atkcc` 与 `.sqlite` 都认。
 
 ### 浏览器要求
 
@@ -164,20 +173,23 @@ npm run app:build       # 出当前平台的全部安装包
 
 ### 怎么打开一个抓包文件
 
-四种方式，任选：
+四种方式，任选（`.atkcc` 与 POWER-Z 的 `.sqlite` 都可以）：
 
 1. **菜单**：文件 → 打开抓包…（`Ctrl/⌘+O`）
-2. **拖拽**：把 `.atkcc` 拖进窗口（`dragDropEnabled: false` 就是为这个设的 ——
+2. **拖拽**：把抓包文件拖进窗口（`dragDropEnabled: false` 就是为这个设的 ——
    否则 Tauri 会吞掉 HTML5 拖放事件）
 3. **命令行**：
    ```bash
    pdscope.exe "D:\抓包\绿联70w.atkcc"
+   pdscope.exe "D:\抓包\山泽60w.sqlite"
    ```
-4. **拖到 exe 图标上**，或装了安装包后**双击 `.atkcc`**（`tauri.conf.json` 里声明了 `.atkcc` 文件关联）
+4. **拖到 exe 图标上**，或装了安装包后**双击 `.atkcc`**（`tauri.conf.json` 里声明了 `.atkcc` 文件关联；
+   `.sqlite` 是通用扩展名，没有抢来当关联，走前三种方式即可）
 
 第 3、4 种走的是同一条路：外壳读文件字节 → 通过 IPC 交给页面 → 页面交给解析内核。
 为什么绕这一圈？因为浏览器的安全模型不允许页面读任意本地路径；这样前端对「文件从哪来」完全无感，
-换成单文件版后照样能跑。
+换成单文件版后照样能跑。**格式判定也在页面里做**（看文件内容，不看扩展名），
+所以外壳不需要知道这次打开的是哪一种抓包。
 
 ### 桌面版专属的菜单
 
@@ -281,7 +293,7 @@ GitHub 的 Windows runner 一直是 **Windows Server** 系列，从来没有过 
 ```
 node tools/version-check.mjs   # 版本号六处一致（外加 README 里的产物名提示项）
 node tools/syntax.mjs          # 全量语法检查（自动带上 tools/ 下的新脚本）
-node tools/selftest.js         # 协议层合成用例（24 项）
+node tools/selftest.js         # 协议层合成用例（44 项）
 ```
 
 这三项**在 10 个目标上各跑一遍** —— 顺带验证了解析内核在 Windows / macOS / Linux
@@ -319,8 +331,8 @@ node tools/serve.mjs        # 默认 http://127.0.0.1:5188，会自动开浏览�
 ```
 
 与前两种的唯一区别：多一个「**载入示例**」按钮 —— 它会扫描 `PDScope/` 和它上一级目录里的
-所有 `.atkcc`，一键载入。这个按钮依赖 `serve.mjs` 提供的 `api/samples` 接口，
-所以另外两种形态下它不显示。
+所有 `.atkcc` / `.sqlite`，一键载入（默认挑体积最小的那份）。这个按钮依赖 `serve.mjs` 提供的
+`api/samples` 接口，所以另外两种形态下它不显示。
 
 改界面时用这个形态最舒服：浏览器里刷新即可，不用重新打包。
 
@@ -330,26 +342,33 @@ node tools/serve.mjs        # 默认 http://127.0.0.1:5188，会自动开浏览�
 
 | 能力                | 说明                                                                                         |
 | ------------------- | -------------------------------------------------------------------------------------------- |
+| **两种来源自动分流** | 打开文件只看**内容**（SQLite 魔数 + `pd_table` / `ufcs_table` 表名；ZIP 魔数）不看扩展名，`.atkcc` / `.sqlite` 拖进来都能解。顶栏「来源」chip 明示本份数据出自哪种设备 |
 | **报文表**          | `# / SOP / 报文类型 / ID / 方向 / Obj / 时间 / VBUS-IBUS / 数据hex / 解析详情`，虚拟滚动，几万条也不卡 |
-| **采样率来源标注**  | 顶栏显示实际采用的采样率并标出来源：`文件声明` / `波形实测` / `默认值`。声明与波形不一致时改按实测解码，并弹出提示；鼠标悬停可见 `channel.ini` 原文或原因 |
+| **采样率来源标注**  | 顶栏显示实际采用的采样率并标出来源：`文件声明` / `波形实测` / `默认值`。声明与波形不一致时改按实测解码，并弹出提示；鼠标悬停可见 `channel.ini` 原文或原因。分析仪导出只有毫秒时间戳（`1.00 kHz`，标 `分析仪时间戳`），量级不同也能读 |
 | **方向区分**        | `Source`（供电方）/ `Sink`（受电方）/ `Plug`（线缆 e-marker）三色徽章；`SOP / SOP′ / SOP″` 分别标注 |
 | **GOOD CRC 配对同色** | 每条 `GOOD CRC` 自动取「它所确认的那条报文」的颜色，而不是笼统的控制色。配对依据：GoodCRC 是对报文的即时应答（实测恒为紧邻 1 条），并用 PD 规范要求的 *MessageID 相同* 交叉校验；被确认报文本身是坏包时退化为纯邻近匹配。悬停报文类型可见 `确认 #N · 类型`，详情面板「链路概览」里也有「确认的报文」一栏 |
 | **选择性屏蔽**      | 按方向、SOP 类型、报文类别（控制/数据/扩展/VDM/异常）、**具体报文类型**（多选，带计数）、时间窗口、关键字任意组合过滤 |
 | **快捷过滤**        | 一键屏蔽 GOOD CRC 心跳包 / 只看 CRC 错误 / 只看功率协商 / 只看状态切换                        |
-| **CRC 错误标注**    | 校验未通过的报文在表格里整行标红，并在时间轴对应位置画一条贯穿的高亮竖线；配合「只看 CRC 错误」可一键筛出来 |
+| **CRC 错误标注**    | 校验未通过的报文在表格里整行标红，并在时间轴对应位置画一条贯穿的高亮竖线；配合「只看 CRC 错误」可一键筛出来。分析仪导出不含 CRC，此时统计行写「**CRC 未记录（分析仪不存）**」而不是「全通过」，详情面板也单列一行说明 |
 | **时间窗口**        | 底部 VBUS/IBUS 时间轴可**拖拽刷选**一段区间，表格立即联动                                     |
-| **位域详情**        | 右侧面板逐位展开报文头（B15 扩展 / B14-12 对象数 / B11-9 MsgID / B8 PowerRole / B7-6 Rev / B5 DataRole / B4-0 类型）、扩展头、每个数据对象（PDO/RDO/VDM）的全部字段 |
+| **两档模拟量视图**  | 分析仪导出除了 VBUS / IBUS 还录了第三、第四路模拟量（POWER-Z 的 **CC1 / CC2**，UFCS 的 **DP / DM**）。量程与 VBUS 差一个数量级，叠在一起会糊，所以做成标题旁的 `电压/电流 ↔ CC 线` 两档切换：纵轴刻度、悬停读数、曲线配色全部跟着换。ATK-C 的 `bus.ini` 只有两路，这一档自动隐藏 |
+| **插拔事件**        | 分析仪会把 DFP/UFP 的插入 / 拔出记成独立事件（ATK-C 只存波形，看不到这个）。顶栏「插拔」chip 给出计数 |
+| **位域详情**        | 右侧面板逐位展开报文头（B15 扩展 / B14-12 对象数 / B11-9 MsgID / B8 PowerRole / B7-6 Rev / B5 DataRole / B4-0 类型）、扩展头、每个数据对象（PDO/RDO/VDM）的全部字段。分析仪来源的报文会在标题旁标「分析仪逻辑字节」，并把「实测码率」改称「BMC 码率」、「报文时长」改称「线上时长」—— 那是按 600 kbps 标称时钟折算的，不是量出来的 |
 | **分组配色**        | 每个数据对象（VDO / PDO / RDO / 扩展消息的数据块）单独成组，**相邻分组换色相**（8 色循环）并带左侧色条；`Source_Capabilities` 这种七八个 PDO 的长报文，不用读标题也能一眼看出边界。分组标题**滚动吸顶**，长列表翻到哪都知道自己在看第几个对象 |
-| **详情宽度可拖**    | 详情面板与表格之间的分隔条可**拖拽改宽**（下限 280 / 上限 900，且始终给中间表格留 420px，窄窗口下自动收紧），双击分隔条或按 `Enter` 回到 390 默认；也可聚焦分隔条后用 `← →` 微调（`Shift` 加大步长，`Home/End` 到最窄/最宽）。宽度存 `localStorage`，下次打开还在 |
+| **详情宽度可拖 / 可收起** | 详情面板与表格之间的分隔条可**拖拽改宽**（下限 280 / 上限 900，且始终给中间表格留 420px，窄窗口下自动收紧），双击分隔条或按 `Enter` 回到 390 默认；也可聚焦分隔条后用 `← →` 微调（`Shift` 加大步长，`Home/End` 到最窄/最宽）。宽度存 `localStorage`，下次打开还在。按 `Esc` 或点右上 `×` 收起，**收起后窗口右缘出现一条 22px 的「详情」竖栏**，点它就能展开 —— 没有报文可点时（零报文的 UFCS 抓包）也回得来 |
+| **未实现协议如实说明** | 分析仪抓的是本工程未覆盖的协议时（目前是 UFCS），界面不装作解析失败：**常驻提示条**讲清原因、统计行写「已读入 N 条原始帧 · UFCS 语义解析未实现」、表格空态也换成专门话术，而模拟量轨迹照常可用 |
 | **导出**            | CSV（当前筛选结果）或 JSON（全部报文，含原始位域字段与 `ackOf` 配对序号）                     |
 | **其它**            | 明/暗主题、紧凑/舒适行高、上一条/下一条（↑↓）、`/` 聚焦搜索、`Ctrl/⌘+O` 打开、`T` 切主题、`G` 切 GOOD CRC 屏蔽、折叠筛选栏 |
 
 界面截图见 `artifacts/e2e-screenshot.png`（跑 `npm run e2e` 时自动生成），
+POWER-Z 的 `.sqlite` 拖进来后的样子见 `artifacts/e2e-powerz.png`（`npm run e2e:powerz`），
+UFCS 抓包「只出容器与模拟量」的样子见 `artifacts/e2e-ufcs.png`，
 GOOD CRC 配对同色的效果见 `artifacts/ack-colors.png`，
 分组配色见 `artifacts/group-colors-srcap.png`（Source_Cap 七个 PDO）、
 `artifacts/group-colors-vdm.png`（线缆 e-Marker 的 VDO 链）、
 `artifacts/group-colors-dark.png`（暗色主题），
-详情面板拖宽后的样子见 `artifacts/detail-resize-wide.png`。
+详情面板拖宽后的样子见 `artifacts/detail-resize-wide.png`，
+收起后的右缘「详情」把手见 `artifacts/detail-rail-light.png` 与放大特写 `artifacts/detail-rail-zoom.png`。
 
 ---
 
@@ -406,6 +425,85 @@ bus.ini                sample=N,vbus=14.651,ibus=1.274   ← 模拟量轨迹，s
 > **关键坑**：位序必须用 **LSB 优先**。用 MSB 解出来的游程长度会散落在 1~3 个采样点，
 > 只能得到一堆 CRC 全错的假包；换成 LSB 后游程干净地聚在 4/8 采样点，报文头的 SOP 前导
 > 立刻呈现规整的 `1010…`，CRC 全部通过。
+
+
+## `.sqlite` 格式（POWER-Z 导出）
+
+POWER-Z（ChargerLAB KM 系列）的 Windows 上位机导出的是**一个普通 SQLite 数据库**，
+里面的报文**已经被分析仪解到逻辑字节**了 —— 不需要（也没有）BMC 波形可解。
+实测样本是三张普通表、无索引、无视图、无触发器、无 WAL：
+
+```sql
+CREATE TABLE pd_chart(Time real, VBUS real, IBUS real, CC1 real, CC2 real)   -- ADC 采样序列
+CREATE TABLE pd_table(Time real, Vbus real, Ibus real, Raw Blob)              -- 事件流
+CREATE TABLE pd_table_key(key integer)                                       -- 会话密钥（导出文件里为空）
+```
+
+UFCS 抓包（国产快充协议）结构完全一样，只是表名换成 `ufcs_chart` / `ufcs_table` / `ufcs_table_key`，
+模拟量换 `DP` / `DM`。**识别方式**就是看有没有 `pd_table` / `ufcs_table`。
+
+### Raw blob 里的事件
+
+一行 `Raw` 是**若干事件首尾相接**（样本里恰好每行一个）：
+
+```
+┌ 连接 / 断开事件：固定 6 字节 ──────────────────────────────┐
+│ 45 │ ts(3B 小端, 毫秒) │ 00 │ code     （0x11=连接 0x12=断开）│
+└──────────────────────────────────────────────────────────┘
+┌ 包裹的 PD 报文：变长 ─────────────────────────────────────┐
+│ marker │ ts(4B 小端, 毫秒) │ sop │ wire（逻辑字节，无 CRC） │
+└──────────────────────────────────────────────────────────┘
+```
+
+* `marker ∈ 0x80…0xBF`：低 6 位 = 段总长 − 1（总长含 marker 自身），高 2 位未用；
+* `sop`：`0` = SOP，`1` = SOP′，`2` = SOP″；
+* `wire` = `[Header 2B 小端][Data Object ×N，各 4B 小端]`，**不含 CRC、不含 SOP/EOP**。
+
+拼不通的字节**如实标记**并停止，不硬猜长度 —— 一个错的长度会把后面所有事件读歪。
+
+### 怎么复用同一套 PD 语义
+
+报文已经是逻辑字节了，但**不想抄第二份解析**。于是把它**反向铺回成一份 1bit/采样数组**：
+SOP 有序集符号 → 各字节（低半字节先行）→ 按规范算出的 CRC-32 → EOP。
+这份 bits 与 `BmcDecoder` 的输出格式完全等价（`_sym()` 就是它的逆），
+`PdDecoder#decodeWire()` 之后直接复用 `decode()` ——
+报文头、VDM、PDO/RDO、扩展消息、跨报文状态（PDO 登记表、SOP 电源角色）**全都一致**，
+不会出现「两条路径慢慢跑偏」。
+
+三个必须守住的细节：
+
+| 细节 | 做法 | 为什么 |
+| ---- | ---- | ------ |
+| **位序** | 符号值先查 `DEC4B5B` 的**逆**得到查表下标，再按位展开 | `DEC4B5B` 的下标才是「按时间排的 5 个采样位」，值是语义符号。直接拿值当位序列会得到镜像线路码 |
+| **CRC** | 按规范补算 CRC 让流程走通，但置 `crcOk = null` | 分析仪不存 CRC。默认「通过」等于替对方的数据背书 |
+| **时间** | `1 采样点 = 1 ms`（`POWERZ_RATE = 1000`） | POWER-Z 只有毫秒时间戳。映射之后 `totalSamples / sampleRate` 仍是秒、`startSample` 仍是时间轴坐标，**界面所有换算不必为新格式开分支** |
+
+### SQLite 读取器
+
+`src/js/core/sqlite.js` 是**自己写的只读 SQLite 读取器**（约 340 行，零依赖）。
+不引 sql.js 是为了守住本工程的三条硬约定：零第三方依赖、浏览器/Node 双栈、
+单文件双击可跑（sql.js 要 WASM 体积 + fetch 同目录 `.wasm` + Node 侧 fs，三条全破）。
+覆盖面按需裁剪：
+
+* 数据库头 100 字节（页大小 / 保留区 / 文本编码 / 页数）、`sqlite_master` 建表语句；
+* 表 B-tree：叶子页 + 内部页（多级递归下钻）；
+* 记录格式：varint 头 + serial type → int / float / text / blob / NULL；
+* 溢页链（payload 超过一页时按规范公式算「页内字节数」再顺链取完）。
+
+**明确不支持**（读不到，遇到会显式报错而不是静默乱码）：索引页（只顺序读全表，用不上）、
+未 checkpoint 的 WAL 内容（导出文件都是回滚日志模式）、加密库、UTF-16 文本编码、虚拟表。
+
+> **两个反直觉的坑**：① 记录的「头长度」是**绝对字节数、含它自己那个 varint**，
+> 数据区起点就直接是它（写成 `size + value` 会整体后移，症状是列名被啃掉头两个字符）；
+> ② 内部页的 cell 是「分隔键 + 左子页指针」，**本身不是一行**，统计行数只能累加叶子页。
+
+### 逐条核对
+
+```bash
+npm run powerz:inspect              # 全样本体检（默认读仓库上一级的 .sqlite）
+npm run powerz:inspect -- --packets # 连类型分布一起打
+npm run e2e:powerz                  # 端到端：拖拽 .sqlite 进单文件版，31 项断言 + 截图
+```
 
 
 ## PD 协议解析库
@@ -476,6 +574,8 @@ PDScope/
 │  │   ├─ zip.js          ZIP 读取（含 ZIP64 / EOCD 定位）
 │  │   ├─ inflate.js      deflate-raw 解压（浏览器 DecompressionStream / Node zlib）
 │  │   ├─ atkcc.js        .atkcc 容器解析
+│  │   ├─ sqlite.js       只读 SQLite 读取器（POWER-Z 导出用的库格式，零依赖自写）
+│  │   ├─ powerz.js       POWER-Z（.sqlite）适配层：嗅探 / Raw blob 拆事件 / 解码编排
 │  │   ├─ bmc.js          游程提取 + BMC 状态机
 │  │   ├─ pd_tables.js    4B5B / SOP 等低层符号表（供旧脚本使用）
 │  │   ├─ pd.js           兼容转发层 → `src/js/pd/`（旧导入路径不破坏）
@@ -493,13 +593,14 @@ PDScope/
 ├─ artifacts/             自检产物：截图 + 报告（不入库，也不进安装包）
 ├─ .github/workflows/     CI：10 个目标一起构建（build.yml，见上文「CI 构建」一节）
 └─ tools/
-   ├─ cli.js              命令行解析（table / --json / --csv / --rate 强制指定采样率）
+   ├─ cli.js              命令行解析（.atkcc / .sqlite 自动分流；table / --json / --csv / --rate）
    ├─ version-check.mjs   版本号五处一致性检查（自检链第一步）
    ├─ syntax.mjs          全量语法检查（node --check，几秒）
    ├─ ci-checksum.mjs     给 CI 产物生成 .sha256 校验和（三平台同一套命令）
-   ├─ selftest.js         协议层合成用例自检
+   ├─ selftest.js         协议层合成用例自检（含手搓最小 SQLite 的 POWER-Z 路径回归）
    ├─ ackcheck.js         GOOD CRC 配对校验（跨全部真实抓包）
    ├─ pd-inspect.mjs      PD 解析抽查：线缆链路 plug 信令 + 扩展消息详情 + 全样本体检
+   ├─ powerz-inspect.mjs  POWER-Z（.sqlite）全样本体检：拆帧自检 / 连接事件 / 警告 / CRC 口径
    ├─ pd-regress.mjs      与重构前解码器逐包逐字段对比（从 git HEAD 取旧版本）
    ├─ e2e.mjs             无头浏览器端到端自检 + 截图（测单文件版 / 本地服务版）
    ├─ tauri-e2e.mjs       真实 Tauri 窗口里的端到端自检 + 截图（测桌面版）
@@ -536,13 +637,20 @@ PDScope/
 # 版本号 / 语法 / 协议层（纯 Node，秒级）
 node tools/version-check.mjs              # 版本号五处是否一致（最便宜，先跑它）
 node tools/syntax.mjs                     # 全量语法检查（几秒；界面脚本错一个字符就是白屏）
-node tools/selftest.js                    # 合成用例 24 项：4B5B / PD / CRC 语义 + 采样率 + plug 信令
+node tools/selftest.js                    # 合成用例 44 项：4B5B / PD / CRC + 采样率 + plug 信令 + POWER-Z 路径
 node tools/ackcheck.js                    # GOOD CRC 配对（跨 5 份真实抓包）
+node tools/powerz-inspect.mjs             # POWER-Z（.sqlite）全样本体检（需要样本文件，非 0 退出即异常）
 
-# 界面 24 项（走系统已装的 Chrome/Edge，不下载浏览器）
+# 界面 25 项（ATK-C）/ 31 项（POWER-Z）/ 22 通过 + 12 跳过（UFCS 零报文）
+# （走系统已装的 Chrome/Edge，不下载浏览器）
 npm run e2e                               # 单文件版，自包含；会先重建 dist
+npm run e2e:powerz                        # 同上，但拖进去的是 POWER-Z 的 .sqlite
+npm run e2e:ufcs                          # 同上，但拖进去的是零报文的 UFCS 导出
+npm run e2e:all                           # 上面三种样本依次跑一遍（npm test 用的就是它）
 npm run e2e:serve                         # 本地服务模式（需另开 node tools/serve.mjs）
 node tools/e2e.mjs --file dist/PDScope.html --drop "../制糖40w-ip18pro.atkcc"
+node tools/e2e.mjs --file dist/PDScope.html --drop "../山泽60w-ip18pro.sqlite"
+node tools/e2e.mjs --file dist/PDScope.html --drop "../ufcs_vivo_x300u.sqlite"
 
 # 桌面版（在真实 Tauri 窗口里跑）
 npm run app:exe                           # 先出可执行文件
@@ -553,7 +661,7 @@ npm run app:test:open                     # 路径二：命令行打开（≡ �
 npm run check
 ```
 
-> 自检需要根目录上一级存在 `.atkcc` 样本文件；`--drop` / `--open` 都是相对 `PDScope/` 的路径。
+> 自检需要根目录上一级存在抓包样本文件（`.atkcc` / `.sqlite`）；`--drop` / `--open` 都是相对 `PDScope/` 的路径。
 
 **`version-check.mjs`** 把版本号在五个文件里对一遍：`package.json`、`src-tauri/tauri.conf.json`、
 `src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`、`src/ui/app.js`，外加 README 里写着的安装包产物名。
@@ -565,13 +673,21 @@ npm run check
 当前 5 份抓包共 1141 条有效 GOOD CRC **100% 配对成功**，1100 条可校验的配对
 **MessageID 全部一致**，最远距离恒为 1 条报文。
 
-**`selftest.js`** 先用合成报文凭字段校验 4B5B / PD / CRC 语义（8 项），再把同一串报文按
-**1.5 / 2.5 / 4 / 6 MHz** 重新采样一遍（10 项），检查：用真实采样率能解出全部报文、
-波形反推的采样率误差 < 1%、按反推值解码同样得到全部报文，并确认「采样率写错一倍就一条也解不出来」——
-这正是采样率必须动态解析的原因。最后一组（6 项）专测 **plug 信令与扩展消息**：
+**`selftest.js`** 用例共 **44 项**，分五组。第一组先在合成报文的**字段级**校验
+4B5B / PD / CRC 语义（8 项）；第二组把同一串报文按 **1.5 / 2.5 / 4 / 6 MHz**
+重新采样一遍（4 项），检查：用真实采样率能解出全部报文、波形反推的采样率误差 < 1%、
+按反推值解码同样得到全部报文，并确认「采样率写错一倍就一条也解不出来」——
+这正是采样率必须动态解析的原因。第三组（6 项）专测 **plug 信令与扩展消息**：
 SOP' 上 e-Marker 的 Discover Identity 全线缆 VDO、端口侧的 UFP + Padding + DFP 三件套、
 EPR_Source_Capabilities 的 PDO 列表、**分块扩展消息的跨块 PDO 拼接**（拼不回来要标注而不是猜）、
 BIST 模式在 PD 2.0 与 3.x 下的不同含义、Discover SVIDs 的两两成对。
+第四组（6 项）只测 `channel.ini` 的**采样率声明解析**：多键名（`SamplingFrequency` /
+`SampleRate` / 小写下划线写法）、多单位（裸数字 = kHz、`MHz`、`kHz`）、
+以及「只有 `Resolution` 或整个键都缺」时退回默认值。
+第五组（20 项）专测 **POWER-Z 的 `.sqlite` 路径**：Raw blob 的插入/拔出/包裹报文拆帧与
+「拼不通要如实标截断」、`decodeWire` 的语义等价与「CRC 未记录 ≠ 通过」、SQLite 页/记录读取，
+以及 `PowerzCapture` 的端到端（含 UFCS 只做容器不假装解析）。这一组用**手搓的最小 SQLite 库**
+做输入，不依赖任何真实样本，CI 上也能跑。
 
 **`pd-regress.mjs`** 把重构前的解码器从 `git HEAD` 取出来，与新库在同一份抓包上
 **逐包逐字段对比**（sop / msgType / header / crcOk / nObjects / dataWords）。
@@ -580,10 +696,21 @@ BIST 模式在 PD 2.0 与 3.x 下的不同含义、Discover SVIDs 的两两成�
 并在每个样本前打一行「报文 / 线缆链路 / 扩展 / 坏 CRC / 警告」汇总，便于人工核对与全样本体检。
 
 **`e2e.mjs`** 直接走 Chrome DevTools Protocol（用系统已装的 Chrome/Edge，不下载浏览器），
-24 项校验：页面骨架、抓包解码、虚拟滚动、方向过滤、关键字搜索、时间轴绘制、主题切换、
+**25 项**校验：页面骨架、抓包解码、虚拟滚动、方向过滤、关键字搜索、时间轴绘制、主题切换、
 采样率来源标注、**详情面板拖拽改宽**（用真实鼠标事件走一遍 pointer capture，验证加宽 / 落盘 /
-收起还原 / 超限夹紧 / 双击复位）、无控制台异常，最后自动截图。加 `--drop <文件>` 可注入真实抓包；
-`--eval "<js>"` 进调试模式，在页面里跑任意表达式并打印结果。
+收起还原 / 超限夹紧 / 双击复位）、**收起后右缘出现展开把手**、无控制台异常，最后自动截图。
+加 `--drop <文件>` 可注入真实抓包；`--eval "<js>"` 进调试模式，在页面里跑任意表达式并打印结果。
+
+拖进去的若是 `.sqlite`，**另外再跑 6 项**（共 **31 项**）：来源标注为 POWER-Z、
+CRC 统计口径是「未记录」而非「全通过」、插拔事件计数、差分线视图可切换（PD 是 CC1/CC2、
+UFCS 是 DP/DM，档名与标题跟着文件走）且切换后重绘并换标题、切回电压/电流。
+所以 `e2e:powerz` 是 POWER-Z 路径的界面级回归。
+
+拖进去的若是**零报文**的导出（UFCS，语义解析未实现），依赖「列表里有行」的 10 项断言
+**显式跳过**并计入汇总（`22 通过, 0 失败, 12 跳过`），而不是判失败 —— 那些断言在这份样本上
+本就无从谈起。同时改测「零报文路径」本身：常驻提示条讲清原因、顶栏显示原始帧条数、
+表格空态用的是「协议未实现」话术而非「筛选后为空」、时间轴照常绘制、把手能重开详情面板。
+跳过数会打进汇总行，避免「全绿」被误读成「所有断言都跑过了」。
 
 **`tauri-e2e.mjs`** 连的是 Tauri 真正在跑的那个 WebView2（靠
 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` 开调试端口），所以外壳本身也在被测范围里。
@@ -611,6 +738,8 @@ node tools/cli.js "../绿联70w-ip18pro.atkcc" --json           # JSON
 node tools/cli.js "../苹果40w-ip18pro.atkcc" --csv            # CSV
 node tools/cli.js "../apple_40w_avs_iphone_air.atkcc" --scan  # 各通道活动度
 node tools/cli.js "../绿联70w-ip18pro.atkcc" --rate 2400000    # 强制指定采样率（排查用）
+node tools/cli.js "../山泽60w-ip18pro.sqlite"                  # POWER-Z 导出，自动识别
+node tools/cli.js "../ufcs_vivo_x300u.sqlite"                  # UFCS：只出模拟量，并明确提示未解析
 ```
 
 实测样本（`.atkcc` → 报文数 / CRC 错误）：
@@ -622,6 +751,17 @@ node tools/cli.js "../绿联70w-ip18pro.atkcc" --rate 2400000    # 强制指定�
 | 绿联70w-ip18pro            | 1    | 348  | 0        |
 | 苹果40w-ip18pro            | 1    | 738  | 6        |
 | apple_40w_avs_iphone_air   | 24   | 1048 | 5        |
+
+实测样本（`.sqlite` → 报文数 / 线缆链路 / 插拔 / 拆帧自检）：
+
+| 文件                  | 协议   | 表行  | 报文 | 线缆链路 | 扩展 | 插拔 | 时长     | 拆帧自检 |
+| --------------------- | ------ | ----: | ---: | -------: | ---: | ---: | -------- | -------- |
+| 山泽60w-ip18pro       | USB PD | 45    | 44   | 4        | 3    | 1 / 0 | 9.91 s   | ✔ 0 坏包 / 0 截断 |
+| 酷泰科6u-18pro        | USB PD | 77    | 76   | 4        | 7    | 1 / 0 | 8.50 s   | ✔ 0 坏包 / 0 截断 |
+| ufcs_vivo_x300u       | UFCS   | 26099 | 0（未解析） | —  | —    | —     | 2493.98 s | ✔ 容器与模拟量正常 |
+
+（`npm run powerz:inspect` 会把上表连同线缆链路报文与首条扩展消息的完整字段一起打出来；
+CRC 一栏在所有 `.sqlite` 上都是「未记录」—— 分析仪本来就不存 CRC。）
 
 ---
 
@@ -653,6 +793,21 @@ node tools/cli.js "../绿联70w-ip18pro.atkcc" --rate 2400000    # 强制指定�
 * **桌面版没有单实例机制**。程序开着的时候再双击一个 `.atkcc`，会再开一个窗口，而不是
   复用已有窗口。（要改成复用需要引入 `tauri-plugin-single-instance`。）
 * `bus.ini` 里的 VBUS/IBUS 是阶梯保持采样，时间轴按最近邻取值，不做插值。
+  POWER-Z 的 ADC 采样序列同理（也是阶梯保持）。
+* **POWER-Z 的报文不含 CRC**，文件里只存到数据对象为止。界面会按规范补算 CRC 让解析走通，
+  但绝不据此宣布「校验通过」—— 统计行写「CRC 未记录（分析仪不存）」，详情面板单列一行说明，
+  也不会把这类报文算进「只看 CRC 错误」。
+* **POWER-Z 没有波形**，所以「报文时长 / 码率」是按 PD 标称的 600 kbps BMC 时钟折算的
+  线上时长，不是从电平里量出来的（详情面板对应标成「线上时长 / BMC 码率」）。
+  时间轴同理：分析仪只给毫秒时间戳，按「1 采样点 = 1 ms」映射。
+* **UFCS 只做容器与模拟量，不做报文的语义解析**。该协议不在本工程参考的 USB PD 规范内，
+  共用的 4B5B / 报文头 / PDO 那套表都用不上。界面会常驻提示条讲清这一点，
+  并把「已读入 N 条原始帧」如实写进统计行 —— 不假装解析成功，也不谎报失败。
+* **SQLite 读取器不覆盖索引页 / WAL / 加密库 / UTF-16 文本编码 / 虚拟表**。
+  实测的 POWER-Z 导出都是「三张普通表 + 回滚日志模式 + UTF-8」，够用；遇到别的库会显式报错。
+* **`.atkcc` 的文件关联（双击打开）没有为 `.sqlite` 注册** —— 它能被程序正常解析
+  （拖拽、选择文件、命令行都行），只是没在安装包里声明关联。`.sqlite` 是通用扩展名，
+  抢它当关联容易和别的软件打架。
 
 ---
 
@@ -660,7 +815,7 @@ node tools/cli.js "../绿联70w-ip18pro.atkcc" --rate 2400000    # 强制指定�
 
 | 能力                                  | 单文件 HTML | Tauri 桌面 | 本地服务 |
 | ------------------------------------- | :---------: | :--------: | :------: |
-| 拖入 `.atkcc`                         | ✔           | ✔          | ✔        |
+| 拖入 `.atkcc` / `.sqlite`             | ✔           | ✔          | ✔        |
 | 「选择文件」按钮 / `Ctrl+O`            | ✔           | ✔          | ✔        |
 | 解码 / 表格 / 详情 / 时间轴 / 筛选     | ✔           | ✔          | ✔        |
 | 导出 CSV / JSON                        | ✔           | ✔          | ✔        |

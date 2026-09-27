@@ -241,6 +241,9 @@ body.side-collapsed .sidebar{ width:0; opacity:0; overflow:hidden; border-right:
 .chitem.is-on{ border-color:var(--accent); background:var(--accent-sf); color:var(--tx); }
 .chitem b{ font-family:var(--mono); }
 .chitem .act{ margin-left:auto; font-family:var(--mono); font-size:10px; color:var(--tx-3); }
+/* 不可点的说明卡（分析仪导出只有一条通路，没有「选通道」这回事） */
+.chitem.static{ cursor:default; }
+.chitem.static span{ margin-left:auto; font-size:10.5px; color:var(--tx-3); font-family:var(--mono); }
 
 .multisel{ position:relative; }
 .ms-head{
@@ -299,6 +302,24 @@ body.side-collapsed .sidebar{ width:0; opacity:0; overflow:hidden; border-right:
   background:transparent; color:var(--tx-2); font:inherit; font-size:11px;
 }
 .seg-item.is-on{ background:var(--panel); color:var(--accent); font-weight:600; box-shadow:0 1px 2px rgba(0,0,0,.08); }
+
+/* ── 常驻提示条 ──────────────────────────────────────
+   与 toast 的分工：toast 是「刚刚发生了什么」，会自己消失；
+   提示条是「这份文件是什么情况」，在整个浏览过程中都成立，必须一直看得见。 */
+.notice{
+  flex:none; display:flex; align-items:flex-start; gap:9px;
+  padding:9px 12px;
+  background:color-mix(in srgb,var(--warn) 11%,transparent);
+  border-bottom:1px solid color-mix(in srgb,var(--warn) 32%,var(--line));
+  color:var(--tx);
+}
+.notice[hidden]{ display:none; }
+.notice > .i{ width:15px; height:15px; color:var(--warn); margin-top:1px; }
+.notice-txt{ flex:1; min-width:0; }
+.notice-txt b{ display:block; font-size:12px; line-height:1.45; }
+.notice-txt span{ display:block; font-size:11px; color:var(--tx-2); line-height:1.5; margin-top:1px; }
+.notice-txt span[hidden]{ display:none; }
+.notice .btn{ align-self:center; flex:none; }
 
 .table-wrap{
   flex:1 1 auto; min-height:0; display:flex; flex-direction:column;
@@ -391,6 +412,9 @@ body.side-collapsed .sidebar{ width:0; opacity:0; overflow:hidden; border-right:
   padding:0 12px; border-bottom:1px solid var(--line-2);
 }
 .tl-title{ font-size:11px; font-weight:600; color:var(--tx-2); }
+/* 时间轴标题旁的「电压/电流 ↔ CC 线」切换，比工具栏里的分段控件小一号 */
+.tl-head .seg{ padding:1px; }
+.tl-head .seg-item{ height:19px; padding:0 8px; font-size:10.5px; }
 #busCanvas{ flex:1 1 auto; width:100%; display:block; cursor:crosshair; }
 .tl-tip{
   position:absolute; pointer-events:none; display:none;
@@ -428,6 +452,26 @@ body.resizing .detail, body.resizing .sidebar{ transition:none; }
   transition:width .18s ease, opacity .18s ease;
 }
 body.detail-collapsed .detail{ width:0; opacity:0; overflow:hidden; border-left:none; }
+
+/* ── 详情面板收起后的展开把手 ───────────────────────── */
+/* 做成右侧一条 22px 竖栏，而不是浮在时间轴上的圆形按钮：
+   竖栏占布局位、不遮挡画布，也不会随表格滚动跑掉，和左栏收起的观感对称。
+   默认 display:none，只有 body.detail-collapsed 时才出现。 */
+.detail-rail{ display:none; }
+body.detail-collapsed .detail-rail{
+  display:flex; flex-direction:column; align-items:center; gap:8px;
+  flex:none; width:22px; padding:8px 0;
+  border:0; border-left:1px solid var(--line);
+  background:var(--panel); color:var(--tx-3); cursor:pointer;
+  transition:color var(--dur), background var(--dur);
+}
+body.detail-collapsed .detail-rail:hover{ color:var(--accent); background:var(--row-hover); }
+body.detail-collapsed .detail-rail:focus-visible{ outline:2px solid var(--accent); outline-offset:-2px; }
+body.detail-collapsed .detail-rail .i{ width:13px; height:13px; }
+/* 竖排文字：writing-mode 比逐字 <br> 干净，宽度也随字号自适应 */
+body.detail-collapsed .detail-rail span{
+  writing-mode:vertical-rl; font-size:11px; letter-spacing:2px; user-select:none;
+}
 .detail-head{
   height:40px; flex:none; display:flex; align-items:center; gap:4px;
   padding:0 8px 0 12px; border-bottom:1px solid var(--line);
@@ -480,6 +524,14 @@ body.detail-collapsed .detail{ width:0; opacity:0; overflow:hidden; border-left:
 }
 .dhero .t1{ font-size:15px; font-weight:700; margin-bottom:5px; }
 .dhero .t2{ font-size:11px; color:var(--tx-3); font-family:var(--mono); }
+/* 「这条报文不是从波形解出来的」标记：分析仪导出（POWER-Z）的报文要走 decodeWire，
+   码率/时长是标称值折算的，CRC 也不在文件里 —— 必须让人一眼看出出处不同 */
+.dhero .srcbadge{
+  display:inline-block; margin-left:6px; padding:0 5px; border-radius:4px;
+  font-size:9.5px; font-family:var(--font); vertical-align:1px;
+  color:var(--accent); background:var(--accent-sf);
+  border:1px solid color-mix(in srgb,var(--accent) 30%,transparent);
+}
 .dhero-bad{ border-color:color-mix(in srgb,var(--err) 45%,transparent); background:color-mix(in srgb,var(--err) 8%,transparent); }
 
 .dgrid{ display:grid; grid-template-columns:1fr 1fr; gap:1px; background:var(--line-2);

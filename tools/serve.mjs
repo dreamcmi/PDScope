@@ -40,7 +40,7 @@ const MIME = {
   '.map': 'application/json; charset=utf-8',
 };
 
-/** 查找示例抓包：项目目录 + 其父目录（用户把 .atkcc 和 PDScope 放一起的常见情况） */
+/** 查找示例抓包：项目目录 + 其父目录（用户把抓包和 PDScope 放一起的常见情况） */
 async function findSamples() {
   const dirs = [ROOT, resolve(ROOT, '..')];
   const out = [];
@@ -49,7 +49,8 @@ async function findSamples() {
     let names;
     try { names = await readdir(d); } catch { continue; }
     for (const n of names) {
-      if (!/\.atkcc$/i.test(n)) continue;
+      // 两种格式都当示例：ATK-C 的 .atkcc 与 POWER-Z 导出的 .sqlite
+      if (!/\.(atkcc|sqlite)$/i.test(n)) continue;
       const p = join(d, n);
       if (seen.has(p)) continue;
       seen.add(p);

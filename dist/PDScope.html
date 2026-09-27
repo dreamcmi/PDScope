@@ -253,6 +253,9 @@ body.side-collapsed .sidebar{ width:0; opacity:0; overflow:hidden; border-right:
 .chitem.is-on{ border-color:var(--accent); background:var(--accent-sf); color:var(--tx); }
 .chitem b{ font-family:var(--mono); }
 .chitem .act{ margin-left:auto; font-family:var(--mono); font-size:10px; color:var(--tx-3); }
+/* 不可点的说明卡（分析仪导出只有一条通路，没有「选通道」这回事） */
+.chitem.static{ cursor:default; }
+.chitem.static span{ margin-left:auto; font-size:10.5px; color:var(--tx-3); font-family:var(--mono); }
 
 .multisel{ position:relative; }
 .ms-head{
@@ -311,6 +314,24 @@ body.side-collapsed .sidebar{ width:0; opacity:0; overflow:hidden; border-right:
   background:transparent; color:var(--tx-2); font:inherit; font-size:11px;
 }
 .seg-item.is-on{ background:var(--panel); color:var(--accent); font-weight:600; box-shadow:0 1px 2px rgba(0,0,0,.08); }
+
+/* ── 常驻提示条 ──────────────────────────────────────
+   与 toast 的分工：toast 是「刚刚发生了什么」，会自己消失；
+   提示条是「这份文件是什么情况」，在整个浏览过程中都成立，必须一直看得见。 */
+.notice{
+  flex:none; display:flex; align-items:flex-start; gap:9px;
+  padding:9px 12px;
+  background:color-mix(in srgb,var(--warn) 11%,transparent);
+  border-bottom:1px solid color-mix(in srgb,var(--warn) 32%,var(--line));
+  color:var(--tx);
+}
+.notice[hidden]{ display:none; }
+.notice > .i{ width:15px; height:15px; color:var(--warn); margin-top:1px; }
+.notice-txt{ flex:1; min-width:0; }
+.notice-txt b{ display:block; font-size:12px; line-height:1.45; }
+.notice-txt span{ display:block; font-size:11px; color:var(--tx-2); line-height:1.5; margin-top:1px; }
+.notice-txt span[hidden]{ display:none; }
+.notice .btn{ align-self:center; flex:none; }
 
 .table-wrap{
   flex:1 1 auto; min-height:0; display:flex; flex-direction:column;
@@ -403,6 +424,9 @@ body.side-collapsed .sidebar{ width:0; opacity:0; overflow:hidden; border-right:
   padding:0 12px; border-bottom:1px solid var(--line-2);
 }
 .tl-title{ font-size:11px; font-weight:600; color:var(--tx-2); }
+/* 时间轴标题旁的「电压/电流 ↔ CC 线」切换，比工具栏里的分段控件小一号 */
+.tl-head .seg{ padding:1px; }
+.tl-head .seg-item{ height:19px; padding:0 8px; font-size:10.5px; }
 #busCanvas{ flex:1 1 auto; width:100%; display:block; cursor:crosshair; }
 .tl-tip{
   position:absolute; pointer-events:none; display:none;
@@ -440,6 +464,26 @@ body.resizing .detail, body.resizing .sidebar{ transition:none; }
   transition:width .18s ease, opacity .18s ease;
 }
 body.detail-collapsed .detail{ width:0; opacity:0; overflow:hidden; border-left:none; }
+
+/* ── 详情面板收起后的展开把手 ───────────────────────── */
+/* 做成右侧一条 22px 竖栏，而不是浮在时间轴上的圆形按钮：
+   竖栏占布局位、不遮挡画布，也不会随表格滚动跑掉，和左栏收起的观感对称。
+   默认 display:none，只有 body.detail-collapsed 时才出现。 */
+.detail-rail{ display:none; }
+body.detail-collapsed .detail-rail{
+  display:flex; flex-direction:column; align-items:center; gap:8px;
+  flex:none; width:22px; padding:8px 0;
+  border:0; border-left:1px solid var(--line);
+  background:var(--panel); color:var(--tx-3); cursor:pointer;
+  transition:color var(--dur), background var(--dur);
+}
+body.detail-collapsed .detail-rail:hover{ color:var(--accent); background:var(--row-hover); }
+body.detail-collapsed .detail-rail:focus-visible{ outline:2px solid var(--accent); outline-offset:-2px; }
+body.detail-collapsed .detail-rail .i{ width:13px; height:13px; }
+/* 竖排文字：writing-mode 比逐字 <br> 干净，宽度也随字号自适应 */
+body.detail-collapsed .detail-rail span{
+  writing-mode:vertical-rl; font-size:11px; letter-spacing:2px; user-select:none;
+}
 .detail-head{
   height:40px; flex:none; display:flex; align-items:center; gap:4px;
   padding:0 8px 0 12px; border-bottom:1px solid var(--line);
@@ -492,6 +536,14 @@ body.detail-collapsed .detail{ width:0; opacity:0; overflow:hidden; border-left:
 }
 .dhero .t1{ font-size:15px; font-weight:700; margin-bottom:5px; }
 .dhero .t2{ font-size:11px; color:var(--tx-3); font-family:var(--mono); }
+/* 「这条报文不是从波形解出来的」标记：分析仪导出（POWER-Z）的报文要走 decodeWire，
+   码率/时长是标称值折算的，CRC 也不在文件里 —— 必须让人一眼看出出处不同 */
+.dhero .srcbadge{
+  display:inline-block; margin-left:6px; padding:0 5px; border-radius:4px;
+  font-size:9.5px; font-family:var(--font); vertical-align:1px;
+  color:var(--accent); background:var(--accent-sf);
+  border:1px solid color-mix(in srgb,var(--accent) 30%,transparent);
+}
 .dhero-bad{ border-color:color-mix(in srgb,var(--err) 45%,transparent); background:color-mix(in srgb,var(--err) 8%,transparent); }
 
 .dgrid{ display:grid; grid-template-columns:1fr 1fr; gap:1px; background:var(--line-2);
@@ -621,7 +673,7 @@ body.detail-collapsed .detail{ width:0; opacity:0; overflow:hidden; border-left:
       <svg viewBox="0 0 16 16" class="i"><path d="M1.8 12.5V3.6a.9.9 0 0 1 .9-.9h3.1l1.4 1.6h6.1a.9.9 0 0 1 .9.9v7.3a.9.9 0 0 1-.9.9H2.7a.9.9 0 0 1-.9-.9Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
       打开抓包
     </button>
-    <input type="file" id="fileInput" accept=".atkcc,.bin,.zip" hidden />
+    <input type="file" id="fileInput" accept=".atkcc,.sqlite,.db,.bin,.zip" hidden />
   </header>
 
   <!-- ── 主体 ─────────────────────────────────────────────── -->
@@ -729,6 +781,18 @@ body.detail-collapsed .detail{ width:0; opacity:0; overflow:hidden; border-left:
         </div>
       </div>
 
+      <!-- 常驻提示条：讲清「这份文件为什么只解出一部分」（目前用于 UFCS 这类未实现语义解析的协议） -->
+      <div class="notice" id="notice" hidden>
+        <svg viewBox="0 0 16 16" class="i"><path d="M8 2.2 14.4 13H1.6L8 2.2Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M8 6.4v3.1M8 11.4v.1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+        <div class="notice-txt">
+          <b id="noticeText"></b>
+          <span id="noticeSub"></span>
+        </div>
+        <button class="btn ghost icon-only" id="noticeClose" title="知道了">
+          <svg viewBox="0 0 16 16" class="i"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+
       <div class="table-wrap" id="tableWrap">
         <div class="thead" id="thead">
           <div class="th c-idx"    data-k="index">#</div>
@@ -748,19 +812,23 @@ body.detail-collapsed .detail{ width:0; opacity:0; overflow:hidden; border-left:
         </div>
         <div class="empty" id="emptyState">
           <svg viewBox="0 0 64 64" class="empty-art"><rect x="8" y="14" width="48" height="36" rx="6" fill="none" stroke="currentColor" stroke-width="1.6" opacity=".5"/><path d="M18 32h7l3-7 4 14 3-7h11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          <h3>打开一份 .atkcc 抓包文件</h3>
-          <p>由正点原子 ATK-C 抓取的 PD 数据，直接解析、可视化、逐字段溯源。</p>
-          <div class="row gap center">
+          <h3 id="emptyTitle">打开一份 PD 抓包文件</h3>
+          <p id="emptyText">支持正点原子 ATK-C 的 <b>.atkcc</b> 与 POWER-Z 的 <b>.sqlite</b>，直接解析、可视化、逐字段溯源。</p>
+          <div class="row gap center" id="emptyBtns">
             <button class="btn primary" id="btnOpen2">选择文件</button>
             <button class="btn" id="btnDemo">载入示例</button>
           </div>
-          <p class="tiny-note">也可以把 .atkcc 文件直接拖进窗口</p>
+          <p class="tiny-note" id="emptyNote">也可以把文件直接拖进窗口</p>
         </div>
       </div>
 
       <div class="timeline" id="timeline">
         <div class="tl-head">
-          <span class="tl-title">VBUS / IBUS 时间轴</span>
+          <span class="tl-title" id="tlTitle">VBUS / IBUS 时间轴</span>
+          <div class="seg" id="tlSeg" hidden>
+            <button class="seg-item is-on" data-v="power">电压 / 电流</button>
+            <button class="seg-item" data-v="aux" id="tlSegAux">CC 线</button>
+          </div>
           <div class="spacer"></div>
           <label class="switch sm"><input type="checkbox" id="tlFollow" checked /><span></span>跟随选中</label>
           <button class="btn tiny" id="btnTlFit">适应宽度</button>
@@ -788,6 +856,15 @@ body.detail-collapsed .detail{ width:0; opacity:0; overflow:hidden; border-left:
         <div class="detail-empty">点击左侧任意报文查看逐位解析</div>
       </div>
     </aside>
+
+    <!-- 详情面板收起后的展开把手。
+         必需而非装饰：重开详情面板原本只有「点列表里的报文」一条路（select() 里
+         去掉 detail-collapsed），而零报文的抓包（如 UFCS，语义解析未实现）列表本就是空的 ——
+         那种文件一旦按 Esc / 点 × 收起，面板就再也打不开了。 -->
+    <button class="detail-rail" id="btnDetailOpen" title="展开报文详情" aria-controls="detail">
+      <svg viewBox="0 0 16 16" class="i" aria-hidden="true"><path d="M9.5 3.5 5 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span>详情</span>
+    </button>
   </div>
 
   <!-- 拖拽蒙层 -->
@@ -795,7 +872,7 @@ body.detail-collapsed .detail{ width:0; opacity:0; overflow:hidden; border-left:
     <div class="drop-inner">
       <svg viewBox="0 0 48 48" class="i"><path d="M24 8v24M14 24l10 10 10-10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
       <b>松开以解析这份抓包</b>
-      <span>.atkcc / .zip</span>
+      <span>.atkcc · .sqlite</span>
     </div>
   </div>
 
@@ -3847,6 +3924,39 @@ const CTRL_SUMMARY = {
   19: '快速角色交换请求',
 };
 
+/**
+ * 「符号值 → 查表下标」的反查表（`DEC4B5B` 的逆），下标域 0x00…0x16。
+ *
+ * 这里有个必须说清的细节：`DEC4B5B` 的**下标**才是「按时间顺序排的 5 个采样位」
+ * （下标 bit k = 第 k 个采样位），而它的**值**才是符号语义（0x00…0x0F 是数据，
+ * 0x11…0x16 是 K-code）。所以从「符号值」反推采样位时，要先换成下标再按位展开 ——
+ * 直接拿符号值当位序列用会得到一份**镜像**的线路码（症状：SOP 认不出来，
+ * 或错误地匹配成 Hard Reset 之类）。
+ *
+ * 0x00…0x0F 与 0x11…0x16 在 32 个下标里各出现恰好一次（只有 0x10 非法码重复），
+ * 所以这个反查是严格可逆的。
+ */
+const CODE_TO_INDEX = (() => {
+  const t = new Int8Array(0x17).fill(-1);
+  for (let c = 0; c < 32; c++) {
+    const v = DEC4B5B[c];
+    if (v <= 0x16 && t[v] < 0) t[v] = c;
+  }
+  return t;
+})();
+
+/** 一个符号值（0x00…0x0F 数据 / 0x11…0x16 K-code）→ 5 个采样位，bit0 时间最早 */
+function pushSymbol(bits, value) {
+  const c = CODE_TO_INDEX[value];
+  for (let k = 0; k < 5; k++) bits.push((c >> k) & 1);
+}
+
+/** 一个逻辑字节 → 10 个采样位（先低半字节、后高半字节，故 16/32bit 值读出来是**小端**） */
+function pushByte(bits, b) {
+  pushSymbol(bits, b & 0xF);
+  pushSymbol(bits, (b >>> 4) & 0xF);
+}
+
 /** 建立一份全新的解码状态（跨报文关联用） */
 function createState() {
   return {
@@ -4085,6 +4195,70 @@ class PdDecoder {
       eop,
       category: MSG_CATEGORY[shortm] ?? (isExt ? 'data' : 'control'),
     });
+  }
+
+  /**
+   * 由「**已经解码好的** PD 报文逻辑字节」解出一条报文。
+   *
+   * 为什么需要它：ATK-C 的 .atkcc 存的是原始电平采样，本类要先跑 BMC → 4B5B 才能拿到报文；
+   * 而 POWER-Z 这类分析仪的导出（SQLite 的 `Raw` 列）里，报文已经是逻辑字节了：
+   *
+   *     [Header 2B 小端][Data Object ×N，各 4B 小端]        —— 不含 CRC，不含 SOP/EOP
+   *
+   * 为了**一条解析路径都不想复制**，这里反过来把逻辑字节铺成一份「1bit/采样」的数组：
+   *   SOP 有序集符号 → 各字节（低半字节先行）→ 按规范算出的 CRC-32 → EOP
+   * 这份 bits 与 `BmcDecoder` 的输出格式完全等价（`_sym()` 就是它的逆），
+   * 于是 `decode()` 原样复用 —— 头部字段、VDM、PDO/RDO、扩展消息、
+   * 跨报文状态（PDO 登记表、SOP 电源角色）全都一致，不会出现两套解析慢慢跑偏。
+   *
+   * @param {ArrayLike<number>} wire  逻辑字节（Header + Data Objects）
+   * @param {{sop?:string, timeMs?:number, channel?:number,
+   *          crcRecorded?:boolean, extra?:object}} [o]
+   *   sop          有序集名：'SOP' | "SOP'" | "SOP''"
+   *   timeMs       报文时间戳（毫秒）。调用方按「1 采样点 = 1 ms」的约定同时当 startSample 用，
+   *                这样界面里所有「采样点 → 秒」的换算不用为分析仪格式开一条新分支。
+   *   crcRecorded  分析仪是否自己记了 CRC。POWER-Z 不记（只存到数据对象为止），
+   *                此时 CRC 由本方法补齐以便走通流程，并把 crcOk 置 null ——
+   *                **不能**默认它通过，那是在替对方的数据背书。
+   * @returns {object|null}
+   */
+  decodeWire(wire, { sop = 'SOP', timeMs = 0, channel = 0, crcRecorded = false, extra = null } = {}) {
+    const set = ORDERED_SET_BY_NAME[sop] || ORDERED_SET_BY_NAME['SOP'];
+
+    const bits = [];
+    for (const s of set.sequence) pushSymbol(bits, s);
+    const n = wire.length >>> 0;
+    for (let i = 0; i < n; i++) pushByte(bits, wire[i]);
+
+    // 报文线上时长：BMC 600 kbit/s → 1 ms 恰好 600 个比特
+    const calc = crc32(wire);
+    for (const b of [calc & 0xFF, (calc >>> 8) & 0xFF, (calc >>> 16) & 0xFF, (calc >>> 24) & 0xFF]) pushByte(bits, b);
+    pushSymbol(bits, SYM_EOP);
+
+    const durMs = bits.length / 600;
+    const raw = {
+      bits,
+      edges: [],
+      startSample: timeMs,
+      endSample: timeMs + durMs,
+      bitrate: 600000,          // 标称 BMC 时钟（分析仪不测这个，取协议定值）
+      synthetic: true,
+      wireBytes: wire,
+    };
+
+    const pkt = this.decode(raw, channel);
+    if (!pkt) return null;
+
+    pkt.synthetic = true;                 // 报文不是从采样波形解出来的
+    pkt.crcCalc = calc;
+    pkt.crcRecorded = !!crcRecorded;
+    // 分析仪只给逻辑字节，测不到线上的码率与时长 —— 上面那个 600 kbps 是 BMC 标称时钟
+    // （PD 规范定值），据此折算出的时长也只能算「线上时长」。界面必须区别对待，
+    // 不能把它当成从波形量出来的实测值。
+    pkt.bitrateNominal = true;
+    if (!crcRecorded) { pkt.crc = null; pkt.crcOk = null; }
+    if (extra) Object.assign(pkt, extra);
+    return pkt;
   }
 
   /** 方向：与官方上位机的三值口径一致（SRC / SNK / Plug），细节另放字段 */
@@ -4678,18 +4852,34 @@ function busAt(bus, sample) {
 }
 
 /**
- * 把 bus.ini 展开成等间隔序列，用于画图。
- * @returns {{t0:number, dt:number, vbus:Float64Array, ibus:Float64Array, min:number, max:number, vmax:number, imax:number}}
+ * 把模拟量轨迹展开成等间隔序列，用于画图。
+ *
+ * `bus` 与 .atkcc 的 bus.ini 同形（`{sample, vbus, ibus}`）；分析仪导出的抓包
+ * （见 core/powerz.js）会再多两个字段 `a` / `b`（POWER-Z 的 CC1/CC2 或 UFCS 的 DP/DM，
+ * 见 `meta.busLabels`）。有就一并展开成 `ca` / `cb`，没有就是 null —— 界面据此决定
+ * 要不要给出「CC 线」那一档视图，两条路径共用这一个builder。
+ *
+ * @returns {{t0:number, step:number, n:number, vbus:Float64Array, ibus:Float64Array,
+ *            vmax:number, imax:number, sampleRate:number,
+ *            hasAux:boolean, ca:Float64Array|null, cb:Float64Array|null,
+ *            camax:number, cbmax:number}}
  */
 function buildBusSeries(bus, totalSamples, sampleRate, targetPoints = 3000) {
   if (!bus || !bus.length) {
-    return { t0: 0, dt: 0, vbus: new Float64Array(0), ibus: new Float64Array(0), vmax: 0, imax: 0 };
+    return {
+      t0: 0, step: 0, n: 0, vbus: new Float64Array(0), ibus: new Float64Array(0),
+      vmax: 0, imax: 0, sampleRate, hasAux: false, ca: null, cb: null, camax: 0, cbmax: 0,
+    };
   }
+  const hasAux = bus.some((r) => r.a !== undefined || r.b !== undefined);
+
   const step = Math.max(1, Math.floor(totalSamples / targetPoints));
   const n = Math.floor(totalSamples / step) + 1;
   const vbus = new Float64Array(n);
   const ibus = new Float64Array(n);
-  let vmax = 0, imax = 0;
+  const ca = hasAux ? new Float64Array(n) : null;
+  const cb = hasAux ? new Float64Array(n) : null;
+  let vmax = 0, imax = 0, camax = 0, cbmax = 0;
   let j = 0;
   for (let i = 0; i < n; i++) {
     const s = i * step;
@@ -4698,8 +4888,14 @@ function buildBusSeries(bus, totalSamples, sampleRate, targetPoints = 3000) {
     ibus[i] = bus[j].ibus;
     if (vbus[i] > vmax) vmax = vbus[i];
     if (ibus[i] > imax) imax = ibus[i];
+    if (hasAux) {
+      ca[i] = bus[j].a ?? 0;
+      cb[i] = bus[j].b ?? 0;
+      if (ca[i] > camax) camax = ca[i];
+      if (cb[i] > cbmax) cbmax = cb[i];
+    }
   }
-  return { t0: 0, step, n, vbus, ibus, vmax, imax, sampleRate };
+  return { t0: 0, step, n, vbus, ibus, vmax, imax, sampleRate, hasAux, ca, cb, camax, cbmax };
 }
 
 /** 取一段采样区间内的原始电平，用于波形视图（压缩为 min/max 包络） */
@@ -4747,6 +4943,695 @@ async function readWaveform(capture, channel, inflate, startSample, endSample, m
     }
   }
   return { points, bucket, startSample, endSample, sampleRate: capture.meta.sampleRate };
+}
+
+/* ══════ src/js/core/sqlite.js ══════ */
+/**
+ * sqlite.js — 只读 SQLite 数据库文件读取器（纯 JS，零依赖）
+ *
+ * 为什么要自己写
+ * ──────────────
+ * 本工程有三条硬约定：**零第三方依赖**、**浏览器 / Node 双栈通用**、
+ * **单文件可双击直接跑**。引入 sql.js 会同时破坏这三条（WASM 体积 + 需要 fetch
+ * 同目录的 .wasm + 需要 Node 侧的 fs）。而我们面对的是 POWER-Z 导出的
+ * 小型只读库：两张普通表、无索引、无触发器、无视图、无 WAL，
+ * 所以照 SQLite 文件格式规范（https://sqlite.org/fileformat2.html）
+ * 实现「读」这一半就够了，代码量完全可控。
+ *
+ * 覆盖范围
+ * ────────
+ *   · 数据库头 100 字节：页大小、保留区、文本编码、页数
+ *   · sqlite_master（第 1 页）→ 各表的名字、根页号、建表语句
+ *   · 表 B-tree：叶子页 + 内部页（多级时递归下钻）
+ *   · 记录格式：varint 头 + serial type → int / float / text / blob / NULL
+ *   · 溢页：payload 超过一页时按规范公式算出「页内字节数」，再顺着溢页链取完
+ *
+ * 明确不支持的（读不到，也不影响本工程用途，遇到会显式报错而非静默乱码）
+ * ─────────────────────────────────────────────────────────────────────
+ *   · 索引页（0x02 / 0x0A）—— 我们只顺序读全表，用不上
+ *   · WAL 尚未 checkpoint 的内容（导出文件都是普通回滚日志模式）
+ *   · 加密库、UTF-16 文本编码、虚拟表
+ */
+
+/** 数据库头 16 字节魔数 */
+const MAGIC = 'SQLite format 3\u0000';
+
+/** 页类型 */
+const PAGE_INTERIOR_INDEX = 0x02;
+const PAGE_INTERIOR_TABLE = 0x05;
+const PAGE_LEAF_INDEX = 0x0A;
+const PAGE_LEAF_TABLE = 0x0D;
+
+/* ────────────────────────── 基础读取 ────────────────────────── */
+
+/**
+ * 读一个 varint。SQLite 用的是「大端、每字节 7bit、最高位为续读标志」的变长编码，
+ * 最长 9 字节（第 9 字节整字节有效，共能给到 64bit，够覆盖 rowid 与长度）。
+ */
+function varint(u8, off) {
+  let v = 0;
+  for (let i = 0; i < 8; i++) {
+    const b = u8[off + i];
+    v = v * 128 + (b & 0x7F);
+    if ((b & 0x80) === 0) return { value: v, size: i + 1 };
+  }
+  return { value: v * 256 + u8[off + 8], size: 9 };
+}
+
+const u16be = (u8, o) => (u8[o] << 8) | u8[o + 1];
+// 不用 <<24：JavaScript 的位运算只有 32bit 有符号，页号/页数虽远小于 2^31，
+// 但保持乘法写法可以在数值变大时也不会突然变成负数。
+const u32be = (u8, o) => u8[o] * 0x1000000 + (u8[o + 1] << 16) + (u8[o + 2] << 8) + u8[o + 3];
+
+/** 大端定长整数 → JS number（带符号还原；8 字节走 BigInt 以免丢精度） */
+function intBE(u8, o, len) {
+  if (len === 8) {
+    let b = 0n;
+    for (let i = 0; i < 8; i++) b = (b << 8n) | BigInt(u8[o + i]);
+    return Number(BigInt.asIntN(64, b));
+  }
+  let v = 0;
+  for (let i = 0; i < len; i++) v = v * 256 + u8[o + i];
+  const lim = Math.pow(2, len * 8 - 1);
+  return v >= lim ? v - lim * 2 : v;
+}
+
+/** 大端 float64（借用 DataView，注意 u8 可能是大 buffer 的 subarray） */
+function f64BE(u8, o) {
+  const dv = new DataView(u8.buffer, u8.byteOffset + o, 8);
+  return dv.getFloat64(0, false);
+}
+
+/* ────────────────────────── 主体 ────────────────────────── */
+
+class SqliteReader {
+  /** @param {Uint8Array} u8 整个数据库文件的字节 */
+  constructor(u8) {
+    if (!u8 || u8.length < 100) throw new Error('文件过小，不是 SQLite 数据库');
+    let magic = '';
+    for (let i = 0; i < 16; i++) magic += String.fromCharCode(u8[i]);
+    if (magic !== MAGIC) throw new Error('不是 SQLite 数据库（文件头魔数不匹配）');
+
+    this.u8 = u8;
+
+    let ps = u16be(u8, 16);
+    if (ps === 1) ps = 65536;                    // 规范：写 1 表示 64 KiB
+    if (ps < 512 || (ps & (ps - 1)) !== 0) throw new Error(`SQLite 页大小非法：${ps}`);
+    this.pageSize = ps;
+    this.reservedBytes = u8[20];
+    /** 每页真正可用的字节数（页尾可能留给校验/加密） */
+    this.usableSize = ps - this.reservedBytes;
+
+    this.writeVersion = u8[18];                  // 1=回滚日志 2=WAL
+    this.readVersion = u8[19];
+    this.textEncoding = u32be(u8, 56);           // 1=UTF-8 2=UTF-16le 3=UTF-16be
+    this.schemaVersion = u32be(u8, 40);
+    this.pageCount = u32be(u8, 28) || Math.floor(u8.length / ps);
+
+    this._decoder = null;
+    this._tables = null;
+  }
+
+  /** 页号（1 起）→ 该页在文件里的字节偏移 */
+  _offset(pageNo) {
+    const off = (pageNo - 1) * this.pageSize;
+    if (pageNo < 1 || off + this.pageSize > this.u8.length) {
+      throw new Error(`页号 ${pageNo} 越界（文件共 ${this.pageCount} 页）`);
+    }
+    return off;
+  }
+
+  /**
+   * 页内 B-tree 头的偏移。
+   * 第 1 页与众不同：它前面 100 字节是数据库头，B-tree 头从 100 开始。
+   */
+  _headerAt(pageNo) {
+    return this._offset(pageNo) + (pageNo === 1 ? 100 : 0);
+  }
+
+  /* ── 表结构 ── */
+
+  /** @returns {Map<string, {type:string,name:string,tblName:string,root:number,sql:string|null}>} */
+  get tables() {
+    if (this._tables) return this._tables;
+    const out = new Map();
+    for (const r of this._tableRows(1)) {
+      const [type, name, tblName, root, sql] = r;
+      if (name == null) continue;
+      out.set(String(name), {
+        type: String(type ?? ''),
+        name: String(name),
+        tblName: tblName == null ? '' : String(tblName),
+        root: typeof root === 'number' ? root : 0,
+        sql: sql == null ? null : String(sql),
+      });
+    }
+    this._tables = out;
+    return out;
+  }
+
+  /** 表名 → 定义（不存在返回 null） */
+  table(name) { return this.tables.get(name) ?? null; }
+  hasTable(name) { return this.tables.has(name); }
+
+  /* ── 表数据 ── */
+
+  /**
+   * 顺序遍历某张表的全部行，每行是一个「按列顺序排列的值数组」。
+   * 值类型：number | bigint | string | Uint8Array | null
+   */
+  *rows(tableName) {
+    const t = this.table(tableName);
+    if (!t) throw new Error(`表 ${tableName} 不存在`);
+    if (!t.root) return;
+    yield* this._tableRows(t.root);
+  }
+
+  /** 行数（走一遍 B-tree 只数叶子页的 cell，不构造记录；比 rows().length 快得多） */
+  count(tableName) {
+    const t = this.table(tableName);
+    if (!t || !t.root) return 0;
+    let n = 0;
+    const stack = [t.root];
+    while (stack.length) {
+      const pg = stack.pop();
+      const h = this._headerAt(pg);
+      const type = this.u8[h];
+      const cells = u16be(this.u8, h + 3);
+      if (type === PAGE_INTERIOR_TABLE) {
+        // 内部页的 cell 是「分隔键 + 左子页指针」，本身不是一行 —— 不能计入行数
+        const ptr = h + 12;
+        for (let i = 0; i < cells; i++) stack.push(u32be(this.u8, this._offset(pg) + u16be(this.u8, ptr + 2 * i)));
+        stack.push(u32be(this.u8, h + 8));       // 最右子页
+      } else if (type === PAGE_LEAF_TABLE) {
+        n += cells;
+      } else {
+        throw new Error(`游走的不是表 B-tree 页（页 ${pg}，类型 0x${type.toString(16)}）`);
+      }
+    }
+    return n;
+  }
+
+  /** 遍历一棵表 B-tree 的全部行（按 rowid 升序） */
+  *_tableRows(rootPage) {
+    const stack = [rootPage];
+    while (stack.length) {
+      const pg = stack.pop();
+      const base = this._offset(pg);
+      const h = this._headerAt(pg);
+      const type = this.u8[h];
+
+      if (type === PAGE_INTERIOR_TABLE) {
+        const cells = u16be(this.u8, h + 3);
+        const ptr = h + 12;
+        // 子页在页内的排列是 child[0] … child[n-1]、最右子页；按 rowid 升序必须
+        // 「先压最右子页、再倒着压 cells」，这样出栈顺序才是从左到右。
+        stack.push(u32be(this.u8, h + 8));
+        for (let i = cells - 1; i >= 0; i--) {
+          stack.push(u32be(this.u8, base + u16be(this.u8, ptr + 2 * i)));
+        }
+      } else if (type === PAGE_LEAF_TABLE) {
+        const cells = u16be(this.u8, h + 3);
+        const ptr = h + 8;
+        for (let i = 0; i < cells; i++) {
+          const cell = base + u16be(this.u8, ptr + 2 * i);
+          yield this._decodeRecord(this._cellPayload(cell));
+        }
+      } else if (type === PAGE_LEAF_INDEX || type === PAGE_INTERIOR_INDEX) {
+        throw new Error(`页 ${pg} 是索引 B-tree，本读取器只读表`);
+      } else {
+        throw new Error(`未知的页类型 0x${type.toString(16)}（页 ${pg}）`);
+      }
+    }
+  }
+
+  /* ── 记录 ── */
+
+  /**
+   * 取表叶子页某个 cell 的 payload（自动处理溢页）。
+   * cell 布局：payload 长度 varint → rowid varint → payload（可能跨页）
+   */
+  _cellPayload(cell) {
+    const pv = varint(this.u8, cell);
+    const rv = varint(this.u8, cell + pv.size);
+    const start = cell + pv.size + rv.size;
+    const P = pv.value;
+    const U = this.usableSize;
+
+    // 规范：先算「最多能留在本页的字节数」X = U - 35
+    const maxLocal = U - 35;
+    if (P <= maxLocal) return this.u8.subarray(start, start + P);
+
+    // 超了：M = ((U-12)*32/255) - 23；K = M + (P-M) % (U-4)；K ≤ X 则留 K，否则留 M
+    const M = Math.floor(((U - 12) * 32) / 255) - 23;
+    const K = M + ((P - M) % (U - 4));
+    const local = K <= maxLocal ? K : M;
+
+    const out = new Uint8Array(P);
+    out.set(this.u8.subarray(start, start + local), 0);
+    let filled = local;
+    // 页内 payload 末尾 4 字节是第一个溢页号，之后每页前 4 字节指向下一页
+    let next = u32be(this.u8, start + local);
+    const capacity = U - 4;
+    while (next && filled < P) {
+      const o = this._offset(next);
+      const take = Math.min(capacity, P - filled);
+      out.set(this.u8.subarray(o + 4, o + 4 + take), filled);
+      filled += take;
+      next = u32be(this.u8, o);
+    }
+    if (filled < P) throw new Error(`溢页链断裂：记录还需 ${P - filled} 字节`);
+    return out;
+  }
+
+  /**
+   * payload → 值数组。格式：header 长度 varint → serial type varint... → 数据区
+   *
+   * 注意 header 长度这个值的口径（规范原文：“the number of bytes in the header,
+   * **including the bytes in the header size varint**”）—— 它是「从 payload 第 0 字节起、
+   * 到数据区开始为止」的**绝对字节数**，本身就含掉那个长度 varint 自己。
+   * 所以数据区起点 = `hv.value`，不是 `hv.size + hv.value`（写成后者会整体后移，
+   * 然后多读出一个串味的字段 —— 症状是列名/文本被啃掉头两个字符）。
+   */
+  _decodeRecord(payload) {
+    const hv = varint(payload, 0);
+    const headerEnd = hv.value;
+
+    const types = [];
+    let o = hv.size;
+    while (o < headerEnd) {
+      const t = varint(payload, o);
+      types.push(t.value);
+      o += t.size;
+    }
+
+    const out = new Array(types.length);
+    let b = headerEnd;
+    for (let i = 0; i < types.length; i++) {
+      const t = types[i];
+      if (t === 0) { out[i] = null; continue; }
+      if (t === 8) { out[i] = 0; continue; }
+      if (t === 9) { out[i] = 1; continue; }
+      if (t === 10 || t === 11) { out[i] = null; continue; }   // 内部用，规范要求当 NULL
+      if (t === 7) { out[i] = f64BE(payload, b); b += 8; continue; }
+      if (t >= 1 && t <= 6) {
+        const len = [0, 1, 2, 3, 4, 6, 8][t];
+        out[i] = intBE(payload, b, len);
+        b += len;
+        continue;
+      }
+      if (t >= 12 && (t & 1) === 0) {                          // 偶数且 ≥12 → BLOB
+        const len = (t - 12) >> 1;
+        out[i] = payload.slice(b, b + len);
+        b += len;
+        continue;
+      }
+      if (t >= 13) {                                           // 奇数且 ≥13 → TEXT
+        const len = (t - 13) >> 1;
+        out[i] = this._text(payload, b, len);
+        b += len;
+        continue;
+      }
+      out[i] = null;
+    }
+    return out;
+  }
+
+  _text(u8, o, len) {
+    if (!this._decoder) {
+      const enc = this.textEncoding === 1 ? 'utf-8'
+        : this.textEncoding === 2 ? 'utf-16le'
+          : this.textEncoding === 3 ? 'utf-16be' : null;
+      if (!enc) throw new Error(`未知的 SQLite 文本编码 ${this.textEncoding}`);
+      this._decoder = new TextDecoder(enc);
+    }
+    if (len <= 0) return '';
+    return this._decoder.decode(u8.subarray(o, o + len));
+  }
+
+  /** 给界面/日志用的一句话摘要 */
+  describe() {
+    const t = [...this.tables.values()].filter((x) => x.type === 'table').map((x) => x.name);
+    return `${this.pageSize} B/页 · ${this.pageCount} 页 · 文本编码 UTF-8 系(${this.textEncoding}) · 表 [${t.join(', ')}]`;
+  }
+}
+
+/** 是不是 SQLite 文件（只看魔数，不解析） */
+function isSqlite(u8) {
+  if (!u8 || u8.length < 16) return false;
+  for (let i = 0; i < 16; i++) if (u8[i] !== MAGIC.charCodeAt(i)) return false;
+  return true;
+}
+
+/* ══════ src/js/core/powerz.js ══════ */
+/**
+ * powerz.js — POWER-Z（ChargerLAB KM003C 等）SQLite 抓包解析
+ *
+ * ── 为什么是 SQLite ────────────────────────────────────────────────────
+ * ATK-C 存的是原始电平采样（.atkcc：ZIP + 1bit/采样 + BMC 解码），
+ * 而 POWER-Z 的 Windows 上位机导出的是 SQLite 库，报文**已经被分析仪解到逻辑字节**了：
+ *
+ *     pd_chart(Time real, VBUS real, IBUS real, CC1 real, CC2 real)   ADC 采样序列
+ *     pd_table(Time real, Vbus real, Ibus real, Raw Blob)             事件流（二进制）
+ *     pd_table_key(key integer)                                        会话密钥（导出文件里为空）
+ *
+ * UFCS 抓包（国产快充协议）同理，只是表名换成 `ufcs_chart` / `ufcs_table`，
+ * 模拟量换 `DP` / `DM`。
+ *
+ * ── Raw blob 的内部结构（实测归纳，与 powerz-rs 的结论一致）───────────
+ * 一行的 Raw 是**若干事件首尾相接**（本工程遇到的样本里恰好每行一个）：
+ *
+ *   ┌ 连接/状态事件：6 字节，固定 ────────────────────────────────┐
+ *   │ 45 │ ts(3B 小端, 毫秒) │ 00 │ code  （0x11=连接, 0x12=断开）  │
+ *   └────────────────────────────────────────────────────────────┘
+ *   ┌ 包裹的 PD 报文：变长 ──────────────────────────────────────┐
+ *   │ marker │ ts(4B 小端, 毫秒) │ sop │ wire（逻辑字节，无 CRC）  │
+ *   └────────────────────────────────────────────────────────────┘
+ *   marker ∈ 0x80…0xBF：低 6 位 = 总长-1（总长含 marker 自身），高 2 位未用；
+ *   sop：0=SOP，1=SOP'，2=SOP''；
+ *   wire = [Header 2B 小端][Data Object ×N，各 4B 小端]，**不含 CRC、不含 SOP/EOP**
+ *          （CRC 由 pd 库按规范重算，仅用于走通解析，见 PdDecoder#decodeWire）。
+ *
+ * ── 与 ATK 路径的关系 ────────────────────────────────────────────────
+ * 这里**不碰 BMC**：报文交给 `PdDecoder#decodeWire()`，与 .atkcc 共用同一套
+ * 头部/VDM/PDO/扩展消息语义解析，所以两条路径解出来的报文对象字段完全同形，
+ * 界面、筛选、导出、详情面板一行都不用改。
+ *
+ * 时间基准：POWER-Z 只记录毫秒时间戳，没有「采样点」概念。本工程统一按
+ * **1 采样点 = 1 ms**（`POWERZ_RATE`）映射，于是 `totalSamples / sampleRate`
+ * 仍是秒、`startSample` 仍是时间轴坐标，所有既有换算不必为新格式开分支。
+ */
+
+
+
+
+
+/** 时间基准：1 采样点 = 1 毫秒（POWER-Z 只有毫秒时间戳） */
+const POWERZ_RATE = 1000;
+
+/** SOP 字节 → 有序集名 */
+const SOP_BY_BYTE = { 0: 'SOP', 1: "SOP'", 2: "SOP''" };
+
+/** 两种导出的表名与展示信息 */
+const POWERZ_KINDS = {
+  pd: {
+    table: 'pd_table', chart: 'pd_chart',
+    protocol: 'USB PD',
+    /** 额外两路模拟量的名字，对应 `bus[].a` / `bus[].b`（VBUS/IBUS 是共有的两路） */
+    busLabels: ['CC1', 'CC2'],
+    title: 'POWER-Z · USB PD',
+  },
+  ufcs: {
+    table: 'ufcs_table', chart: 'ufcs_chart',
+    protocol: 'UFCS', busLabels: ['DP', 'DM'],
+    title: 'POWER-Z · UFCS',
+    /** UFCS 是另一份独立规范，本工程目前只做「容器 + 模拟量」 */
+    unsupported: 'UFCS 报文的语义解析尚未实现（该协议不在本工程参考的 USB PD 规范内）',
+  },
+};
+
+/**
+ * 只看文件头与 sqlite_master，判断是不是 POWER-Z 导出。
+ * 不做全表扫描，因此对 4 MB 的库也是毫秒级。
+ *
+ * @returns {'pd'|'ufcs'|null}
+ */
+function sniffPowerz(u8) {
+  if (!isSqlite(u8)) return null;
+  try {
+    const db = new SqliteReader(u8);
+    if (db.hasTable('pd_table')) return 'pd';
+    if (db.hasTable('ufcs_table')) return 'ufcs';
+  } catch {
+    /* 魔数对但不是我们认识的库（例如别的 App 的 sqlite）——当作不支持 */
+  }
+  return null;
+}
+
+/* ────────────────────────── Raw blob → 事件 ────────────────────────── */
+
+/**
+ * 把一个 Raw blob 拆成事件序列。
+ * 遇到拼不通的字节就停下并如实标记（`truncated`），不硬猜长度。
+ *
+ * @param {Uint8Array} blob
+ * @returns {{events:Array<object>, truncated:boolean}}
+ */
+function parsePowerzBlob(blob) {
+  const events = [];
+  let off = 0;
+  let truncated = false;
+
+  while (off < blob.length) {
+    const marker = blob[off];
+
+    if (marker === 0x45) {
+      if (off + 6 > blob.length) { truncated = true; break; }
+      const ts = blob[off + 1] | (blob[off + 2] << 8) | (blob[off + 3] << 16);
+      const code = blob[off + 5];
+      events.push({
+        kind: code === 0x12 ? 'disconnect' : (code === 0x11 ? 'connect' : `event:0x${code.toString(16)}`),
+        tsMs: ts,
+      });
+      off += 6;
+      continue;
+    }
+
+    if (marker >= 0x80 && marker <= 0xBF) {
+      const total = marker & 0x3F;
+      if (total < 5) { truncated = true; break; }
+      const wireLen = total - 5;
+      const size = total + 1;
+      if (off + size > blob.length) { truncated = true; break; }
+      const ts = (blob[off + 1] | (blob[off + 2] << 8)
+        | (blob[off + 3] << 16) | (blob[off + 4] << 24)) >>> 0;
+      events.push({
+        kind: 'msg',
+        tsMs: ts,
+        sopByte: blob[off + 5],
+        wire: blob.subarray(off + 6, off + 6 + wireLen),
+      });
+      off += size;
+      continue;
+    }
+
+    // 既不是连接事件也不是包裹报文 —— 说明不是我们认识的 blob，停下
+    truncated = true;
+    break;
+  }
+
+  return { events, truncated };
+}
+
+/* ────────────────────────── 抓包对象 ────────────────────────── */
+
+class PowerzCapture {
+  constructor(db, kind, u8) {
+    this.db = db;
+    this.kind = kind;
+    this.info = POWERZ_KINDS[kind];
+    this.bytes = u8;
+    this.fileBytes = u8.length;
+    this.meta = this._buildMeta();
+  }
+
+  /**
+   * @param {Uint8Array} u8
+   * @returns {PowerzCapture}
+   */
+  static open(u8) {
+    const kind = sniffPowerz(u8);
+    if (!kind) {
+      throw new Error('不是 POWER-Z 导出文件（既不是 SQLite，也没有 pd_table / ufcs_table）');
+    }
+    return new PowerzCapture(new SqliteReader(u8), kind, u8);
+  }
+
+  _buildMeta() {
+    const { db, info } = this;
+
+    const tableRows = db.hasTable(info.table) ? db.count(info.table) : 0;
+    const chartRows = db.hasTable(info.chart) ? db.count(info.chart) : 0;
+
+    // ── 模拟量序列 → 与 .atkcc 的 bus.ini 同形的 {sample, vbus, ibus, …} ──
+    // 时间单位由秒换成毫秒，与 POWERZ_RATE 的口径对齐。
+    const bus = [];
+    let tMax = 0;
+    if (chartRows) {
+      for (const r of db.rows(info.chart)) {
+        const t = Number(r[0]);
+        if (!Number.isFinite(t)) continue;
+        const sample = Math.round(t * 1000);
+        bus.push({ sample, t, vbus: Number(r[1]) || 0, ibus: Number(r[2]) || 0, a: Number(r[3]) || 0, b: Number(r[4]) || 0 });
+        if (sample > tMax) tMax = sample;
+      }
+      bus.sort((x, y) => x.sample - y.sample);
+    }
+
+    const channel = {
+      channel: 0,
+      label: info.protocol,
+      totalSamples: tMax,
+      totalBytes: this.fileBytes,
+      chunks: [],                       // 没有「分块」概念，留空数组让界面统一处理
+    };
+
+    return {
+      source: 'powerz',
+      kind: this.kind,
+      title: info.title,
+      protocol: info.protocol,
+      unsupported: info.unsupported || null,
+
+      sampleRate: POWERZ_RATE,
+      sampleRateSource: 'powerz',
+      sampleRateRaw: null,
+      samplingFrequencyRaw: null,
+      sampleRateNote: 'POWER-Z 导出的是毫秒时间戳，没有采样点波形；时间轴按「1 采样点 = 1 ms」映射',
+
+      totalSamples: tMax,
+      durationSec: tMax / POWERZ_RATE,
+      channels: [channel],
+      channelMap: new Map([[0, channel]]),
+      channelCount: 1,
+
+      bus,
+      busLabels: info.busLabels,
+
+      tableRows,
+      chartRows,
+      entryCount: 0,
+      fileBytes: this.fileBytes,
+      sqlite: {
+        pageSize: this.db.pageSize,
+        pageCount: this.db.pageCount,
+        textEncoding: this.db.textEncoding,
+        writeVersion: this.db.writeVersion,
+      },
+    };
+  }
+
+  get durationSec() { return this.meta.totalSamples / POWERZ_RATE; }
+  effectiveSampleLimit() { return this.meta.totalSamples; }
+  async readChunk() { return null; }    // 没有采样分块可供读取
+
+  /**
+   * 解析成报文列表。产出与 `core/pipeline.js#decodeChannel()` 同形的 `{packets, stats}`，
+   * 因此界面侧两条路径可以共用同一段渲染代码。
+   *
+   * @param {{onProgress?:Function, shouldStop?:()=>boolean}} [opts]
+   */
+  async decode({ onProgress, shouldStop } = {}) {
+    const { db, kind, info } = this;
+
+    // ── 1. 取全部行并按时间排序（导出文件一般已有序，这里不依赖它）──
+    const rows = [];
+    const tableRows = this.meta.tableRows || 0;
+    let i = 0;
+    for (const r of db.rows(info.table)) {
+      rows.push({ t: Number(r[0]) || 0, vbus: Number(r[1]) || 0, ibus: Number(r[2]) || 0, raw: r[3] });
+      if ((i++ & 2047) === 2047) {
+        onProgress?.({ phase: 'read', ratio: tableRows ? i / tableRows : 0, packets: 0 });
+        await new Promise((res) => setTimeout(res, 0));
+        if (shouldStop?.()) break;
+      }
+    }
+    rows.sort((a, b) => a.t - b.t);
+
+    // ── 2. 拆事件 ──
+    // 只对 PD 拆。UFCS 的 Raw 是另一套帧格式（4B 毫秒时间戳 + 自己的帧结构，无 marker 字节），
+    // 硬按 PD 的 marker 去拆只会把每一行都判成「拼不通」—— 那是误导，不如老实不拆。
+    const events = [];
+    let truncated = 0;
+    let frameCount = 0;
+    if (kind === 'pd') {
+      for (const row of rows) {
+        if (!(row.raw instanceof Uint8Array) && !(row.raw instanceof ArrayBuffer)) continue;
+        const blob = row.raw instanceof Uint8Array ? row.raw : new Uint8Array(row.raw);
+        const r = parsePowerzBlob(blob);
+        for (const ev of r.events) events.push({ ...ev, rowT: row.t, vbus: row.vbus, ibus: row.ibus });
+        if (r.truncated) truncated++;
+      }
+    } else {
+      frameCount = rows.length;     // 本工程样本里每行一帧，仅作计数
+    }
+
+    const connects = events.filter((e) => e.kind === 'connect');
+    const disconnects = events.filter((e) => e.kind === 'disconnect');
+
+    // ── 3. 逐条解报文 ──
+    const packets = [];
+    let badWire = 0;
+    let unsupportedMsgs = 0;
+
+    if (kind === 'pd') {
+      // 与 .atkcc 路径共用同一个解码器 → 跨报文状态（PDO 登记表、SOP 电源角色）语义一致
+      const pd = new PdDecoder({ sampleRate: POWERZ_RATE });
+      const msgs = events.filter((e) => e.kind === 'msg');
+      for (let k = 0; k < msgs.length; k++) {
+        const ev = msgs[k];
+        const wire = ev.wire;
+        // 自检：Header 声明的对象数应当与 blob 给的长度吻合，不吻合说明拆帧错了
+        if (wire.length >= 2) {
+          const hdr = wire[0] | (wire[1] << 8);
+          if (2 + 4 * ((hdr >> 12) & 7) !== wire.length) badWire++;
+        } else badWire++;
+
+        const pkt = pd.decodeWire(wire, {
+          sop: SOP_BY_BYTE[ev.sopByte] ?? 'SOP',
+          timeMs: ev.tsMs,
+          channel: 0,
+          crcRecorded: false,
+          extra: { sopByte: ev.sopByte, powerz: true },
+        });
+        if (pkt) packets.push(pkt);
+
+        if ((k & 255) === 255) {
+          onProgress?.({ phase: 'decode', ratio: (k + 1) / msgs.length, packets: packets.length });
+          await new Promise((res) => setTimeout(res, 0));
+          if (shouldStop?.()) break;
+        }
+      }
+    } else {
+      unsupportedMsgs = frameCount;
+    }
+
+    // 序号 + 时间排序（时间戳可能并列，保持解析顺序）
+    packets.sort((a, b) => a.startSample - b.startSample || a.seq - b.seq);
+    packets.forEach((p, idx) => { p.index = idx; });
+    linkGoodCrc(packets);
+
+    const totalSamples = Math.max(this.meta.totalSamples, packets.length ? packets[packets.length - 1].endSample : 0);
+
+    const stats = {
+      channel: 0,
+      source: 'powerz',
+      kind,
+      protocol: info.protocol,
+      unsupported: info.unsupported || null,
+      totalSamples,
+      durationSec: totalSamples / POWERZ_RATE,
+      sampleRate: POWERZ_RATE,
+      sampleRateSource: 'powerz',
+      sampleRateNote: null,
+      edges: 0,
+      trimmedBytes: 0,
+      packetCount: packets.length,
+      badCrc: 0,                          // 分析仪不存 CRC，无从判定 —— 不是「零错误」
+      crcUnknown: packets.length,
+      warnings: packets.reduce((s, p) => s + (p.warnings?.length ?? 0), 0),
+      badWire,
+      truncatedRows: truncated,
+      connectCount: connects.length,
+      disconnectCount: disconnects.length,
+      unsupportedMsgs,
+      events: events.map((e) => ({ kind: e.kind, tsMs: e.tsMs })),
+      tableRows: rows.length,
+      chartRows: this.meta.chartRows,
+    };
+
+    return { packets, stats };
+  }
 }
 
 /* ══════ src/js/core/inflate.js ══════ */
@@ -4815,6 +5700,7 @@ async function makeAutoInflator() {
  * 外壳（任何形态都可以有，也可以没有）通过下面两个入口与界面交互，见文件末尾的
  * 「外壳桥」一节：`window.pdscopeOpenUrl()` 由外壳调用，`window.PDScope` 由外壳/调试读取。
  */
+
 
 
 
@@ -4920,6 +5806,8 @@ const S = {
   busSeries: null,
   selected: -1,
   cancel: false,
+  /** 时间轴画哪一组曲线：'power' = VBUS/IBUS，'aux' = CC1/CC2（POWER-Z） */
+  tlMode: 'power',
   filters: {
     roles: new Set(['SRC', 'SNK', 'Plug']),
     sops: new Set(['SOP', "SOP'", "SOP''", 'Hard Reset', 'Cable Reset']),
@@ -4997,7 +5885,7 @@ addEventListener('drop', (e) => {
   if (f) loadFile(f);
 });
 
-/** 打开一份抓包：读字节 -> 解析容器 -> 选通道 -> 解码 */
+/** 打开一份抓包：读字节 -> 认格式 -> 解析容器 -> 选通道 -> 解码 */
 async function loadFile(file) {
   S.cancel = false;
   showProgress('正在读取文件…', file.name);
@@ -5006,13 +5894,21 @@ async function loadFile(file) {
     const buf = new Uint8Array(await file.arrayBuffer());
     setProgress(0.05, `${fmtSize(buf.length)} 已载入，解析容器…`);
 
-    const cap = await AtkccCapture.open(buf, { inflate });
+    // ── 格式分流：只看文件内容（魔数 + 表名），不看扩展名 ──
+    // POWER-Z 导出的是 SQLite（报文已被分析仪解到逻辑字节），ATK-C 是 ZIP 装的原始采样。
+    // 二者后续的「解码」步骤完全不同，但解出来的报文对象同形，界面只有这一处分叉。
+    const cap = sniffPowerz(buf)
+      ? PowerzCapture.open(buf)
+      : await AtkccCapture.open(buf, { inflate });
+
     S.cap = cap; S.meta = cap.meta;
     S.fileName = file.name; S.fileSize = buf.length;
     S.rate = cap.meta.sampleRate;      // 先用文件声明的值，解码时再由波形自检核一遍
+    S.tlMode = 'power';
+    hideNotice();
 
     const chs = cap.meta.channels;
-    // 多通道时扫描活动度，自动挑一个「有报文」的通道
+    // 多通道时扫描活动度，自动挑一个「有报文」的通道（分析仪导出只有 1 个逻辑通道）
     let pick = chs[0].channel;
     if (chs.length > 1) {
       showProgress('正在扫描各通道活动度…', `${chs.length} 个通道`);
@@ -5034,25 +5930,46 @@ async function loadFile(file) {
     toast(`解析完成 · ${S.packets.length} 条报文 · ${dt} ms`, 'ok');
   } catch (err) {
     console.error(err);
+    // 失败时把状态清干净，别让上一份抓包的表格 / 时间轴留在屏幕上冒充新文件
+    S.cap = null; S.meta = null; S.fileName = ''; S.fileSize = 0;
+    S.packets = []; S.view = []; S.stats = null; S.busSeries = null;
+    S.totalSamples = 0; S.selected = -1; S.chActivity = new Map();
+    renderMeta(); renderChannels(); applyFilters(true); drawTimeline();
     toast('解析失败：' + (err?.message || err), 'err');
     hideProgress();
   }
 }
 
-/** 解码指定通道并刷新整个界面 */
+/**
+ * 解码指定通道并刷新整个界面。
+ *
+ * 两种格式在这里合流：ATK-C 要跑「分块 → BMC → 4B5B」，
+ * POWER-Z 只要拆事件行并把逻辑字节交给同一个 PD 解码器。
+ * 两者产出的 `{packets, stats}` 同形，所以下面这段渲染代码一份都不用复制。
+ */
 async function decodeAndShow(channel) {
   if (!S.cap) return;
   S.cancel = false;
   S.channel = channel;
-  showProgress(`正在解码通道 ${channel}…`, 'BMC 位流 → 4B5B → PD 报文');
+  const pz = S.meta?.source === 'powerz';
+  showProgress(pz ? `正在解析通道 ${channel}…` : `正在解码通道 ${channel}…`,
+    pz ? 'SQLite 事件流 → PD 报文' : 'BMC 位流 → 4B5B → PD 报文');
 
   const t0 = performance.now();
-  const { packets, stats } = await decodeChannel(S.cap, channel, {
-    inflate,
-    bitOrder: 'lsb',
-    shouldStop: () => S.cancel,
-    onProgress: (p) => setProgress(0.3 + 0.65 * p.ratio, `分块 ${p.chunk}/${p.chunks} · 已解出 ${p.packets} 条`),
-  });
+  const { packets, stats } = pz
+    ? await S.cap.decode({
+      shouldStop: () => S.cancel,
+      onProgress: (p) => {
+        if (p.phase === 'read') setProgress(0.30 + 0.30 * p.ratio, `读取事件行 ${Math.round(p.ratio * 100)}%`);
+        else setProgress(0.60 + 0.35 * p.ratio, `已解出 ${p.packets} 条`);
+      },
+    })
+    : await decodeChannel(S.cap, channel, {
+      inflate,
+      bitOrder: 'lsb',
+      shouldStop: () => S.cancel,
+      onProgress: (p) => setProgress(0.3 + 0.65 * p.ratio, `分块 ${p.chunk}/${p.chunks} · 已解出 ${p.packets} 条`),
+    });
 
   // 附上 VBUS / IBUS
   const bus = S.cap.meta.bus;
@@ -5079,46 +5996,90 @@ async function decodeAndShow(channel) {
   S.busSeries = buildBusSeries(bus, total, S.rate, 2400);
   S.totalSamples = total;
 
+  // 该协议只有容器、没有语义解析（目前是 UFCS）→ 明确说清，别让人以为解析失败
+  if (stats.unsupported) showNotice(stats.unsupported, `${stats.unsupportedMsgs} 条原始帧已读入，模拟量轨迹正常可用`);
+  else hideNotice();
+
   buildTypeList();
   resetTimeRange();
   applyFilters(true);
   renderMeta();
   renderChannels();
+  renderTimelineHead();
   setProgress(1, '完成');
   hideProgress();
   drawTimeline();
 }
 
+/* ── 顶部提示条：用来讲清「这份文件为什么只解出一部分」这类事 ──
+   目前只有一种情况用它：分析仪抓到的是本工程未实现语义解析的协议（UFCS）。
+   相比 toast，它不消失 —— 这个信息在整个浏览过程中都成立。 */
+function showNotice(text, sub) {
+  $('#noticeText').textContent = text;
+  $('#noticeSub').textContent = sub || '';
+  $('#noticeSub').hidden = !sub;
+  $('#notice').hidden = false;
+}
+function hideNotice() { $('#notice').hidden = true; }
+$('#noticeClose').addEventListener('click', hideNotice);
+
 /* ═══════════════════════ 顶栏元信息 / 通道 ═══════════════════════ */
+/** 采样率按量级选单位（ATK-C 是 2.5 MHz，POWER-Z 的 1 ms/采样点只有 1 kHz） */
+function fmtRate(hz) {
+  if (hz >= 1e6) return (hz / 1e6).toFixed(2) + ' MHz';
+  if (hz >= 1e3) return (hz / 1e3).toFixed(2) + ' kHz';
+  return hz + ' Hz';
+}
+
 function renderMeta() {
   const chip = $('#fileChip');
   $('#fileName').textContent = S.fileName || '未打开抓包文件';
-  chip.title = `${S.fileName}  ·  ${fmtSize(S.fileSize)}`;
+  chip.title = S.fileName ? `${S.fileName}  ·  ${fmtSize(S.fileSize)}` : '';
   chip.classList.toggle('has', !!S.fileName);
 
   const box = $('#metaChips');
   box.innerHTML = '';
-  if (!S.meta) { $('#btnExport').disabled = true; return; }
+  if (!S.meta) {
+    $('#btnExport').disabled = true;
+    document.documentElement.dataset.source = '';
+    return;
+  }
   const m = S.meta;
+  const pz = m.source === 'powerz';
+  // 标注数据来源，CSS 也据此微调（例如时间轴标题前的方块颜色）
+  document.documentElement.dataset.source = pz ? 'powerz' : 'atkcc';
   const add = (k, v) => box.appendChild(Object.assign(el('span', 'mchip'), { innerHTML: `${k} <b>${v}</b>` }));
 
-  // 采样率：数值 + 来源标记。值不是写死的，来源可能是 channel.ini 的声明、
-  // 也可能是波形自检反推出来的（文件没声明或声明得离谱时），所以必须标出来。
+  add('来源', pz ? esc(m.title) : 'ATK-C · .atkcc');
+
+  // 时间基准 / 采样率：数值 + 来源标记。值不是写死的 —— ATK-C 来自 channel.ini 的声明，
+  // 也可能由波形自检反推；POWER-Z 只有毫秒时间戳，按「1 采样点 = 1 ms」映射。
   const rate = S.rate || m.sampleRate;
   const src = S.stats?.sampleRateSource || m.sampleRateSource || 'declared';
-  const tag = { declared: '文件声明', measured: '波形实测', default: '默认值', override: '手动指定' }[src] || src;
+  const tag = {
+    declared: '文件声明', measured: '波形实测', default: '默认值',
+    override: '手动指定', powerz: '分析仪时间戳',
+  }[src] || src;
   const rateChip = el('span', 'mchip');
-  rateChip.innerHTML = `采样率 <b>${(rate / 1e6).toFixed(2)} MHz</b>`
+  rateChip.innerHTML = `采样率 <b>${fmtRate(rate)}</b>`
     + `<span class="mtag${src === 'measured' || src === 'override' ? ' warn' : ''}">${tag}</span>`;
   rateChip.title = S.stats?.sampleRateNote
-    || (m.sampleRateRaw ? `取自 channel.ini：${m.sampleRateRaw}` : '文件未声明采样率，用默认值');
+    || (pz ? 'POWER-Z 只记录毫秒时间戳，时间轴按「1 采样点 = 1 ms」映射'
+      : (m.sampleRateRaw ? `取自 channel.ini：${m.sampleRateRaw}` : '文件未声明采样率，用默认值'));
   box.appendChild(rateChip);
 
   const dur = (S.totalSamples || m.totalSamples) / rate;
   add('时长', dur >= 60 ? (dur / 60).toFixed(2) + ' min' : dur.toFixed(2) + ' s');
+
   if (S.packets.length) {
     add('报文', S.packets.length);
     if (S.stats?.badCrc) add('CRC 错误', `<span style="color:var(--bad)">${S.stats.badCrc}</span>`);
+  } else if (pz && S.stats?.unsupportedMsgs) {
+    add('原始帧', S.stats.unsupportedMsgs);
+  }
+  // 连接事件是分析仪导出独有的（ATK-C 只存波形，看不到 DFP/UFP 的插入动作）
+  if (pz && (S.stats?.connectCount || S.stats?.disconnectCount)) {
+    add('插拔', `${S.stats.connectCount ?? 0} / ${S.stats.disconnectCount ?? 0}`);
   }
   if (m.channels.length > 1) add('通道', m.channels.length);
 }
@@ -5127,7 +6088,21 @@ function renderChannels() {
   const box = $('#chList');
   box.innerHTML = '';
   if (!S.meta) { $('#chHint').textContent = ''; return; }
-  const chs = S.meta.channels;
+  const m = S.meta;
+
+  // 分析仪导出没有「通道」这个概念（一条 CC 线就是一条通路），给一张说明卡而不是可点的列表
+  if (m.source === 'powerz') {
+    const pz = S.stats;
+    $('#chHint').textContent = '单通路';
+    const b = el('div', 'chitem static is-on');
+    b.innerHTML = `<b>${esc(m.protocol)}</b><span>${(pz?.tableRows ?? m.tableRows)} 行事件</span>`;
+    b.title = `${m.title}｜SQLite ${m.sqlite.pageSize} B/页 · ${m.sqlite.pageCount} 页`
+      + `｜ADC 采样 ${m.chartRows} 点｜时间轴纵轴 ${m.busLabels.join(' / ')}`;
+    box.appendChild(b);
+    return;
+  }
+
+  const chs = m.channels;
   $('#chHint').textContent = chs.length > 1 ? `${chs.length} 个通道（已按活动度排序）` : '';
 
   const list = [...chs].sort((a, b) => (S.chActivity.get(b.channel) ?? 0) - (S.chActivity.get(a.channel) ?? 0));
@@ -5311,12 +6286,30 @@ function updateCounters() {
 
   const total = S.packets.length, shown = S.view.length;
   const bad = S.packets.filter((p) => p.crcOk === false).length;
-  $('#statLine').innerHTML = S.packets.length
-    ? `显示 <b>${shown}</b> / ${total} 条报文`
+  // 分析仪只存到数据对象为止，不记 CRC（见 core/powerz.js）——
+  // 这种情况必须说「未记录」，不能笼统地报「全通过」。
+  const unknown = S.packets.filter((p) => p.crcOk === null).length;
+
+  const crc = bad ? ` · <span class="bad">CRC 错误 ${bad}</span>`
+    : unknown && unknown === total ? ' · <span style="color:var(--tx-3)">CRC 未记录（分析仪不存）</span>'
+      : unknown ? ` · <span style="color:var(--tx-3)">CRC 未知 ${unknown}</span>`
+        : ' · <span style="color:var(--ok)">CRC 全通过</span>';
+
+  let line;
+  if (S.packets.length) {
+    line = `显示 <b>${shown}</b> / ${total} 条报文`
       + (shown !== total ? ` <span style="color:var(--tx-3)">（已屏蔽 ${total - shown} 条）</span>` : '')
-      + (bad ? ` · <span class="bad">CRC 错误 ${bad}</span>` : ' · <span style="color:var(--ok)">CRC 全通过</span>')
-      + (S.decodedMs ? ` · <span style="color:var(--tx-3)">解码 ${S.decodedMs} ms</span>` : '')
-    : '等待打开抓包文件…';
+      + crc
+      + (S.decodedMs ? ` · <span style="color:var(--tx-3)">解码 ${S.decodedMs} ms</span>` : '');
+  } else if (S.meta?.source === 'powerz') {
+    // 载入了文件但一条报文都没有：只有「协议未实现语义解析」这一种合理解释
+    line = S.stats?.unsupported
+      ? `已读入 <b>${S.stats.unsupportedMsgs ?? 0}</b> 条原始帧 · <span style="color:var(--warn)">${esc(S.meta.protocol)} 语义解析未实现</span>`
+      : `已读入分析仪导出，但其中没有可解析的报文`;
+  } else {
+    line = '等待打开抓包文件…';
+  }
+  $('#statLine').innerHTML = line;
   $('#btnExport').disabled = !S.packets.length;
 }
 function renderTimeHint() {
@@ -5338,21 +6331,60 @@ function applyTimeRangeFromView() {
 
 /* ═══════════════════════ 报文表（虚拟滚动） ═══════════════════════ */
 const OVERSCAN = 8;
+
+/**
+ * 空列表时说清「为什么空」——三种情况话术完全不同，混用会让人以为解析失败：
+ *   · 还没开文件       → 介绍支持的格式
+ *   · 开了但 0 条报文  → 多半是协议未实现语义解析（UFCS）
+ *   · 有报文但被筛没   → 提示放宽筛选
+ */
+function setEmptyState(kind, extra) {
+  const t = $('#emptyTitle'), p = $('#emptyText'), n = $('#emptyNote');
+  const btns = $('#emptyBtns');
+  btns.style.display = 'flex';
+  if (kind === 'filtered') {
+    t.textContent = '当前筛选条件下没有报文';
+    p.textContent = '试试放宽左侧的方向 / 类型 / 时间筛选，或点「重置全部筛选」。';
+    n.textContent = '';
+    n.hidden = true;
+    return;
+  }
+  if (kind === 'unsupported') {
+    t.textContent = `${extra || '该协议'} 抓包已载入，但语义解析未实现`;
+    p.textContent = '报文容器与 VBUS / IBUS / 差分线模拟量轨迹已正常读出，可以直接在下方时间轴上看电压电流曲线。';
+    n.textContent = '报文列表需要该协议的规范才能逐字段还原，本工程目前只覆盖 USB PD。';
+    n.hidden = false;
+    return;
+  }
+  if (kind === 'nomsg') {
+    t.textContent = '这份导出里没有可解析的报文';
+    p.textContent = '模拟量轨迹仍然可用，请在下方时间轴查看。';
+    n.textContent = '';
+    n.hidden = true;
+    return;
+  }
+  t.textContent = '打开一份 PD 抓包文件';
+  p.innerHTML = '支持正点原子 ATK-C 的 <b>.atkcc</b>（原始电平采样，走 BMC → 4B5B 解码）'
+    + '与 POWER-Z 的 <b>.sqlite</b>（分析仪已解好的逻辑字节），两者解析后逐字段溯源。';
+  n.textContent = '也可以把文件直接拖进窗口';
+  n.hidden = false;
+}
+
 function renderTable() {
   const tbody = $('#tbody');
   const vph = $('#vph'), vrows = $('#vrows');
   const n = S.view.length;
 
-  $('#emptyState').style.display = n ? 'none' : (S.packets.length ? 'none' : 'flex');
   if (!n) {
-    if (S.packets.length) {
-      $('#emptyState').style.display = 'flex';
-      $('#emptyState').querySelector('h3').textContent = '当前筛选条件下没有报文';
-      $('#emptyState').querySelector('p').textContent = '试试放宽左侧的方向 / 类型 / 时间筛选，或点「重置全部筛选」。';
-    }
+    $('#emptyState').style.display = 'flex';
+    if (!S.meta) setEmptyState('none');
+    else if (!S.packets.length) {
+      setEmptyState(S.stats?.unsupported ? 'unsupported' : 'nomsg', S.meta.protocol);
+    } else setEmptyState('filtered');
     vph.style.height = '0px'; vrows.innerHTML = ''; vrows.style.transform = 'translateY(0)';
     return;
   }
+  $('#emptyState').style.display = 'none';
   const RH = S.rowH;
   vph.style.height = n * RH + 'px';
 
@@ -5437,6 +6469,17 @@ function navDetail(d) {
 $('#btnDetailNavPrev').addEventListener('click', () => navDetail(-1));
 $('#btnDetailNavNext').addEventListener('click', () => navDetail(1));
 $('#btnDetailClose').addEventListener('click', () => document.body.classList.add('detail-collapsed'));
+/**
+ * 展开详情面板。存在的理由是「收起之后得有路回来」：
+ * 重开的常规路径是 `select()`（点列表里的报文）里去掉 `detail-collapsed`，
+ * 但零报文的抓包（UFCS 这类未实现语义的协议）列表本来就是空的，
+ * 点不到任何行 ⇒ 面板收起来就永久丢失。所以给一个不依赖数据的入口。
+ */
+$('#btnDetailOpen').addEventListener('click', () => {
+  document.body.classList.remove('detail-collapsed');
+  refitDetailW();               // 展开后可用宽度变了，夹一次
+  scheduleTimelineDraw();       // 中间表格随之变窄，画布要重画
+});
 
 function renderDetail(p) {
   const box = $('#detailBody');
@@ -5445,7 +6488,8 @@ function renderDetail(p) {
 
   h.push(`<div class="dhero ${p.crcOk === false ? 'dhero-bad' : ''}">
     <div class="t1 ${cls}">${esc(p.msgType)}</div>
-    <div class="t2">#${p.index} · ${esc(p.sop)} · ${esc(p.role)} · ID ${p.msgId ?? '-'} · r${p.rev} · ${fmtTime(p.timeMs)}</div>
+    <div class="t2">#${p.index} · ${esc(p.sop)} · ${esc(p.role)} · ID ${p.msgId ?? '-'} · r${p.rev} · ${fmtTime(p.timeMs)}`
+    + (p.synthetic ? '<span class="srcbadge">分析仪逻辑字节</span>' : '') + `</div>
   </div>`);
 
   if (p.warnings?.length) {
@@ -5457,9 +6501,10 @@ function renderDetail(p) {
     ${cell('VBUS', p.vbus.toFixed(3) + ' V')}
     ${cell('IBUS', p.ibus.toFixed(3) + ' A')}
     ${cell('起始时间', fmtTime(p.timeMs))}
-    ${cell('报文时长', p.durationUs.toFixed(1) + ' µs')}
+    ${cell(p.bitrateNominal ? '线上时长' : '报文时长', p.durationUs.toFixed(1) + ' µs')}
     ${cell('数据对象', String(p.nObjects ?? 0))}
-    ${cell('实测码率', (p.bitrate / 1000).toFixed(1) + ' kbps')}
+    ${cell(p.bitrateNominal ? 'BMC 码率' : '实测码率', (p.bitrate / 1000).toFixed(1) + ' kbps')}
+    ${cell('CRC', p.crcOk === null ? '未记录（分析仪不存）' : p.crcOk ? '通过' : '校验失败')}
     ${p.ackOf != null ? cell('确认的报文', `#${p.ackOf} · ${p.ackType || ''}`) : ''}
   </div></div>`);
 
@@ -5547,6 +6592,64 @@ function dgroupHtml(title, items, idx) {
 /* ═══════════════════════ 时间轴 ═══════════════════════ */
 const cv = $('#busCanvas');
 let TL = { x0: 0, y0: 0, w: 0, h: 0, dpr: 1, drag: null };
+
+/**
+ * 时间轴当前该画哪一对曲线。
+ *
+ * ATK-C 的 bus.ini 只有 VBUS / IBUS；POWER-Z 的 `pd_chart` 还多两路
+ * （PD 是 CC1/CC2，UFCS 是 DP/DM，名字见 `meta.busLabels`）。
+ * 这两路的量程与 VBUS 差一个数量级（3V 对 20V），叠在同一根纵轴上会糊成一条线，
+ * 所以做成「两档视图」而不是叠加，纵轴刻度、提示文本都跟着换。
+ */
+function tlCurves() {
+  const s = S.busSeries;
+  if (!s || !s.n) return null;
+  if (S.tlMode === 'aux' && s.hasAux) {
+    const [la, lb] = S.meta?.busLabels ?? ['A', 'B'];
+    return {
+      aux: true,
+      title: `${la} / ${lb} 时间轴`,
+      lName: la, rName: lb,
+      l: s.ca, r: s.cb,
+      lmax: Math.max(0.5, s.camax * 1.12),
+      rmax: Math.max(0.5, s.cbmax * 1.12),
+      lUnit: 'V', rUnit: 'V',
+      lDigits: 3, rDigits: 3,
+      lColor: '--plug', rColor: '--snk',
+    };
+  }
+  return {
+    aux: false,
+    title: 'VBUS / IBUS 时间轴',
+    lName: 'VBUS', rName: 'IBUS',
+    l: s.vbus, r: s.ibus,
+    lmax: Math.max(5, s.vmax * 1.12),
+    rmax: Math.max(0.5, s.imax * 1.12),
+    lUnit: 'V', rUnit: 'A',
+    lDigits: 1, rDigits: 2,
+    lColor: '--accent', rColor: '--data',
+  };
+}
+
+/** 时间轴标题 + 「电压/电流 ↔ 差分线」两档切换（后者只有分析仪导出才有数据） */
+function renderTimelineHead() {
+  const seg = $('#tlSeg');
+  const cur = tlCurves();
+  $('#tlTitle').textContent = cur ? cur.title : 'VBUS / IBUS 时间轴';
+  const labels = S.meta?.busLabels ?? [];
+  const hasAux = !!S.busSeries?.hasAux && labels.length === 2;
+  // 档名跟着文件给的两路名字走：PD 是 CC 线，UFCS 是 DP / DM
+  $('#tlSegAux').textContent = labels[0] === 'CC1' ? 'CC 线' : labels.join(' / ');
+  seg.hidden = !hasAux;
+  if (!hasAux) S.tlMode = 'power';
+  $$('#tlSeg .seg-item').forEach((b) => b.classList.toggle('is-on', b.dataset.v === S.tlMode));
+}
+$$('#tlSeg .seg-item').forEach((b) => b.addEventListener('click', () => {
+  S.tlMode = b.dataset.v;
+  renderTimelineHead();
+  drawTimeline();
+}));
+
 function drawTimeline(selPkt) {
   const s = S.busSeries;
   const box = cv.parentElement;
@@ -5563,7 +6666,6 @@ function drawTimeline(selPkt) {
   const cLine = cs.getPropertyValue('--line').trim();
   const cTx3 = cs.getPropertyValue('--tx-3').trim();
   const cAccent = cs.getPropertyValue('--accent').trim();
-  const cData = cs.getPropertyValue('--data').trim();
   const cSnk = cs.getPropertyValue('--snk').trim();
   const cSrc = cs.getPropertyValue('--src').trim();
   const cPlug = cs.getPropertyValue('--plug').trim();
@@ -5579,42 +6681,45 @@ function drawTimeline(selPkt) {
     g.beginPath(); g.moveTo(x0, y + .5); g.lineTo(x0 + W, y + .5); g.stroke();
   }
 
-  if (!s || !s.n) {
+  const cur = tlCurves();
+  if (!cur) {
     g.fillStyle = cTx3; g.font = '11px sans-serif';
-    g.fillText(S.cap ? '该抓包没有 bus.ini 模拟量数据' : '打开抓包后显示 VBUS / IBUS', x0 + 8, y0 + H / 2);
+    g.fillText(S.cap ? '这份抓包没有模拟量轨迹数据' : '打开抓包后显示 VBUS / IBUS', x0 + 8, y0 + H / 2);
     return;
   }
 
+  const themeVar = { '--accent': cAccent, '--data': cs.getPropertyValue('--data').trim(), '--plug': cPlug, '--snk': cSnk };
+  const colL = themeVar[cur.lColor] || cAccent;
+  const colR = themeVar[cur.rColor] || cAccent;
+
   const N = s.n;
   const xs = (i) => x0 + (i / (N - 1)) * W;
-  const vmax = Math.max(5, s.vmax * 1.12);
-  const imax = Math.max(0.5, s.imax * 1.12);
-  const yV = (v) => y0 + H - (v / vmax) * H;
-  const yI = (v) => y0 + H - (v / imax) * H;
+  const yL = (v) => y0 + H - (v / cur.lmax) * H;
+  const yR = (v) => y0 + H - (v / cur.rmax) * H;
 
-  // 填充 VBUS
+  // 填充左轴曲线
   g.beginPath();
   g.moveTo(x0, y0 + H);
-  for (let i = 0; i < N; i++) g.lineTo(xs(i), yV(s.vbus[i]));
+  for (let i = 0; i < N; i++) g.lineTo(xs(i), yL(cur.l[i]));
   g.lineTo(x0 + W, y0 + H); g.closePath();
-  g.fillStyle = hexA(cAccent, .16); g.fill();
+  g.fillStyle = hexA(colL, .16); g.fill();
 
-  // VBUS 线
+  // 左轴曲线
   g.beginPath();
-  for (let i = 0; i < N; i++) i ? g.lineTo(xs(i), yV(s.vbus[i])) : g.moveTo(xs(i), yV(s.vbus[i]));
-  g.strokeStyle = cAccent; g.lineWidth = 1.7; g.stroke();
+  for (let i = 0; i < N; i++) i ? g.lineTo(xs(i), yL(cur.l[i])) : g.moveTo(xs(i), yL(cur.l[i]));
+  g.strokeStyle = colL; g.lineWidth = 1.7; g.stroke();
 
-  // IBUS 线
+  // 右轴曲线
   g.beginPath();
-  for (let i = 0; i < N; i++) i ? g.lineTo(xs(i), yI(s.ibus[i])) : g.moveTo(xs(i), yI(s.ibus[i]));
-  g.strokeStyle = cData; g.lineWidth = 1.3; g.setLineDash([3, 2]); g.stroke(); g.setLineDash([]);
+  for (let i = 0; i < N; i++) i ? g.lineTo(xs(i), yR(cur.r[i])) : g.moveTo(xs(i), yR(cur.r[i]));
+  g.strokeStyle = colR; g.lineWidth = 1.3; g.setLineDash([3, 2]); g.stroke(); g.setLineDash([]);
 
   // 坐标轴刻度
   g.fillStyle = cTx3; g.font = '10px ui-monospace, monospace';
   for (let i = 0; i <= 4; i++) {
     const y = y0 + (H * i) / 4;
-    g.textAlign = 'right'; g.fillText((vmax * (1 - i / 4)).toFixed(1) + 'V', x0 - 5, y + 3);
-    g.textAlign = 'left'; g.fillText((imax * (1 - i / 4)).toFixed(2) + 'A', x0 + W + 5, y + 3);
+    g.textAlign = 'right'; g.fillText((cur.lmax * (1 - i / 4)).toFixed(cur.lDigits) + cur.lUnit, x0 - 5, y + 3);
+    g.textAlign = 'left'; g.fillText((cur.rmax * (1 - i / 4)).toFixed(cur.rDigits) + cur.rUnit, x0 + W + 5, y + 3);
   }
 
   // 报文刻度
@@ -5696,11 +6801,14 @@ cv.addEventListener('mousemove', (e) => {
   const r = cv.getBoundingClientRect();
   const x = e.clientX - r.left, y = e.clientY - r.top;
   const tip = $('#tlTip');
-  if (!S.busSeries || x < TL.x0 || x > TL.x0 + TL.w) { tip.style.display = 'none'; return; }
+  const cur = tlCurves();
+  if (!cur || x < TL.x0 || x > TL.x0 + TL.w) { tip.style.display = 'none'; return; }
   const t = TL.xToTime(x);
   const i = clamp(Math.round(t * (S.busSeries.n - 1)), 0, S.busSeries.n - 1);
   const sec = (t * (S.totalSamples || 1)) / (S.rate || 1);
-  tip.textContent = `${sec.toFixed(3)}s  ${S.busSeries.vbus[i].toFixed(3)}V  ${S.busSeries.ibus[i].toFixed(3)}A`;
+  tip.textContent = `${sec.toFixed(3)}s  `
+    + `${cur.lName} ${cur.l[i].toFixed(cur.lDigits)}${cur.lUnit}  `
+    + `${cur.rName} ${cur.r[i].toFixed(cur.rDigits)}${cur.rUnit}`;
   tip.style.display = 'block';
   tip.style.left = x + 'px';
   tip.style.top = (y - 6) + 'px';
@@ -5835,7 +6943,7 @@ $('#btnExport').addEventListener('click', () => {
   document.body.appendChild(wrap);
 });
 function exportAs(fmt) {
-  const base = (S.fileName || 'pdscope').replace(/\.atkcc$/i, '');
+  const base = (S.fileName || 'pdscope').replace(/\.(atkcc|sqlite|db)$/i, '');
   let blob, name;
   if (fmt === 'csv') {
     const head = ['#', 'SOP', 'MsgType', 'ID', 'Direction', 'Objects', 'Elapsed', 'Time(ms)', 'VBUS(V)', 'IBUS(A)', 'Data', 'CRC', 'Note'];
@@ -5961,6 +7069,8 @@ window.PDScope = {
   status: () => ({
     env: ENV.name,
     file: S.fileName,
+    source: S.meta?.source ?? null,        // 'atkcc'（容器里没有这个字段）| 'powerz'
+    protocol: S.meta?.protocol ?? 'USB PD',
     channel: S.channel,
     packets: S.packets?.length ?? 0,
     filtered: S.view?.length ?? 0,
@@ -5976,6 +7086,7 @@ setDetailW(Number.isFinite(savedDetailW) ? savedDetailW : DETAIL_W_DEF, false);
 // 标注形态，便于 CSS 按形态微调（桌面版没有「载入示例」，单文件版可用 file: 特有能力）
 document.documentElement.dataset.env = ENV.name;
 initSamples();
+renderTimelineHead();
 requestAnimationFrame(() => drawTimeline());
 // 就绪信号：外壳据此决定何时把命令行里带的抓包文件推进来
 window.PDScope.ready = true;

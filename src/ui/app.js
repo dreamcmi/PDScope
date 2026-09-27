@@ -20,6 +20,7 @@
 
 import { AtkccCapture, scanChannelActivity } from '../js/core/atkcc.js';
 import { decodeChannel, buildBusSeries } from '../js/core/pipeline.js';
+import { PowerzCapture, sniffPowerz } from '../js/core/powerz.js';
 import { makeBrowserInflator } from '../js/core/inflate.js';
 
 /* ═══════════════════════ 运行形态探测 ═══════════════════════ */
@@ -122,6 +123,8 @@ const S = {
   busSeries: null,
   selected: -1,
   cancel: false,
+  /** 时间轴画哪一组曲线：'power' = VBUS/IBUS，'aux' = CC1/CC2（POWER-Z） */
+  tlMode: 'power',
   filters: {
     roles: new Set(['SRC', 'SNK', 'Plug']),
     sops: new Set(['SOP', "SOP'", "SOP''", 'Hard Reset', 'Cable Reset']),
@@ -199,7 +202,7 @@ addEventListener('drop', (e) => {
   if (f) loadFile(f);
 });
 
-/** 打开一份抓包：读字节 -> 解析容器 -> 选通道 -> 解码 */
+/** 打开一份抓包：读字节 -> 认格式 -> 解析容器 -> 选通道 -> 解码 */
 async function loadFile(file) {
   S.cancel = false;
   showProgress('正在读取文件…', file.name);
@@ -208,13 +211,21 @@ async function loadFile(file) {
     const buf = new Uint8Array(await file.arrayBuffer());
     setProgress(0.05, `${fmtSize(buf.length)} 已载入，解析容器…`);
 
-    const cap = await AtkccCapture.open(buf, { inflate });
+    // ── 格式分流：只看文件内容（魔数 + 表名），不看扩展名 ──
+    // POWER-Z 导出的是 SQLite（报文已被分析仪解到逻辑字节），ATK-C 是 ZIP 装的原始采样。
+    // 二者后续的「解码」步骤完全不同，但解出来的报文对象同形，界面只有这一处分叉。
+    const cap = sniffPowerz(buf)
+      ? PowerzCapture.open(buf)
+      : await AtkccCapture.open(buf, { inflate });
+
     S.cap = cap; S.meta = cap.meta;
     S.fileName = file.name; S.fileSize = buf.length;
     S.rate = cap.meta.sampleRate;      // 先用文件声明的值，解码时再由波形自检核一遍
+    S.tlMode = 'power';
+    hideNotice();
 
     const chs = cap.meta.channels;
-    // 多通道时扫描活动度，自动挑一个「有报文」的通道
+    // 多通道时扫描活动度，自动挑一个「有报文」的通道（分析仪导出只有 1 个逻辑通道）
     let pick = chs[0].channel;
     if (chs.length > 1) {
       showProgress('正在扫描各通道活动度…', `${chs.length} 个通道`);
@@ -236,25 +247,46 @@ async function loadFile(file) {
     toast(`解析完成 · ${S.packets.length} 条报文 · ${dt} ms`, 'ok');
   } catch (err) {
     console.error(err);
+    // 失败时把状态清干净，别让上一份抓包的表格 / 时间轴留在屏幕上冒充新文件
+    S.cap = null; S.meta = null; S.fileName = ''; S.fileSize = 0;
+    S.packets = []; S.view = []; S.stats = null; S.busSeries = null;
+    S.totalSamples = 0; S.selected = -1; S.chActivity = new Map();
+    renderMeta(); renderChannels(); applyFilters(true); drawTimeline();
     toast('解析失败：' + (err?.message || err), 'err');
     hideProgress();
   }
 }
 
-/** 解码指定通道并刷新整个界面 */
+/**
+ * 解码指定通道并刷新整个界面。
+ *
+ * 两种格式在这里合流：ATK-C 要跑「分块 → BMC → 4B5B」，
+ * POWER-Z 只要拆事件行并把逻辑字节交给同一个 PD 解码器。
+ * 两者产出的 `{packets, stats}` 同形，所以下面这段渲染代码一份都不用复制。
+ */
 async function decodeAndShow(channel) {
   if (!S.cap) return;
   S.cancel = false;
   S.channel = channel;
-  showProgress(`正在解码通道 ${channel}…`, 'BMC 位流 → 4B5B → PD 报文');
+  const pz = S.meta?.source === 'powerz';
+  showProgress(pz ? `正在解析通道 ${channel}…` : `正在解码通道 ${channel}…`,
+    pz ? 'SQLite 事件流 → PD 报文' : 'BMC 位流 → 4B5B → PD 报文');
 
   const t0 = performance.now();
-  const { packets, stats } = await decodeChannel(S.cap, channel, {
-    inflate,
-    bitOrder: 'lsb',
-    shouldStop: () => S.cancel,
-    onProgress: (p) => setProgress(0.3 + 0.65 * p.ratio, `分块 ${p.chunk}/${p.chunks} · 已解出 ${p.packets} 条`),
-  });
+  const { packets, stats } = pz
+    ? await S.cap.decode({
+      shouldStop: () => S.cancel,
+      onProgress: (p) => {
+        if (p.phase === 'read') setProgress(0.30 + 0.30 * p.ratio, `读取事件行 ${Math.round(p.ratio * 100)}%`);
+        else setProgress(0.60 + 0.35 * p.ratio, `已解出 ${p.packets} 条`);
+      },
+    })
+    : await decodeChannel(S.cap, channel, {
+      inflate,
+      bitOrder: 'lsb',
+      shouldStop: () => S.cancel,
+      onProgress: (p) => setProgress(0.3 + 0.65 * p.ratio, `分块 ${p.chunk}/${p.chunks} · 已解出 ${p.packets} 条`),
+    });
 
   // 附上 VBUS / IBUS
   const bus = S.cap.meta.bus;
@@ -281,46 +313,90 @@ async function decodeAndShow(channel) {
   S.busSeries = buildBusSeries(bus, total, S.rate, 2400);
   S.totalSamples = total;
 
+  // 该协议只有容器、没有语义解析（目前是 UFCS）→ 明确说清，别让人以为解析失败
+  if (stats.unsupported) showNotice(stats.unsupported, `${stats.unsupportedMsgs} 条原始帧已读入，模拟量轨迹正常可用`);
+  else hideNotice();
+
   buildTypeList();
   resetTimeRange();
   applyFilters(true);
   renderMeta();
   renderChannels();
+  renderTimelineHead();
   setProgress(1, '完成');
   hideProgress();
   drawTimeline();
 }
 
+/* ── 顶部提示条：用来讲清「这份文件为什么只解出一部分」这类事 ──
+   目前只有一种情况用它：分析仪抓到的是本工程未实现语义解析的协议（UFCS）。
+   相比 toast，它不消失 —— 这个信息在整个浏览过程中都成立。 */
+function showNotice(text, sub) {
+  $('#noticeText').textContent = text;
+  $('#noticeSub').textContent = sub || '';
+  $('#noticeSub').hidden = !sub;
+  $('#notice').hidden = false;
+}
+function hideNotice() { $('#notice').hidden = true; }
+$('#noticeClose').addEventListener('click', hideNotice);
+
 /* ═══════════════════════ 顶栏元信息 / 通道 ═══════════════════════ */
+/** 采样率按量级选单位（ATK-C 是 2.5 MHz，POWER-Z 的 1 ms/采样点只有 1 kHz） */
+function fmtRate(hz) {
+  if (hz >= 1e6) return (hz / 1e6).toFixed(2) + ' MHz';
+  if (hz >= 1e3) return (hz / 1e3).toFixed(2) + ' kHz';
+  return hz + ' Hz';
+}
+
 function renderMeta() {
   const chip = $('#fileChip');
   $('#fileName').textContent = S.fileName || '未打开抓包文件';
-  chip.title = `${S.fileName}  ·  ${fmtSize(S.fileSize)}`;
+  chip.title = S.fileName ? `${S.fileName}  ·  ${fmtSize(S.fileSize)}` : '';
   chip.classList.toggle('has', !!S.fileName);
 
   const box = $('#metaChips');
   box.innerHTML = '';
-  if (!S.meta) { $('#btnExport').disabled = true; return; }
+  if (!S.meta) {
+    $('#btnExport').disabled = true;
+    document.documentElement.dataset.source = '';
+    return;
+  }
   const m = S.meta;
+  const pz = m.source === 'powerz';
+  // 标注数据来源，CSS 也据此微调（例如时间轴标题前的方块颜色）
+  document.documentElement.dataset.source = pz ? 'powerz' : 'atkcc';
   const add = (k, v) => box.appendChild(Object.assign(el('span', 'mchip'), { innerHTML: `${k} <b>${v}</b>` }));
 
-  // 采样率：数值 + 来源标记。值不是写死的，来源可能是 channel.ini 的声明、
-  // 也可能是波形自检反推出来的（文件没声明或声明得离谱时），所以必须标出来。
+  add('来源', pz ? esc(m.title) : 'ATK-C · .atkcc');
+
+  // 时间基准 / 采样率：数值 + 来源标记。值不是写死的 —— ATK-C 来自 channel.ini 的声明，
+  // 也可能由波形自检反推；POWER-Z 只有毫秒时间戳，按「1 采样点 = 1 ms」映射。
   const rate = S.rate || m.sampleRate;
   const src = S.stats?.sampleRateSource || m.sampleRateSource || 'declared';
-  const tag = { declared: '文件声明', measured: '波形实测', default: '默认值', override: '手动指定' }[src] || src;
+  const tag = {
+    declared: '文件声明', measured: '波形实测', default: '默认值',
+    override: '手动指定', powerz: '分析仪时间戳',
+  }[src] || src;
   const rateChip = el('span', 'mchip');
-  rateChip.innerHTML = `采样率 <b>${(rate / 1e6).toFixed(2)} MHz</b>`
+  rateChip.innerHTML = `采样率 <b>${fmtRate(rate)}</b>`
     + `<span class="mtag${src === 'measured' || src === 'override' ? ' warn' : ''}">${tag}</span>`;
   rateChip.title = S.stats?.sampleRateNote
-    || (m.sampleRateRaw ? `取自 channel.ini：${m.sampleRateRaw}` : '文件未声明采样率，用默认值');
+    || (pz ? 'POWER-Z 只记录毫秒时间戳，时间轴按「1 采样点 = 1 ms」映射'
+      : (m.sampleRateRaw ? `取自 channel.ini：${m.sampleRateRaw}` : '文件未声明采样率，用默认值'));
   box.appendChild(rateChip);
 
   const dur = (S.totalSamples || m.totalSamples) / rate;
   add('时长', dur >= 60 ? (dur / 60).toFixed(2) + ' min' : dur.toFixed(2) + ' s');
+
   if (S.packets.length) {
     add('报文', S.packets.length);
     if (S.stats?.badCrc) add('CRC 错误', `<span style="color:var(--bad)">${S.stats.badCrc}</span>`);
+  } else if (pz && S.stats?.unsupportedMsgs) {
+    add('原始帧', S.stats.unsupportedMsgs);
+  }
+  // 连接事件是分析仪导出独有的（ATK-C 只存波形，看不到 DFP/UFP 的插入动作）
+  if (pz && (S.stats?.connectCount || S.stats?.disconnectCount)) {
+    add('插拔', `${S.stats.connectCount ?? 0} / ${S.stats.disconnectCount ?? 0}`);
   }
   if (m.channels.length > 1) add('通道', m.channels.length);
 }
@@ -329,7 +405,21 @@ function renderChannels() {
   const box = $('#chList');
   box.innerHTML = '';
   if (!S.meta) { $('#chHint').textContent = ''; return; }
-  const chs = S.meta.channels;
+  const m = S.meta;
+
+  // 分析仪导出没有「通道」这个概念（一条 CC 线就是一条通路），给一张说明卡而不是可点的列表
+  if (m.source === 'powerz') {
+    const pz = S.stats;
+    $('#chHint').textContent = '单通路';
+    const b = el('div', 'chitem static is-on');
+    b.innerHTML = `<b>${esc(m.protocol)}</b><span>${(pz?.tableRows ?? m.tableRows)} 行事件</span>`;
+    b.title = `${m.title}｜SQLite ${m.sqlite.pageSize} B/页 · ${m.sqlite.pageCount} 页`
+      + `｜ADC 采样 ${m.chartRows} 点｜时间轴纵轴 ${m.busLabels.join(' / ')}`;
+    box.appendChild(b);
+    return;
+  }
+
+  const chs = m.channels;
   $('#chHint').textContent = chs.length > 1 ? `${chs.length} 个通道（已按活动度排序）` : '';
 
   const list = [...chs].sort((a, b) => (S.chActivity.get(b.channel) ?? 0) - (S.chActivity.get(a.channel) ?? 0));
@@ -513,12 +603,30 @@ function updateCounters() {
 
   const total = S.packets.length, shown = S.view.length;
   const bad = S.packets.filter((p) => p.crcOk === false).length;
-  $('#statLine').innerHTML = S.packets.length
-    ? `显示 <b>${shown}</b> / ${total} 条报文`
+  // 分析仪只存到数据对象为止，不记 CRC（见 core/powerz.js）——
+  // 这种情况必须说「未记录」，不能笼统地报「全通过」。
+  const unknown = S.packets.filter((p) => p.crcOk === null).length;
+
+  const crc = bad ? ` · <span class="bad">CRC 错误 ${bad}</span>`
+    : unknown && unknown === total ? ' · <span style="color:var(--tx-3)">CRC 未记录（分析仪不存）</span>'
+      : unknown ? ` · <span style="color:var(--tx-3)">CRC 未知 ${unknown}</span>`
+        : ' · <span style="color:var(--ok)">CRC 全通过</span>';
+
+  let line;
+  if (S.packets.length) {
+    line = `显示 <b>${shown}</b> / ${total} 条报文`
       + (shown !== total ? ` <span style="color:var(--tx-3)">（已屏蔽 ${total - shown} 条）</span>` : '')
-      + (bad ? ` · <span class="bad">CRC 错误 ${bad}</span>` : ' · <span style="color:var(--ok)">CRC 全通过</span>')
-      + (S.decodedMs ? ` · <span style="color:var(--tx-3)">解码 ${S.decodedMs} ms</span>` : '')
-    : '等待打开抓包文件…';
+      + crc
+      + (S.decodedMs ? ` · <span style="color:var(--tx-3)">解码 ${S.decodedMs} ms</span>` : '');
+  } else if (S.meta?.source === 'powerz') {
+    // 载入了文件但一条报文都没有：只有「协议未实现语义解析」这一种合理解释
+    line = S.stats?.unsupported
+      ? `已读入 <b>${S.stats.unsupportedMsgs ?? 0}</b> 条原始帧 · <span style="color:var(--warn)">${esc(S.meta.protocol)} 语义解析未实现</span>`
+      : `已读入分析仪导出，但其中没有可解析的报文`;
+  } else {
+    line = '等待打开抓包文件…';
+  }
+  $('#statLine').innerHTML = line;
   $('#btnExport').disabled = !S.packets.length;
 }
 function renderTimeHint() {
@@ -540,21 +648,60 @@ function applyTimeRangeFromView() {
 
 /* ═══════════════════════ 报文表（虚拟滚动） ═══════════════════════ */
 const OVERSCAN = 8;
+
+/**
+ * 空列表时说清「为什么空」——三种情况话术完全不同，混用会让人以为解析失败：
+ *   · 还没开文件       → 介绍支持的格式
+ *   · 开了但 0 条报文  → 多半是协议未实现语义解析（UFCS）
+ *   · 有报文但被筛没   → 提示放宽筛选
+ */
+function setEmptyState(kind, extra) {
+  const t = $('#emptyTitle'), p = $('#emptyText'), n = $('#emptyNote');
+  const btns = $('#emptyBtns');
+  btns.style.display = 'flex';
+  if (kind === 'filtered') {
+    t.textContent = '当前筛选条件下没有报文';
+    p.textContent = '试试放宽左侧的方向 / 类型 / 时间筛选，或点「重置全部筛选」。';
+    n.textContent = '';
+    n.hidden = true;
+    return;
+  }
+  if (kind === 'unsupported') {
+    t.textContent = `${extra || '该协议'} 抓包已载入，但语义解析未实现`;
+    p.textContent = '报文容器与 VBUS / IBUS / 差分线模拟量轨迹已正常读出，可以直接在下方时间轴上看电压电流曲线。';
+    n.textContent = '报文列表需要该协议的规范才能逐字段还原，本工程目前只覆盖 USB PD。';
+    n.hidden = false;
+    return;
+  }
+  if (kind === 'nomsg') {
+    t.textContent = '这份导出里没有可解析的报文';
+    p.textContent = '模拟量轨迹仍然可用，请在下方时间轴查看。';
+    n.textContent = '';
+    n.hidden = true;
+    return;
+  }
+  t.textContent = '打开一份 PD 抓包文件';
+  p.innerHTML = '支持正点原子 ATK-C 的 <b>.atkcc</b>（原始电平采样，走 BMC → 4B5B 解码）'
+    + '与 POWER-Z 的 <b>.sqlite</b>（分析仪已解好的逻辑字节），两者解析后逐字段溯源。';
+  n.textContent = '也可以把文件直接拖进窗口';
+  n.hidden = false;
+}
+
 function renderTable() {
   const tbody = $('#tbody');
   const vph = $('#vph'), vrows = $('#vrows');
   const n = S.view.length;
 
-  $('#emptyState').style.display = n ? 'none' : (S.packets.length ? 'none' : 'flex');
   if (!n) {
-    if (S.packets.length) {
-      $('#emptyState').style.display = 'flex';
-      $('#emptyState').querySelector('h3').textContent = '当前筛选条件下没有报文';
-      $('#emptyState').querySelector('p').textContent = '试试放宽左侧的方向 / 类型 / 时间筛选，或点「重置全部筛选」。';
-    }
+    $('#emptyState').style.display = 'flex';
+    if (!S.meta) setEmptyState('none');
+    else if (!S.packets.length) {
+      setEmptyState(S.stats?.unsupported ? 'unsupported' : 'nomsg', S.meta.protocol);
+    } else setEmptyState('filtered');
     vph.style.height = '0px'; vrows.innerHTML = ''; vrows.style.transform = 'translateY(0)';
     return;
   }
+  $('#emptyState').style.display = 'none';
   const RH = S.rowH;
   vph.style.height = n * RH + 'px';
 
@@ -639,6 +786,17 @@ function navDetail(d) {
 $('#btnDetailNavPrev').addEventListener('click', () => navDetail(-1));
 $('#btnDetailNavNext').addEventListener('click', () => navDetail(1));
 $('#btnDetailClose').addEventListener('click', () => document.body.classList.add('detail-collapsed'));
+/**
+ * 展开详情面板。存在的理由是「收起之后得有路回来」：
+ * 重开的常规路径是 `select()`（点列表里的报文）里去掉 `detail-collapsed`，
+ * 但零报文的抓包（UFCS 这类未实现语义的协议）列表本来就是空的，
+ * 点不到任何行 ⇒ 面板收起来就永久丢失。所以给一个不依赖数据的入口。
+ */
+$('#btnDetailOpen').addEventListener('click', () => {
+  document.body.classList.remove('detail-collapsed');
+  refitDetailW();               // 展开后可用宽度变了，夹一次
+  scheduleTimelineDraw();       // 中间表格随之变窄，画布要重画
+});
 
 function renderDetail(p) {
   const box = $('#detailBody');
@@ -647,7 +805,8 @@ function renderDetail(p) {
 
   h.push(`<div class="dhero ${p.crcOk === false ? 'dhero-bad' : ''}">
     <div class="t1 ${cls}">${esc(p.msgType)}</div>
-    <div class="t2">#${p.index} · ${esc(p.sop)} · ${esc(p.role)} · ID ${p.msgId ?? '-'} · r${p.rev} · ${fmtTime(p.timeMs)}</div>
+    <div class="t2">#${p.index} · ${esc(p.sop)} · ${esc(p.role)} · ID ${p.msgId ?? '-'} · r${p.rev} · ${fmtTime(p.timeMs)}`
+    + (p.synthetic ? '<span class="srcbadge">分析仪逻辑字节</span>' : '') + `</div>
   </div>`);
 
   if (p.warnings?.length) {
@@ -659,9 +818,10 @@ function renderDetail(p) {
     ${cell('VBUS', p.vbus.toFixed(3) + ' V')}
     ${cell('IBUS', p.ibus.toFixed(3) + ' A')}
     ${cell('起始时间', fmtTime(p.timeMs))}
-    ${cell('报文时长', p.durationUs.toFixed(1) + ' µs')}
+    ${cell(p.bitrateNominal ? '线上时长' : '报文时长', p.durationUs.toFixed(1) + ' µs')}
     ${cell('数据对象', String(p.nObjects ?? 0))}
-    ${cell('实测码率', (p.bitrate / 1000).toFixed(1) + ' kbps')}
+    ${cell(p.bitrateNominal ? 'BMC 码率' : '实测码率', (p.bitrate / 1000).toFixed(1) + ' kbps')}
+    ${cell('CRC', p.crcOk === null ? '未记录（分析仪不存）' : p.crcOk ? '通过' : '校验失败')}
     ${p.ackOf != null ? cell('确认的报文', `#${p.ackOf} · ${p.ackType || ''}`) : ''}
   </div></div>`);
 
@@ -749,6 +909,64 @@ function dgroupHtml(title, items, idx) {
 /* ═══════════════════════ 时间轴 ═══════════════════════ */
 const cv = $('#busCanvas');
 let TL = { x0: 0, y0: 0, w: 0, h: 0, dpr: 1, drag: null };
+
+/**
+ * 时间轴当前该画哪一对曲线。
+ *
+ * ATK-C 的 bus.ini 只有 VBUS / IBUS；POWER-Z 的 `pd_chart` 还多两路
+ * （PD 是 CC1/CC2，UFCS 是 DP/DM，名字见 `meta.busLabels`）。
+ * 这两路的量程与 VBUS 差一个数量级（3V 对 20V），叠在同一根纵轴上会糊成一条线，
+ * 所以做成「两档视图」而不是叠加，纵轴刻度、提示文本都跟着换。
+ */
+function tlCurves() {
+  const s = S.busSeries;
+  if (!s || !s.n) return null;
+  if (S.tlMode === 'aux' && s.hasAux) {
+    const [la, lb] = S.meta?.busLabels ?? ['A', 'B'];
+    return {
+      aux: true,
+      title: `${la} / ${lb} 时间轴`,
+      lName: la, rName: lb,
+      l: s.ca, r: s.cb,
+      lmax: Math.max(0.5, s.camax * 1.12),
+      rmax: Math.max(0.5, s.cbmax * 1.12),
+      lUnit: 'V', rUnit: 'V',
+      lDigits: 3, rDigits: 3,
+      lColor: '--plug', rColor: '--snk',
+    };
+  }
+  return {
+    aux: false,
+    title: 'VBUS / IBUS 时间轴',
+    lName: 'VBUS', rName: 'IBUS',
+    l: s.vbus, r: s.ibus,
+    lmax: Math.max(5, s.vmax * 1.12),
+    rmax: Math.max(0.5, s.imax * 1.12),
+    lUnit: 'V', rUnit: 'A',
+    lDigits: 1, rDigits: 2,
+    lColor: '--accent', rColor: '--data',
+  };
+}
+
+/** 时间轴标题 + 「电压/电流 ↔ 差分线」两档切换（后者只有分析仪导出才有数据） */
+function renderTimelineHead() {
+  const seg = $('#tlSeg');
+  const cur = tlCurves();
+  $('#tlTitle').textContent = cur ? cur.title : 'VBUS / IBUS 时间轴';
+  const labels = S.meta?.busLabels ?? [];
+  const hasAux = !!S.busSeries?.hasAux && labels.length === 2;
+  // 档名跟着文件给的两路名字走：PD 是 CC 线，UFCS 是 DP / DM
+  $('#tlSegAux').textContent = labels[0] === 'CC1' ? 'CC 线' : labels.join(' / ');
+  seg.hidden = !hasAux;
+  if (!hasAux) S.tlMode = 'power';
+  $$('#tlSeg .seg-item').forEach((b) => b.classList.toggle('is-on', b.dataset.v === S.tlMode));
+}
+$$('#tlSeg .seg-item').forEach((b) => b.addEventListener('click', () => {
+  S.tlMode = b.dataset.v;
+  renderTimelineHead();
+  drawTimeline();
+}));
+
 function drawTimeline(selPkt) {
   const s = S.busSeries;
   const box = cv.parentElement;
@@ -765,7 +983,6 @@ function drawTimeline(selPkt) {
   const cLine = cs.getPropertyValue('--line').trim();
   const cTx3 = cs.getPropertyValue('--tx-3').trim();
   const cAccent = cs.getPropertyValue('--accent').trim();
-  const cData = cs.getPropertyValue('--data').trim();
   const cSnk = cs.getPropertyValue('--snk').trim();
   const cSrc = cs.getPropertyValue('--src').trim();
   const cPlug = cs.getPropertyValue('--plug').trim();
@@ -781,42 +998,45 @@ function drawTimeline(selPkt) {
     g.beginPath(); g.moveTo(x0, y + .5); g.lineTo(x0 + W, y + .5); g.stroke();
   }
 
-  if (!s || !s.n) {
+  const cur = tlCurves();
+  if (!cur) {
     g.fillStyle = cTx3; g.font = '11px sans-serif';
-    g.fillText(S.cap ? '该抓包没有 bus.ini 模拟量数据' : '打开抓包后显示 VBUS / IBUS', x0 + 8, y0 + H / 2);
+    g.fillText(S.cap ? '这份抓包没有模拟量轨迹数据' : '打开抓包后显示 VBUS / IBUS', x0 + 8, y0 + H / 2);
     return;
   }
 
+  const themeVar = { '--accent': cAccent, '--data': cs.getPropertyValue('--data').trim(), '--plug': cPlug, '--snk': cSnk };
+  const colL = themeVar[cur.lColor] || cAccent;
+  const colR = themeVar[cur.rColor] || cAccent;
+
   const N = s.n;
   const xs = (i) => x0 + (i / (N - 1)) * W;
-  const vmax = Math.max(5, s.vmax * 1.12);
-  const imax = Math.max(0.5, s.imax * 1.12);
-  const yV = (v) => y0 + H - (v / vmax) * H;
-  const yI = (v) => y0 + H - (v / imax) * H;
+  const yL = (v) => y0 + H - (v / cur.lmax) * H;
+  const yR = (v) => y0 + H - (v / cur.rmax) * H;
 
-  // 填充 VBUS
+  // 填充左轴曲线
   g.beginPath();
   g.moveTo(x0, y0 + H);
-  for (let i = 0; i < N; i++) g.lineTo(xs(i), yV(s.vbus[i]));
+  for (let i = 0; i < N; i++) g.lineTo(xs(i), yL(cur.l[i]));
   g.lineTo(x0 + W, y0 + H); g.closePath();
-  g.fillStyle = hexA(cAccent, .16); g.fill();
+  g.fillStyle = hexA(colL, .16); g.fill();
 
-  // VBUS 线
+  // 左轴曲线
   g.beginPath();
-  for (let i = 0; i < N; i++) i ? g.lineTo(xs(i), yV(s.vbus[i])) : g.moveTo(xs(i), yV(s.vbus[i]));
-  g.strokeStyle = cAccent; g.lineWidth = 1.7; g.stroke();
+  for (let i = 0; i < N; i++) i ? g.lineTo(xs(i), yL(cur.l[i])) : g.moveTo(xs(i), yL(cur.l[i]));
+  g.strokeStyle = colL; g.lineWidth = 1.7; g.stroke();
 
-  // IBUS 线
+  // 右轴曲线
   g.beginPath();
-  for (let i = 0; i < N; i++) i ? g.lineTo(xs(i), yI(s.ibus[i])) : g.moveTo(xs(i), yI(s.ibus[i]));
-  g.strokeStyle = cData; g.lineWidth = 1.3; g.setLineDash([3, 2]); g.stroke(); g.setLineDash([]);
+  for (let i = 0; i < N; i++) i ? g.lineTo(xs(i), yR(cur.r[i])) : g.moveTo(xs(i), yR(cur.r[i]));
+  g.strokeStyle = colR; g.lineWidth = 1.3; g.setLineDash([3, 2]); g.stroke(); g.setLineDash([]);
 
   // 坐标轴刻度
   g.fillStyle = cTx3; g.font = '10px ui-monospace, monospace';
   for (let i = 0; i <= 4; i++) {
     const y = y0 + (H * i) / 4;
-    g.textAlign = 'right'; g.fillText((vmax * (1 - i / 4)).toFixed(1) + 'V', x0 - 5, y + 3);
-    g.textAlign = 'left'; g.fillText((imax * (1 - i / 4)).toFixed(2) + 'A', x0 + W + 5, y + 3);
+    g.textAlign = 'right'; g.fillText((cur.lmax * (1 - i / 4)).toFixed(cur.lDigits) + cur.lUnit, x0 - 5, y + 3);
+    g.textAlign = 'left'; g.fillText((cur.rmax * (1 - i / 4)).toFixed(cur.rDigits) + cur.rUnit, x0 + W + 5, y + 3);
   }
 
   // 报文刻度
@@ -898,11 +1118,14 @@ cv.addEventListener('mousemove', (e) => {
   const r = cv.getBoundingClientRect();
   const x = e.clientX - r.left, y = e.clientY - r.top;
   const tip = $('#tlTip');
-  if (!S.busSeries || x < TL.x0 || x > TL.x0 + TL.w) { tip.style.display = 'none'; return; }
+  const cur = tlCurves();
+  if (!cur || x < TL.x0 || x > TL.x0 + TL.w) { tip.style.display = 'none'; return; }
   const t = TL.xToTime(x);
   const i = clamp(Math.round(t * (S.busSeries.n - 1)), 0, S.busSeries.n - 1);
   const sec = (t * (S.totalSamples || 1)) / (S.rate || 1);
-  tip.textContent = `${sec.toFixed(3)}s  ${S.busSeries.vbus[i].toFixed(3)}V  ${S.busSeries.ibus[i].toFixed(3)}A`;
+  tip.textContent = `${sec.toFixed(3)}s  `
+    + `${cur.lName} ${cur.l[i].toFixed(cur.lDigits)}${cur.lUnit}  `
+    + `${cur.rName} ${cur.r[i].toFixed(cur.rDigits)}${cur.rUnit}`;
   tip.style.display = 'block';
   tip.style.left = x + 'px';
   tip.style.top = (y - 6) + 'px';
@@ -1037,7 +1260,7 @@ $('#btnExport').addEventListener('click', () => {
   document.body.appendChild(wrap);
 });
 function exportAs(fmt) {
-  const base = (S.fileName || 'pdscope').replace(/\.atkcc$/i, '');
+  const base = (S.fileName || 'pdscope').replace(/\.(atkcc|sqlite|db)$/i, '');
   let blob, name;
   if (fmt === 'csv') {
     const head = ['#', 'SOP', 'MsgType', 'ID', 'Direction', 'Objects', 'Elapsed', 'Time(ms)', 'VBUS(V)', 'IBUS(A)', 'Data', 'CRC', 'Note'];
@@ -1163,6 +1386,8 @@ window.PDScope = {
   status: () => ({
     env: ENV.name,
     file: S.fileName,
+    source: S.meta?.source ?? null,        // 'atkcc'（容器里没有这个字段）| 'powerz'
+    protocol: S.meta?.protocol ?? 'USB PD',
     channel: S.channel,
     packets: S.packets?.length ?? 0,
     filtered: S.view?.length ?? 0,
@@ -1178,6 +1403,7 @@ setDetailW(Number.isFinite(savedDetailW) ? savedDetailW : DETAIL_W_DEF, false);
 // 标注形态，便于 CSS 按形态微调（桌面版没有「载入示例」，单文件版可用 file: 特有能力）
 document.documentElement.dataset.env = ENV.name;
 initSamples();
+renderTimelineHead();
 requestAnimationFrame(() => drawTimeline());
 // 就绪信号：外壳据此决定何时把命令行里带的抓包文件推进来
 window.PDScope.ready = true;

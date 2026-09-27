@@ -221,7 +221,7 @@ export async function resolveSampleRate(capture, channel, inflate, opts = {}) {
  * 坏掉的 GOOD CRC 不参与配对（保持错误标识，便于定位）。
  */
 const ACK_WINDOW = 16;   // 向前搜索窗口（条）
-function linkGoodCrc(packets) {
+export function linkGoodCrc(packets) {
   const pick = (p, needId) => {
     for (let j = p.index - 1; j >= 0 && j > p.index - ACK_WINDOW; j--) {
       const q = packets[j];
@@ -256,18 +256,34 @@ export function busAt(bus, sample) {
 }
 
 /**
- * 把 bus.ini 展开成等间隔序列，用于画图。
- * @returns {{t0:number, dt:number, vbus:Float64Array, ibus:Float64Array, min:number, max:number, vmax:number, imax:number}}
+ * 把模拟量轨迹展开成等间隔序列，用于画图。
+ *
+ * `bus` 与 .atkcc 的 bus.ini 同形（`{sample, vbus, ibus}`）；分析仪导出的抓包
+ * （见 core/powerz.js）会再多两个字段 `a` / `b`（POWER-Z 的 CC1/CC2 或 UFCS 的 DP/DM，
+ * 见 `meta.busLabels`）。有就一并展开成 `ca` / `cb`，没有就是 null —— 界面据此决定
+ * 要不要给出「CC 线」那一档视图，两条路径共用这一个builder。
+ *
+ * @returns {{t0:number, step:number, n:number, vbus:Float64Array, ibus:Float64Array,
+ *            vmax:number, imax:number, sampleRate:number,
+ *            hasAux:boolean, ca:Float64Array|null, cb:Float64Array|null,
+ *            camax:number, cbmax:number}}
  */
 export function buildBusSeries(bus, totalSamples, sampleRate, targetPoints = 3000) {
   if (!bus || !bus.length) {
-    return { t0: 0, dt: 0, vbus: new Float64Array(0), ibus: new Float64Array(0), vmax: 0, imax: 0 };
+    return {
+      t0: 0, step: 0, n: 0, vbus: new Float64Array(0), ibus: new Float64Array(0),
+      vmax: 0, imax: 0, sampleRate, hasAux: false, ca: null, cb: null, camax: 0, cbmax: 0,
+    };
   }
+  const hasAux = bus.some((r) => r.a !== undefined || r.b !== undefined);
+
   const step = Math.max(1, Math.floor(totalSamples / targetPoints));
   const n = Math.floor(totalSamples / step) + 1;
   const vbus = new Float64Array(n);
   const ibus = new Float64Array(n);
-  let vmax = 0, imax = 0;
+  const ca = hasAux ? new Float64Array(n) : null;
+  const cb = hasAux ? new Float64Array(n) : null;
+  let vmax = 0, imax = 0, camax = 0, cbmax = 0;
   let j = 0;
   for (let i = 0; i < n; i++) {
     const s = i * step;
@@ -276,8 +292,14 @@ export function buildBusSeries(bus, totalSamples, sampleRate, targetPoints = 300
     ibus[i] = bus[j].ibus;
     if (vbus[i] > vmax) vmax = vbus[i];
     if (ibus[i] > imax) imax = ibus[i];
+    if (hasAux) {
+      ca[i] = bus[j].a ?? 0;
+      cb[i] = bus[j].b ?? 0;
+      if (ca[i] > camax) camax = ca[i];
+      if (cb[i] > cbmax) cbmax = cb[i];
+    }
   }
-  return { t0: 0, step, n, vbus, ibus, vmax, imax, sampleRate };
+  return { t0: 0, step, n, vbus, ibus, vmax, imax, sampleRate, hasAux, ca, cb, camax, cbmax };
 }
 
 /** 取一段采样区间内的原始电平，用于波形视图（压缩为 min/max 包络） */

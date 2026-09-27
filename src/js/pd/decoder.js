@@ -17,7 +17,7 @@
  */
 
 import {
-  DEC4B5B, SYM_EOP, ORDERED_SET_BY_KEY, matchOrderedSet,
+  DEC4B5B, SYM_EOP, ORDERED_SET_BY_KEY, ORDERED_SET_BY_NAME, matchOrderedSet,
 } from './symbols.js';
 import {
   CTRL_TYPES, DATA_TYPES, EXT_TYPES, MSG_CATEGORY, SPEC_REV,
@@ -59,6 +59,39 @@ const CTRL_SUMMARY = {
   16: '不支持该请求',
   19: '快速角色交换请求',
 };
+
+/**
+ * 「符号值 → 查表下标」的反查表（`DEC4B5B` 的逆），下标域 0x00…0x16。
+ *
+ * 这里有个必须说清的细节：`DEC4B5B` 的**下标**才是「按时间顺序排的 5 个采样位」
+ * （下标 bit k = 第 k 个采样位），而它的**值**才是符号语义（0x00…0x0F 是数据，
+ * 0x11…0x16 是 K-code）。所以从「符号值」反推采样位时，要先换成下标再按位展开 ——
+ * 直接拿符号值当位序列用会得到一份**镜像**的线路码（症状：SOP 认不出来，
+ * 或错误地匹配成 Hard Reset 之类）。
+ *
+ * 0x00…0x0F 与 0x11…0x16 在 32 个下标里各出现恰好一次（只有 0x10 非法码重复），
+ * 所以这个反查是严格可逆的。
+ */
+const CODE_TO_INDEX = (() => {
+  const t = new Int8Array(0x17).fill(-1);
+  for (let c = 0; c < 32; c++) {
+    const v = DEC4B5B[c];
+    if (v <= 0x16 && t[v] < 0) t[v] = c;
+  }
+  return t;
+})();
+
+/** 一个符号值（0x00…0x0F 数据 / 0x11…0x16 K-code）→ 5 个采样位，bit0 时间最早 */
+function pushSymbol(bits, value) {
+  const c = CODE_TO_INDEX[value];
+  for (let k = 0; k < 5; k++) bits.push((c >> k) & 1);
+}
+
+/** 一个逻辑字节 → 10 个采样位（先低半字节、后高半字节，故 16/32bit 值读出来是**小端**） */
+function pushByte(bits, b) {
+  pushSymbol(bits, b & 0xF);
+  pushSymbol(bits, (b >>> 4) & 0xF);
+}
 
 /** 建立一份全新的解码状态（跨报文关联用） */
 function createState() {
@@ -298,6 +331,70 @@ export class PdDecoder {
       eop,
       category: MSG_CATEGORY[shortm] ?? (isExt ? 'data' : 'control'),
     });
+  }
+
+  /**
+   * 由「**已经解码好的** PD 报文逻辑字节」解出一条报文。
+   *
+   * 为什么需要它：ATK-C 的 .atkcc 存的是原始电平采样，本类要先跑 BMC → 4B5B 才能拿到报文；
+   * 而 POWER-Z 这类分析仪的导出（SQLite 的 `Raw` 列）里，报文已经是逻辑字节了：
+   *
+   *     [Header 2B 小端][Data Object ×N，各 4B 小端]        —— 不含 CRC，不含 SOP/EOP
+   *
+   * 为了**一条解析路径都不想复制**，这里反过来把逻辑字节铺成一份「1bit/采样」的数组：
+   *   SOP 有序集符号 → 各字节（低半字节先行）→ 按规范算出的 CRC-32 → EOP
+   * 这份 bits 与 `BmcDecoder` 的输出格式完全等价（`_sym()` 就是它的逆），
+   * 于是 `decode()` 原样复用 —— 头部字段、VDM、PDO/RDO、扩展消息、
+   * 跨报文状态（PDO 登记表、SOP 电源角色）全都一致，不会出现两套解析慢慢跑偏。
+   *
+   * @param {ArrayLike<number>} wire  逻辑字节（Header + Data Objects）
+   * @param {{sop?:string, timeMs?:number, channel?:number,
+   *          crcRecorded?:boolean, extra?:object}} [o]
+   *   sop          有序集名：'SOP' | "SOP'" | "SOP''"
+   *   timeMs       报文时间戳（毫秒）。调用方按「1 采样点 = 1 ms」的约定同时当 startSample 用，
+   *                这样界面里所有「采样点 → 秒」的换算不用为分析仪格式开一条新分支。
+   *   crcRecorded  分析仪是否自己记了 CRC。POWER-Z 不记（只存到数据对象为止），
+   *                此时 CRC 由本方法补齐以便走通流程，并把 crcOk 置 null ——
+   *                **不能**默认它通过，那是在替对方的数据背书。
+   * @returns {object|null}
+   */
+  decodeWire(wire, { sop = 'SOP', timeMs = 0, channel = 0, crcRecorded = false, extra = null } = {}) {
+    const set = ORDERED_SET_BY_NAME[sop] || ORDERED_SET_BY_NAME['SOP'];
+
+    const bits = [];
+    for (const s of set.sequence) pushSymbol(bits, s);
+    const n = wire.length >>> 0;
+    for (let i = 0; i < n; i++) pushByte(bits, wire[i]);
+
+    // 报文线上时长：BMC 600 kbit/s → 1 ms 恰好 600 个比特
+    const calc = crc32(wire);
+    for (const b of [calc & 0xFF, (calc >>> 8) & 0xFF, (calc >>> 16) & 0xFF, (calc >>> 24) & 0xFF]) pushByte(bits, b);
+    pushSymbol(bits, SYM_EOP);
+
+    const durMs = bits.length / 600;
+    const raw = {
+      bits,
+      edges: [],
+      startSample: timeMs,
+      endSample: timeMs + durMs,
+      bitrate: 600000,          // 标称 BMC 时钟（分析仪不测这个，取协议定值）
+      synthetic: true,
+      wireBytes: wire,
+    };
+
+    const pkt = this.decode(raw, channel);
+    if (!pkt) return null;
+
+    pkt.synthetic = true;                 // 报文不是从采样波形解出来的
+    pkt.crcCalc = calc;
+    pkt.crcRecorded = !!crcRecorded;
+    // 分析仪只给逻辑字节，测不到线上的码率与时长 —— 上面那个 600 kbps 是 BMC 标称时钟
+    // （PD 规范定值），据此折算出的时长也只能算「线上时长」。界面必须区别对待，
+    // 不能把它当成从波形量出来的实测值。
+    pkt.bitrateNominal = true;
+    if (!crcRecorded) { pkt.crc = null; pkt.crcOk = null; }
+    if (extra) Object.assign(pkt, extra);
+    return pkt;
   }
 
   /** 方向：与官方上位机的三值口径一致（SRC / SNK / Plug），细节另放字段 */

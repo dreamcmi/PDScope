@@ -8,7 +8,7 @@
 //!   1. 开一个原生窗口
 //!   2. 挂一份中文原生菜单，把菜单项翻译成页面里的 DOM 操作
 //!   3. 原生「关于」对话框
-//!   4. 把命令行的 / 文件关联带上来的 `.atkcc` 交给页面
+//!   4. 把命令行的 / 文件关联带上来的抓包（`.atkcc` / `.sqlite`）交给页面
 //!
 //! 这样换取两个好处：
 //!   · 前端零改动即可复用（浏览器里怎么跑，桌面版就怎么跑）——
@@ -108,13 +108,19 @@ fn eval_in_main(app: &AppHandle, js: &str) {
 /// 三种启动方式都落在这里：`PDScope.exe D:\抓包\绿联70w.atkcc`、
 /// 双击关联的 `.atkcc`（Windows/Linux），以及把文件拖到 exe 图标上。
 /// macOS 双击文件走的是 `RunEvent::Opened` 而不是命令行参数，见 `main()` 末尾。
+///
+/// 认的后缀：`.atkcc`（ATK-C 原始采样）与 `.sqlite`（POWER-Z 分析仪导出）。
+/// 只给 `.atkcc` 注册了文件关联 —— `.sqlite` 是通用扩展名，抢它当关联容易和别的软件打架；
+/// 但命令行 / 拖到 exe 图标上这两条路都该能用，所以这里一并放行。
 fn capture_from_args() -> Option<PathBuf> {
     let args: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
     // 优先认后缀，避免把 `--xxx` 之类的开关当成文件
     args.iter()
         .find(|p| {
-            p.extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case(OsStr::new("atkcc")))
+            p.extension().is_some_and(|e| {
+                e.eq_ignore_ascii_case(OsStr::new("atkcc"))
+                    || e.eq_ignore_ascii_case(OsStr::new("sqlite"))
+            })
         })
         .cloned()
         // 后缀不匹配时退一步：第一个真实存在的文件也认（用户可能改了扩展名）
@@ -198,11 +204,11 @@ fn on_menu(app: &AppHandle, id: &str) {
 fn show_about(app: &AppHandle) {
     let body = format!(
         "USB Power Delivery 抓包解析上位机\n\n\
-         直接解析正点原子 ATK-C 的 .atkcc 抓包文件：\n\
-         · 1 bit/采样 LSB 优先 → BMC → 4B5B → PD 报文\n\
-         · Source / Sink / 线缆方向自动区分\n\
-         · 按方向 / SOP / 报文类型 / 时间窗口筛选屏蔽\n\
-         · Source_Cap、Request、PPS、AVS、VDM、扩展报文逐字段溯源\n\n\
+         两种抓包来源，按文件内容自动分流：\n\
+         · 正点原子 ATK-C 的 .atkcc：1 bit/采样 LSB 优先 → BMC → 4B5B → PD 报文\n\
+         · POWER-Z 的 .sqlite：读 SQLite 事件流 → 逻辑字节 → 同一套 PD 语义解析\n\
+         Source / Sink / 线缆方向自动区分，按方向 / SOP / 报文类型 / 时间窗口筛选屏蔽，\n\
+         Source_Cap、Request、PPS、AVS、VDM、扩展报文逐字段溯源。\n\n\
          版本 {}  ·  Tauri {}  ·  {}",
         env!("CARGO_PKG_VERSION"),
         tauri::VERSION,
