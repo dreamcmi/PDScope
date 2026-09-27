@@ -13,6 +13,9 @@
   --r: 8px;                          /* 圆角 */
   --dur: .16s;
   --cols: 50px 64px 196px 40px 74px 44px 112px 126px minmax(200px,1fr) minmax(230px,2.1fr);
+  /* 详情面板宽度。放在变量里而不是写死在 .detail 上，是为了让「拖拽」只改一个变量，
+     而 body.detail-collapsed 的 width:0 依然能靠选择器优先级压过去。 */
+  --detail-w: 390px;
 }
 
 html[data-theme="light"]{
@@ -392,9 +395,31 @@ body.side-collapsed .sidebar{ width:0; opacity:0; overflow:hidden; border-right:
   transform:translate(-50%,-115%); z-index:20;
 }
 
+/* ── 详情面板宽度拖拽条 ─────────────────────────────── */
+/* 左右各负 3px 外边距，视觉上不占位（不会挤掉中间表格一列宽），
+   但命中区仍是 6px，加 ::after 再向两侧撑到 14px，手抖也抓得住。 */
+.splitter{
+  flex:none; width:6px; margin:0 -3px; position:relative; z-index:7;
+  cursor:col-resize; touch-action:none;    /* 触屏上禁掉滚动，否则拖不动 */
+}
+.splitter::after{ content:''; position:absolute; top:0; bottom:0; left:-4px; right:-4px; }
+.splitter > i{
+  position:absolute; top:0; bottom:0; left:2px; right:2px;
+  border-radius:2px; background:transparent;
+  transition:background var(--dur);
+}
+.splitter:hover > i{ background:color-mix(in srgb, var(--tx-3) 45%, transparent); }
+.splitter:focus-visible{ outline:none; }
+.splitter:focus-visible > i,
+.splitter.is-drag > i{ background:var(--accent); }
+body.detail-collapsed .splitter{ display:none; }
+/* 拖动中：关掉宽度过渡（否则拖影跟不上指针），并锁住文本选择 */
+body.resizing{ user-select:none; cursor:col-resize; }
+body.resizing .detail, body.resizing .sidebar{ transition:none; }
+
 /* ── 详情面板 ───────────────────────────────────────── */
 .detail{
-  width:390px; flex:none; background:var(--panel);
+  width:var(--detail-w, 390px); flex:none; background:var(--panel);
   border-left:1px solid var(--line); display:flex; flex-direction:column;
   transition:width .18s ease, opacity .18s ease;
 }

@@ -340,6 +340,7 @@ node tools/serve.mjs        # 默认 http://127.0.0.1:5188，会自动开浏览�
 | **时间窗口**        | 底部 VBUS/IBUS 时间轴可**拖拽刷选**一段区间，表格立即联动                                     |
 | **位域详情**        | 右侧面板逐位展开报文头（B15 扩展 / B14-12 对象数 / B11-9 MsgID / B8 PowerRole / B7-6 Rev / B5 DataRole / B4-0 类型）、扩展头、每个数据对象（PDO/RDO/VDM）的全部字段 |
 | **分组配色**        | 每个数据对象（VDO / PDO / RDO / 扩展消息的数据块）单独成组，**相邻分组换色相**（8 色循环）并带左侧色条；`Source_Capabilities` 这种七八个 PDO 的长报文，不用读标题也能一眼看出边界。分组标题**滚动吸顶**，长列表翻到哪都知道自己在看第几个对象 |
+| **详情宽度可拖**    | 详情面板与表格之间的分隔条可**拖拽改宽**（下限 280 / 上限 900，且始终给中间表格留 420px，窄窗口下自动收紧），双击分隔条或按 `Enter` 回到 390 默认；也可聚焦分隔条后用 `← →` 微调（`Shift` 加大步长，`Home/End` 到最窄/最宽）。宽度存 `localStorage`，下次打开还在 |
 | **导出**            | CSV（当前筛选结果）或 JSON（全部报文，含原始位域字段与 `ackOf` 配对序号）                     |
 | **其它**            | 明/暗主题、紧凑/舒适行高、上一条/下一条（↑↓）、`/` 聚焦搜索、`Ctrl/⌘+O` 打开、`T` 切主题、`G` 切 GOOD CRC 屏蔽、折叠筛选栏 |
 
@@ -347,7 +348,8 @@ node tools/serve.mjs        # 默认 http://127.0.0.1:5188，会自动开浏览�
 GOOD CRC 配对同色的效果见 `artifacts/ack-colors.png`，
 分组配色见 `artifacts/group-colors-srcap.png`（Source_Cap 七个 PDO）、
 `artifacts/group-colors-vdm.png`（线缆 e-Marker 的 VDO 链）、
-`artifacts/group-colors-dark.png`（暗色主题）。
+`artifacts/group-colors-dark.png`（暗色主题），
+详情面板拖宽后的样子见 `artifacts/detail-resize-wide.png`。
 
 ---
 
@@ -529,7 +531,7 @@ node tools/syntax.mjs                     # 全量语法检查（几秒；界面
 node tools/selftest.js                    # 合成用例 24 项：4B5B / PD / CRC 语义 + 采样率 + plug 信令
 node tools/ackcheck.js                    # GOOD CRC 配对（跨 5 份真实抓包）
 
-# 界面 19 项（走系统已装的 Chrome/Edge，不下载浏览器）
+# 界面 24 项（走系统已装的 Chrome/Edge，不下载浏览器）
 npm run e2e                               # 单文件版，自包含；会先重建 dist
 npm run e2e:serve                         # 本地服务模式（需另开 node tools/serve.mjs）
 node tools/e2e.mjs --file dist/PDScope.html --drop "../制糖40w-ip18pro.atkcc"
@@ -570,9 +572,10 @@ BIST 模式在 PD 2.0 与 3.x 下的不同含义、Discover SVIDs 的两两成�
 并在每个样本前打一行「报文 / 线缆链路 / 扩展 / 坏 CRC / 警告」汇总，便于人工核对与全样本体检。
 
 **`e2e.mjs`** 直接走 Chrome DevTools Protocol（用系统已装的 Chrome/Edge，不下载浏览器），
-19 项校验：页面骨架、抓包解码、虚拟滚动、方向过滤、关键字搜索、时间轴绘制、主题切换、
-采样率来源标注、无控制台异常，最后自动截图。加 `--drop <文件>` 可注入真实抓包；`--eval "<js>"` 进调试模式，
-在页面里跑任意表达式并打印结果。
+24 项校验：页面骨架、抓包解码、虚拟滚动、方向过滤、关键字搜索、时间轴绘制、主题切换、
+采样率来源标注、**详情面板拖拽改宽**（用真实鼠标事件走一遍 pointer capture，验证加宽 / 落盘 /
+收起还原 / 超限夹紧 / 双击复位）、无控制台异常，最后自动截图。加 `--drop <文件>` 可注入真实抓包；
+`--eval "<js>"` 进调试模式，在页面里跑任意表达式并打印结果。
 
 **`tauri-e2e.mjs`** 连的是 Tauri 真正在跑的那个 WebView2（靠
 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` 开调试端口），所以外壳本身也在被测范围里。

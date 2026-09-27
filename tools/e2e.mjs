@@ -332,6 +332,59 @@ try {
     await cdp.eval(`document.querySelector('#btnTheme').click()`);
     await sleep(200);
 
+    /* 7.5 详情面板拖拽改宽（用真实鼠标事件，才能走到 pointer capture 那条路） */
+    const spRect = () => cdp.eval(`(()=>{const r=document.querySelector('#detailSplitter').getBoundingClientRect();return {x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2)};})()`);
+    const detailWidth = () => cdp.eval(`Math.round(document.querySelector('#detail').getBoundingClientRect().width)`);
+    const dragTo = async (from, toX) => {
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: from.x, y: from.y, button: 'left', buttons: 1, clickCount: 1 });
+      for (let i = 1; i <= 6; i++) {
+        const x = Math.round(from.x + (toX - from.x) * (i / 6));
+        await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y: from.y, button: 'left', buttons: 1 });
+        await sleep(18);
+      }
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: toX, y: from.y, button: 'left', buttons: 0, clickCount: 1 });
+      await sleep(140);
+    };
+
+    const w0 = await detailWidth();
+    let sp = await spRect();
+    await dragTo(sp, sp.x - 140);
+    const w1 = await detailWidth();
+    check('拖拽加宽详情面板', w1 >= w0 + 120, `${w0} → ${w1} px`);
+
+    const lsOk = await cdp.eval(`(()=>{try{localStorage.setItem('__probe','1');localStorage.removeItem('__probe');return true;}catch{return false;}})()`);
+    if (lsOk) {
+      const saved = await cdp.eval(`parseInt(localStorage.getItem('pdscope.detailW'),10)`);
+      check('宽度已持久化', saved === w1, `localStorage.pdscope.detailW = ${saved}`);
+    } else {
+      check('宽度已持久化', true, '（本形态无 localStorage，跳过）');
+    }
+
+    /* 收起再展开，宽度要能还原 —— 这正是宽度写进 CSS 变量而不是内联 style 的原因：
+       内联 style 会压过 body.detail-collapsed 的 width:0，那样收起就失效了。 */
+    await cdp.eval(`document.querySelector('#btnDetailClose').click()`);
+    await sleep(340);
+    const wCol = await detailWidth();
+    await cdp.eval(`document.querySelector('#vrows .tr').click()`);
+    await sleep(340);
+    const wBack = await detailWidth();
+    check('收起后可还原宽度', wCol === 0 && wBack === w1, `收起 ${wCol} → 还原 ${wBack} px`);
+
+    const vw = await cdp.eval('innerWidth');
+    sp = await spRect();
+    await dragTo(sp, Math.min(sp.x + 800, vw - 6));
+    const w2 = await detailWidth();
+    check('拖过头被夹在下限', w2 === 280, `→ ${w2} px（下限 280）`);
+
+    sp = await spRect();
+    for (let i = 0; i < 2; i++) {
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: sp.x, y: sp.y, button: 'left', buttons: 1, clickCount: i + 1 });
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: sp.x, y: sp.y, button: 'left', buttons: 0, clickCount: i + 1 });
+    }
+    await sleep(320);
+    const w3 = await detailWidth();
+    check('双击恢复默认宽度', w3 === 390, `→ ${w3} px`);
+
     /* 8. 无运行时报错 */
     clearInterval(drain);
     for (const e of cdp.events.splice(0)) {

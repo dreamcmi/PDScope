@@ -909,10 +909,108 @@ cv.addEventListener('mousemove', (e) => {
 });
 cv.addEventListener('mouseleave', () => ($('#tlTip').style.display = 'none'));
 $('#btnTlFit').addEventListener('click', () => { resetTimeRange(); applyFilters(true); drawTimeline(); });
-addEventListener('resize', () => drawTimeline());
+addEventListener('resize', () => { refitDetailW(); drawTimeline(); });
 
 /* ═══════════════════════ 视图控制 ═══════════════════════ */
-$('#btnToggleSide').addEventListener('click', () => { document.body.classList.toggle('side-collapsed'); setTimeout(drawTimeline, 200); });
+$('#btnToggleSide').addEventListener('click', () => {
+  document.body.classList.toggle('side-collapsed');
+  refitDetailW();                       // 左栏开合改变可分配宽度，详情宽要重新夹一次
+  setTimeout(drawTimeline, 200);
+});
+
+/* ── 详情面板宽度：拖拽 / 键盘 / 落盘 ──────────────────
+ * 宽度只写进 CSS 变量 --detail-w，好处是 body.detail-collapsed 的 width:0
+ * （选择器优先级更高）依然压得住，不需要为了「拖过之后还能收起」再写 JS 分支。
+ */
+const DETAIL_W_KEY = 'pdscope.detailW';
+const DETAIL_W_DEF = 390;   // 与 CSS 里的默认值保持一致
+const DETAIL_W_MIN = 280;   // 再窄字段名就开始换行，得不偿失
+const DETAIL_W_MAX = 900;   // 再宽眼睛要在两栏之间横跳
+const MAIN_W_MIN  = 420;    // 中间表格至少留这么宽（--cols 里有两列 minmax）
+
+const detailEl = $('#detail');
+const splitterEl = $('#detailSplitter');
+let timelineRaf = 0;
+
+/** 允许区间。上限定为「窗口宽 − 左栏 − 中间最小宽」，所以窄窗口下拖不出去 */
+function detailLimits() {
+  const bodyW = $('#appBody').getBoundingClientRect().width;
+  const sideW = document.body.classList.contains('side-collapsed')
+    ? 0 : $('#sidebar').getBoundingClientRect().width;
+  return { min: DETAIL_W_MIN, max: Math.max(DETAIL_W_MIN, Math.min(DETAIL_W_MAX, bodyW - sideW - MAIN_W_MIN)) };
+}
+
+/** 写宽度（自动夹到合法区间）。persist=true 时落盘，拖动过程中不落盘以免狂写 localStorage */
+function setDetailW(w, persist) {
+  const { min, max } = detailLimits();
+  const px = Math.round(Math.min(max, Math.max(min, w)));
+  document.documentElement.style.setProperty('--detail-w', px + 'px');
+  splitterEl.setAttribute('aria-valuenow', String(px));
+  splitterEl.setAttribute('aria-valuemin', String(min));
+  splitterEl.setAttribute('aria-valuemax', String(max));
+  if (persist) { try { localStorage.setItem(DETAIL_W_KEY, String(px)); } catch {} }
+  return px;
+}
+const detailW = () => detailEl.getBoundingClientRect().width;
+
+/** 窗口尺寸或左栏开合变化后，把已存的宽度夹回合法区间（否则会挤扁中间表格） */
+function refitDetailW() {
+  let cur = NaN;
+  try { cur = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--detail-w'), 10); } catch {}
+  const { min, max } = detailLimits();
+  if (!(cur >= min && cur <= max)) setDetailW(Number.isFinite(cur) ? cur : DETAIL_W_DEF, true);
+}
+
+/** 面板宽度变了，中间表格也跟着变宽 ⇒ 时间轴画布要重画。合并到一帧里，避免拖动中重复绘制 */
+function scheduleTimelineDraw() {
+  if (timelineRaf) return;
+  timelineRaf = requestAnimationFrame(() => { timelineRaf = 0; drawTimeline(); });
+}
+
+let dragW = 0;
+splitterEl.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0) return;                        // 只认左键
+  e.preventDefault();
+  // 指针捕获：拖出 6px 命中区也不会丢事件。个别环境（老 WebView / 合成事件）会抛，
+  // 抛了也不影响本次拖动，降级成「指针跑出条外就停更」即可。
+  try { splitterEl.setPointerCapture(e.pointerId); } catch {}
+  splitterEl.classList.add('is-drag');
+  document.body.classList.add('resizing');
+  dragW = Math.round(detailW());
+});
+splitterEl.addEventListener('pointermove', (e) => {
+  if (!splitterEl.classList.contains('is-drag')) return;
+  // 面板贴着窗口右边，所以「指针到视口右缘的距离」就是想要的宽度
+  const next = setDetailW($('#appBody').getBoundingClientRect().right - e.clientX, false);
+  if (next !== dragW) { dragW = next; scheduleTimelineDraw(); }
+});
+function endDetailDrag(e) {
+  if (!splitterEl.classList.contains('is-drag')) return;
+  splitterEl.classList.remove('is-drag');
+  document.body.classList.remove('resizing');
+  try { splitterEl.releasePointerCapture(e.pointerId); } catch {}
+  setDetailW(dragW, true);                           // 松手才落盘
+  scheduleTimelineDraw();
+}
+splitterEl.addEventListener('pointerup', endDetailDrag);
+splitterEl.addEventListener('pointercancel', endDetailDrag);
+
+splitterEl.addEventListener('dblclick', () => { setDetailW(DETAIL_W_DEF, true); scheduleTimelineDraw(); });
+splitterEl.addEventListener('keydown', (e) => {
+  const step = e.shiftKey ? 40 : 12;
+  let w = null;
+  // 分隔条在面板左侧，所以「按左键 = 分隔条左移 = 面板变宽」，与直觉一致
+  if (e.key === 'ArrowLeft')       w = detailW() + step;
+  else if (e.key === 'ArrowRight') w = detailW() - step;
+  else if (e.key === 'Home')       w = detailLimits().min;   // 最窄
+  else if (e.key === 'End')        w = detailLimits().max;   // 最宽
+  else if (e.key === 'Enter')      w = DETAIL_W_DEF;
+  if (w === null) return;
+  e.preventDefault();
+  setDetailW(w, true);
+  scheduleTimelineDraw();
+});
+
 $('#btnDense').addEventListener('click', (e) => {
   S.rowH = S.rowH === 30 ? 23 : 30;
   document.documentElement.style.setProperty('--rh', S.rowH + 'px');
@@ -1073,6 +1171,10 @@ window.PDScope = {
 
 /* 初始化 */
 document.documentElement.style.setProperty('--rh', S.rowH + 'px');
+// 详情面板宽度：还原上次拖到的位置（越界由 setDetailW 夹回合法区间）
+let savedDetailW = NaN;
+try { savedDetailW = parseInt(localStorage.getItem(DETAIL_W_KEY), 10); } catch {}
+setDetailW(Number.isFinite(savedDetailW) ? savedDetailW : DETAIL_W_DEF, false);
 // 标注形态，便于 CSS 按形态微调（桌面版没有「载入示例」，单文件版可用 file: 特有能力）
 document.documentElement.dataset.env = ENV.name;
 initSamples();
