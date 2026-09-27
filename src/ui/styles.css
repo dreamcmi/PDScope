@@ -112,7 +112,11 @@ body{
   z-index:30;
 }
 .brand{ display:flex; align-items:center; gap:9px; }
-.logo{ width:29px; height:29px; flex:none; }
+/* 实际应用图标（PNG，自带宽圆角与透明边角），display:block 去掉 img 的行内基线间隙 */
+.logo{ display:block; width:29px; height:29px; flex:none; object-fit:contain; }
+/* 深色顶栏里图标的深蓝底与面板色太近，边界会糊。加一圈极淡轮廓光把形状提出来：
+   必须用 drop-shadow（跟随 PNG 的 alpha 形状）；换成 box-shadow 是方框，四个角会露出来。 */
+html[data-theme="dark"] .logo{ filter:drop-shadow(0 0 1px rgba(255,255,255,.3)); }
 .brand-txt{ display:flex; flex-direction:column; line-height:1.15; }
 .brand-txt b{ font-size:14px; letter-spacing:.2px; }
 .brand-txt span{ font-size:10.5px; color:var(--tx-3); }

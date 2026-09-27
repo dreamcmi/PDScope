@@ -33,7 +33,9 @@
     "check": "npm test && npm run app:test && npm run app:test:open",
 
     "icon": "python tools/make-icon.py",
-    "icon:tauri": "python tools/make-tauri-icons.py"
+    "icon:tauri": "python tools/make-tauri-icons.py",
+    "icon:web": "node tools/inline-logo.mjs",
+    "icon:check": "node tools/inline-logo.mjs --check"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0"

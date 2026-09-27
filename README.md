@@ -506,7 +506,8 @@ PDScope/
    ├─ serve.mjs           本地静态服务 + 示例文件接口
    ├─ build-standalone.mjs  打包单文件 dist/PDScope.html
    ├─ make-icon.py        生成图标源图 assets/icon.png（PIL 画方波 + PD 字样）
-   └─ make-tauri-icons.py 由源图派发各平台打包图标（PNG 各尺寸 + ICO + 手写 ICNS 容器）
+   ├─ make-tauri-icons.py 由源图派发各平台打包图标（PNG 各尺寸 + ICO + 手写 ICNS 容器）
+   └─ inline-logo.mjs     把图标内联进 src/ui/index.html（顶栏 logo + favicon，`--check` 可校验）
 ```
 
 **两个目录名说清楚**（都曾经或容易被误解）：
@@ -517,8 +518,15 @@ PDScope/
   两份形态共用它，没有第二个入口页。自检产生的截图和报告刻意放在 `artifacts/`：
   Tauri 会把 `frontendDist` 整个目录打进可执行文件，混进 `dist/` 会白胖将近 1 MB。
 
-改图标：`python tools/make-icon.py` → 再 `python tools/make-tauri-icons.py`
-（`.icns` 是手写容器 —— Pillow 只能读不能写；不用 `tauri icon` 是为了让 Rust 侧能脱离 Node 独立构建）。
+改图标：`npm run icon` → `npm run icon:tauri` → `npm run icon:web` → `npm run build`。
+
+* `icon:web` 这一步不能省 —— 界面里的顶栏 logo 和标签页 favicon 是**内联的 PNG data URI**
+  （单文件版要能脱离同目录资源独立打开，所以不能引外部文件）。它跟打包图标同源，但物理上是
+  `src/ui/index.html` 里的一份副本，改完图标不同步就会「exe 换了新图标、网页还是旧的」。
+  `npm run icon:check` 可以校验这份副本是否已过期（不一致时非 0 退出，适合放进 CI）。
+* 深色顶栏下图标底（深蓝）与面板色接近，`.logo` 上挂了一点点 `drop-shadow` 描边把形状提出来；
+  必须用 `drop-shadow`（跟随 PNG 的 alpha 轮廓），换 `box-shadow` 会画成方框、四个角露出来。
+* `.icns` 是手写容器 —— Pillow 只能读不能写；不用 `tauri icon` 是为了让 Rust 侧能脱离 Node 独立构建。
 
 ---
 
