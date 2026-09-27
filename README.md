@@ -21,6 +21,7 @@
 * [CI 构建：](#ci-构建10-个目标一次出齐)
 * [界面功能](#界面功能)
 * [`.atkcc` 格式（逆向结论）](#atkcc-格式逆向结论)
+* [PD 协议解析库](#pd-协议解析库)
 * [目录结构](#目录结构)
 * [自检](#自检)
 * [已知限制](#已知限制)
@@ -36,7 +37,7 @@
 
 |                | **单文件 HTML 版**              | **Tauri 桌面版**                        |
 | -------------- | ------------------------------- | --------------------------------------- |
-| 产物           | `dist/PDScope.html`（约 160 KB，自包含） | `pdscope.exe`（约 3.1 MB）              |
+| 产物           | `dist/PDScope.html`（约 250 KB，自包含） | `pdscope.exe`（约 3.1 MB）              |
 | 怎么运行       | 双击，用系统默认浏览器打开      | 双击 exe                                |
 | 需要先装什么   | **什么都不用装**                | 系统自带的 WebView 即可，别无其他       |
 | 原生菜单       | 无（用页面内快捷键）            | 有（中文菜单 + F11 全屏 / F12 开发者工具） |
@@ -280,7 +281,7 @@ GitHub 的 Windows runner 一直是 **Windows Server** 系列，从来没有过 
 ```
 node tools/version-check.mjs   # 版本号六处一致（外加 README 里的产物名提示项）
 node tools/syntax.mjs          # 全量语法检查（自动带上 tools/ 下的新脚本）
-node tools/selftest.js         # 协议层合成用例（18 项）
+node tools/selftest.js         # 协议层合成用例（24 项）
 ```
 
 这三项**在 10 个目标上各跑一遍** —— 顺带验证了解析内核在 Windows / macOS / Linux
@@ -401,19 +402,78 @@ bus.ini                sample=N,vbus=14.651,ibus=1.274   ← 模拟量轨迹，s
 > 立刻呈现规整的 `1010…`，CRC 全部通过。
 
 
+## PD 协议解析库
+
+USB PD 的协议解析**单独成一库**：`src/js/pd/`。它只依赖自己目录内的模块，
+零外部依赖，浏览器与 Node 双栈通用，**整个目录复制到别的工程即可直接复用**。
+`src/js/core/pd.js` 现在只是一层兼容转发，指向这个库。
+
+```js
+import { PdDecoder } from './js/pd/index.js';
+
+const pd = new PdDecoder({ sampleRate: 2_500_000 });
+const pkt = pd.decode(bmcPacket, channel);   // bmcPacket = BMC 状态机吐出的原始比特序列
+```
+
+返回的报文对象与界面契约一致：`sop / msgType / msgKind / role / rev / header /
+extHeader / nObjects / dataWords / dataHex / details / warnings / summary / crcOk / text …`。
+其中 `details` 是 `{ key, value }[]`，用 `key === 'Object'` 分组成「数据对象」区块。
+
+### 与官方上位机相比，这一版补了什么
+
+ATK-C 自带的上位机（以及 sigrok 的 `usb_power_delivery`）对 **plug 信令**（发往线缆
+e-Marker 的 SOP'/SOP'' VDM）只给了概要字符串。本库按规范把整条 VDO 链逐位还原：
+
+| 能力 | 说明 |
+| --- | --- |
+| **plug 信令** | SOP'/SOP'' 的 Discover Identity：ID Header VDO + Cert Stat VDO + Product VDO，再按产品类型派发**无源线缆 VDO / 有源线缆 VDO1&VDO2 / VPD VDO / 旧 AMA VDO**；端口侧派发 UFP VDO + Padding + DFP VDO |
+| **线缆字段** | 插头形态、线缆延迟档位、终止方式（是否需 VCONN）、最高 VBUS 电压、载流能力、USB 最高速率、有源线缆的工作/关断温度与 U3/CLd 功耗等 |
+| **扩展消息** | 按数据块内的**绝对字节号**寻址：SCEDB / Status（SOP 与 SOP' 两种长度）/ GBCDB / 制造商 / 安全 / 固件 / PPS Status / 国家码 / SKEDB / ECDB / EPR 能力 / 厂商扩展；**分块（Chunked）** 消息的字节拼接与跨块 PDO 补全，拼不回来的如实标注「本分块不含该字段」 |
+| **EPR** | EPR_Source/Sink_Capabilities 的 PDO 列表（位置 ≥8 判 EPR）、EPR_Request 的 PDO 副本、EPR_Mode 的 Action/原因码 |
+| **跨版本** | BIST 模式（PD 2.0 与 3.x 同一数值含义不同，按 Header 的 Revision 选表）、线缆最高 VBUS 电压码（3.0 与 3.1+ 不同）、EPR 位的版本含义、消息类型的最低版本提示 |
+| **健壮性** | SOP 有序集容错匹配（命中 3/4 个符号即认出）、CRC 校验并给出「读到值 ≠ 计算值」、缺失 EOP / 截断 / 非法 4B5B 符号均记入 `warnings` |
+
+### 解析范围对照（与规范条目的对应关系）
+
+| 模块 | 覆盖的规范条目（USB PD 3.2） |
+| --- | --- |
+| `pdo.js` | Table 6.8 … 6.22（Fixed / Battery / Variable / PPS / SPR-AVS / EPR-AVS PDO，以及四张 RDO 表） |
+| `data.js` | Table 6.23 … 6.31（BIST、Battery_Status、Alert、Enter_USB、Source_Info、Revision、EPR_Mode、Country_Code） |
+| `vdm.js` | Table 6.32 … 6.46（VDM Header、Discover Identity 全线缆/端口 VDO、Discover SVIDs / Modes、Enter/Exit Mode、Attention），并保留 PD 3.0 / 2.0 的旧字段 |
+| `extended.js` | Chapter 6.5（Table 6.47 … 6.66） |
+| `tables.js` | 各表取值；旧版差异额外取自 PD 3.0 v1.1 与 PD 2.0 v1.3 原文 |
+
+> 库内所有工具函数统一带 `pd` 前缀（`pdField` / `pdHex` / `pdNum` …）。这不是洁癖：
+> `tools/build-standalone.mjs` 会把整个 ES Module 图**拍平进一个 IIFE 作用域**，
+> 顶层重名会互相覆盖，加前缀是最省事的隔离手段。
+
+---
+
 ## 目录结构
 
 ```
 PDScope/
 ├─ src/
-│  ├─ js/core/            纯 JS 解析内核（浏览器 + Node 通用，零依赖）
+│  ├─ js/pd/              独立 USB PD 协议解析库（零依赖、浏览器 + Node 通用，可整目录复用）
+│  │   ├─ symbols.js      4B5B 表 / K-code / SOP 有序集
+│  │   ├─ crc.js          CRC-32
+│  │   ├─ format.js       位域取值与格式化（工具函数统一 pd* 前缀，便于单文件打包不重名）
+│  │   ├─ tables.js       协议常量表（消息类型、VDO 字段取值、EPR、BIST 跨版本…）
+│  │   ├─ svid.js         Standard / Vendor SVID 名称
+│  │   ├─ pdo.js          PDO（Fixed/Battery/Variable/PPS/SPR-AVS/EPR-AVS）与 RDO
+│  │   ├─ data.js         BIST / Battery_Status / Alert / Enter_USB / Source_Info / Revision / EPR_Mode
+│  │   ├─ vdm.js          VDM（含 Discover Identity 的线缆/端口 VDO —— plug 信令）
+│  │   ├─ extended.js     扩展消息数据块（SCEDB/SDB/GBCDB/制造商/安全/固件/EPR 能力…）
+│  │   ├─ decoder.js      主解码器 PdDecoder（比特流 → 结构化报文对象）
+│  │   └─ index.js        聚合入口（外部从这里 import）
+│  ├─ js/core/            容器与波形内核（浏览器 + Node 通用，零依赖）
 │  │   ├─ zip.js          ZIP 读取（含 ZIP64 / EOCD 定位）
 │  │   ├─ inflate.js      deflate-raw 解压（浏览器 DecompressionStream / Node zlib）
 │  │   ├─ atkcc.js        .atkcc 容器解析
 │  │   ├─ bmc.js          游程提取 + BMC 状态机
-│  │   ├─ pd_tables.js    4B5B 表 / SOP / 报文类型 / VDM 命令等常量
-│  │   ├─ pd.js           PD 协议层（报文头、PDO/RDO、VDM、扩展报文、CRC32）
-│  │   └─ pipeline.js     串起「分块 → 位流 → 边沿 → BMC → 报文」
+│  │   ├─ pd_tables.js    4B5B / SOP 等低层符号表（供旧脚本使用）
+│  │   ├─ pd.js           兼容转发层 → `src/js/pd/`（旧导入路径不破坏）
+│  │   └─ pipeline.js     串起「分块 → 位流 → 边沿 → BMC → PD 解析 → 报文」
 │  └─ ui/                 界面（index.html / styles.css / app.js）—— 三种形态共用
 ├─ src-tauri/             Tauri 桌面外壳（Rust，Windows / macOS / Linux 同一份）
 │  ├─ src/main.rs         原生窗口 + 中文菜单 + 「关于」+ 命令行/文件关联打开抓包
@@ -433,6 +493,8 @@ PDScope/
    ├─ ci-checksum.mjs     给 CI 产物生成 .sha256 校验和（三平台同一套命令）
    ├─ selftest.js         协议层合成用例自检
    ├─ ackcheck.js         GOOD CRC 配对校验（跨全部真实抓包）
+   ├─ pd-inspect.mjs      PD 解析抽查：线缆链路 plug 信令 + 扩展消息详情 + 全样本体检
+   ├─ pd-regress.mjs      与重构前解码器逐包逐字段对比（从 git HEAD 取旧版本）
    ├─ e2e.mjs             无头浏览器端到端自检 + 截图（测单文件版 / 本地服务版）
    ├─ tauri-e2e.mjs       真实 Tauri 窗口里的端到端自检 + 截图（测桌面版）
    ├─ serve.mjs           本地静态服务 + 示例文件接口
@@ -460,7 +522,7 @@ PDScope/
 # 版本号 / 语法 / 协议层（纯 Node，秒级）
 node tools/version-check.mjs              # 版本号五处是否一致（最便宜，先跑它）
 node tools/syntax.mjs                     # 全量语法检查（几秒；界面脚本错一个字符就是白屏）
-node tools/selftest.js                    # 合成用例 18 项：4B5B / PD / CRC 语义 + 多种采样率
+node tools/selftest.js                    # 合成用例 24 项：4B5B / PD / CRC 语义 + 采样率 + plug 信令
 node tools/ackcheck.js                    # GOOD CRC 配对（跨 5 份真实抓包）
 
 # 界面 19 项（走系统已装的 Chrome/Edge，不下载浏览器）
@@ -492,7 +554,16 @@ npm run check
 **`selftest.js`** 先用合成报文凭字段校验 4B5B / PD / CRC 语义（8 项），再把同一串报文按
 **1.5 / 2.5 / 4 / 6 MHz** 重新采样一遍（10 项），检查：用真实采样率能解出全部报文、
 波形反推的采样率误差 < 1%、按反推值解码同样得到全部报文，并确认「采样率写错一倍就一条也解不出来」——
-这正是采样率必须动态解析的原因。
+这正是采样率必须动态解析的原因。最后一组（6 项）专测 **plug 信令与扩展消息**：
+SOP' 上 e-Marker 的 Discover Identity 全线缆 VDO、端口侧的 UFP + Padding + DFP 三件套、
+EPR_Source_Capabilities 的 PDO 列表、**分块扩展消息的跨块 PDO 拼接**（拼不回来要标注而不是猜）、
+BIST 模式在 PD 2.0 与 3.x 下的不同含义、Discover SVIDs 的两两成对。
+
+**`pd-regress.mjs`** 把重构前的解码器从 `git HEAD` 取出来，与新库在同一份抓包上
+**逐包逐字段对比**（sop / msgType / header / crcOk / nObjects / dataWords）。
+当前 7 份抓包共 2414 条报文，**报文条数逐样本完全一致**，除「扩展消息新增了 hex 回填」
+这一处预期差异外**零字段差异**。`pd-inspect.mjs` 则单独抽取线缆链路与扩展消息的解析详情，
+并在每个样本前打一行「报文 / 线缆链路 / 扩展 / 坏 CRC / 警告」汇总，便于人工核对与全样本体检。
 
 **`e2e.mjs`** 直接走 Chrome DevTools Protocol（用系统已装的 Chrome/Edge，不下载浏览器），
 19 项校验：页面骨架、抓包解码、虚拟滚动、方向过滤、关键字搜索、时间轴绘制、主题切换、

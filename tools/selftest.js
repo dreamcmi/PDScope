@@ -183,7 +183,140 @@ for (const fs of [1500000, 2500000, 4000000, 6000000]) {
     + ` · 按反推值解出 ${decoded2.length}/${cases.length} · 错一倍时解出 ${wrong.length} 条`);
 }
 
-// 采样率声明的解析：不同键名 / 单位都要认
+/* ═══════════ ③ 独立 PD 库（src/js/pd/）的增强能力 ═══════════
+ *  线缆链路的 plug 信令（e-Marker Discover Identity 的 VDO 链）、
+ *  扩展消息（含分块）、跨版本字段（BIST 模式）。 */
+
+const b4 = (v) => [v & 0xFF, (v >>> 8) & 0xFF, (v >>> 16) & 0xFF, (v >>> 24) & 0xFF];
+const hasDetail = (p, key, needle) =>
+  (p.details || []).some((d) => d.key === key && String(d.value).includes(needle));
+const hasField = (p, needle) => (p.details || []).some((d) => String(d.key).includes(needle));
+
+/** 组装一条扩展消息：Header 的 Extended 位置位 + 16bit 扩展头 + 数据块 */
+function buildExtPacket(sopIndex, type, payload, { rev = 3, id = 0, chunked = false, chunkNum = 0, reqChunk = false } = {}) {
+  const dataSize = payload.length;
+  const nObjects = Math.max(1, Math.ceil((2 + dataSize) / 4));
+  const capacity = Math.max(nObjects * 4 - 2, 0);
+  const pad = capacity - dataSize;
+  const extHead = ((chunked ? 1 : 0) << 15) | ((chunkNum & 0xF) << 11) | ((reqChunk ? 1 : 0) << 10) | (dataSize & 0x1FF);
+  const header = mkHeader({ type, n: nObjects, rev, id }) | (1 << 15);
+  const bytes = [header & 0xFF, (header >>> 8) & 0xFF, extHead & 0xFF, (extHead >>> 8) & 0xFF,
+    ...payload, ...new Array(pad).fill(0)];
+  const crc = crc32(bytes);
+  const bits = [];
+  for (const s of SOP_SEQUENCES[sopIndex]) pushSym(bits, s);
+  pushU16(bits, header);
+  pushU16(bits, extHead);
+  for (const b of payload) pushNib(bits, b, 2);
+  for (let i = 0; i < pad; i++) pushNib(bits, 0, 2);
+  pushU32(bits, crc);
+  pushSym(bits, EOP_SYM);
+  return { bits, crc };
+}
+
+const decodeBits = (bits) => pd.decode(
+  { bits, edges: bits.map((_, i) => i), startSample: 0, endSample: bits.length, bitrate: 600000 }, 0);
+
+/* ── ③.1 线缆 e-Marker 的 Discover Identity（plug 信令）── */
+const vdmHead = ((0xFF00 << 16) | (1 << 15) | (1 << 6) | 1) >>> 0;   // ACK · Discover Identity
+const idHdrCable = ((3 << 27) | (3 << 21) | 0x2CA3) >>> 0;            // Passive Cable + USB Type-C Plug
+const passiveCableVdo = ((2 << 18) | (1 << 17) | (1 << 13) | (3 << 9) | (2 << 5)) >>> 0; // 50V / 5A / EPR / <10ns
+
+{
+  const { bits, crc } = buildPacket(1, mkHeader({ type: 15, n: 5, id: 0, rev: 3 }),
+    [vdmHead, idHdrCable, 0, ((0xC701 << 16) | 0) >>> 0, passiveCableVdo]);
+  const p = decodeBits(bits);
+  check("SOP' 线缆 DiscIdent", !!p && p.crcOk === true && p.crc === crc
+    && p.sop === "SOP'" && p.msgType === 'VDM' && p.link === 'cable'
+    && hasDetail(p, 'Object', 'VDO #2 · ID Header VDO')
+    && hasDetail(p, 'Object', 'VDO #3 · Cert Stat VDO')
+    && hasDetail(p, 'Object', 'VDO #4 · Product VDO')
+    && hasDetail(p, 'Object', 'VDO #5 · Passive Cable VDO')
+    && hasField(p, 'USB Vendor ID')
+    && (p.summary || '').includes('无源线缆'),
+    `summary: ${p?.summary}`);
+}
+
+/* ── ③.2 端口 Discover Identity（UFP + Padding + DFP）── */
+{
+  const idHdrPort = ((2 << 27) | (2 << 23) | (3 << 21) | 0x1234) >>> 0;
+  const { bits } = buildPacket(0, mkHeader({ type: 15, n: 7, id: 1, rev: 3 }),
+    [vdmHead, idHdrPort, 0, 0x00010002, 0x2A000003, 0, 0x00000005]);
+  const p = decodeBits(bits);
+  check('端口 DiscIdent 三件套', !!p && p.crcOk === true
+    && hasDetail(p, 'Object', 'VDO #5 · UFP VDO')
+    && hasDetail(p, 'Object', 'VDO #6 · Padding')
+    && hasDetail(p, 'Object', 'VDO #7 · DFP VDO'),
+    `summary: ${p?.summary}`);
+}
+
+/* ── ③.3 EPR_Source_Capabilities 扩展消息 ── */
+{
+  const eprFixed = ((0 << 30) | (560 << 10) | 500) >>> 0;                      // 28 V / 5 A
+  const eprAvs = ((3 << 30) | (1 << 28) | (480 << 17) | (150 << 8) | 140) >>> 0; // 15~48 V / 140 W
+  const { bits, crc } = buildExtPacket(0, 17, b4(eprFixed).concat(b4(eprAvs)), { rev: 3, id: 4 });
+  const p = decodeBits(bits);
+  check('EPR_Source_Capabilities', !!p && p.crcOk === true && p.crc === crc
+    && p.msgType === 'EPR_Source_Capabilities' && p.msgKind === 'ext' && p.extHeader != null
+    && hasDetail(p, 'Object', 'PDO #1') && hasDetail(p, 'Object', 'PDO #2')
+    && (p.summary || '').includes('EPR_Fixed') && (p.summary || '').includes('EPR_AVS')
+    && (p.dataHex || '').length > 0,
+    `extHeader=0x${p?.extHeader?.toString(16)} summary: ${p?.summary}`);
+}
+
+/* ── ③.4 分块扩展消息：跨块的 PDO 要拼回来，拼不回来的要如实标注 ── */
+{
+  // 8 个 PDO（32 字节），声明 dataSize=30 → 块 0 覆盖 byte0-25，块 1 覆盖 byte26-29，
+  // 第 7 个 PDO 正好被切成 2+2 字节，考验跨分块拼接。
+  const pdos = [];
+  for (let i = 0; i < 8; i++) pdos.push(((0 << 30) | ((100 + i * 20) << 10) | 300) >>> 0);
+  const whole = pdos.flatMap(b4);
+
+  const c0 = decodeBits(buildExtPacket(0, 17, whole.slice(0, 26), { rev: 3, id: 4, chunked: true, chunkNum: 0 }).bits);
+  const c1 = decodeBits(buildExtPacket(0, 17, whole.slice(26, 30), { rev: 3, id: 4, chunked: true, chunkNum: 1 }).bits);
+  const ok0 = c0?.crcOk === true && hasDetail(c0, 'Object', 'PDO #6');
+
+  // 跨块拼接：同一解码器实例连续解两块，块 1 应把第 7 个 PDO 补全
+  const fresh = new PdDecoder({ sampleRate: 2500000 });
+  const raw = (bits) => ({ bits, edges: bits.map((_, i) => i), startSample: 0, endSample: bits.length, bitrate: 600000 });
+  fresh.decode(raw(buildExtPacket(0, 17, whole.slice(0, 26), { rev: 3, id: 4, chunked: true, chunkNum: 0 }).bits), 0);
+  const j = fresh.decode(raw(buildExtPacket(0, 17, whole.slice(26, 30), { rev: 3, id: 4, chunked: true, chunkNum: 1 }).bits), 0);
+  const okJoin = hasDetail(j, '分块对齐', '由上一分块') && hasDetail(j, 'Object', 'PDO #7');
+
+  // 没有前块时，不能猜：必须标注「跨分块」
+  const lone = decodeBits(buildExtPacket(0, 17, whole.slice(26, 30), { rev: 3, id: 4, chunked: true, chunkNum: 1 }).bits);
+  const okLone = hasDetail(lone, '状态', '跨分块') && (lone.summary || '').includes('无 PDO');
+
+  check('分块扩展消息拼接', ok0 && okJoin && okLone,
+    `块0:${c0?.summary?.slice(0, 40)} | 拼接:${okJoin} | 无前块:${lone?.summary}`);
+}
+
+/* ── ③.5 BIST 模式跨版本：同一数值在 PD 2.0 / 3.x 下含义不同 ── */
+{
+  const p2 = decodeBits(buildPacket(0, mkHeader({ type: 3, n: 1, id: 2, rev: 2 }), [0x00000000]).bits);
+  const p3 = decodeBits(buildPacket(0, mkHeader({ type: 3, n: 1, id: 2, rev: 3 }), [0x80000000]).bits);
+  const p3bad = decodeBits(buildPacket(0, mkHeader({ type: 3, n: 1, id: 2, rev: 3 }), [0x00000000]).bits);
+  check('BIST 跨版本（2.0/3.x）',
+    p2?.crcOk === true && (p2.summary || '').includes('Receiver')
+    && p3?.crcOk === true && (p3.summary || '').includes('Test Data')
+    && p3bad?.crcOk === true && (p3bad.summary || '').includes('未知模式'),
+    `r2:0x0→「${p2?.summary}」 r3:0x8→「${p3?.summary}」 r3:0x0→「${p3bad?.summary}」`);
+}
+
+/* ── ③.6 Discover SVIDs：一个 VDO 里两两成对 ── */
+{
+  const svidHdr = ((0xFF00 << 16) | (1 << 15) | (1 << 6) | 2) >>> 0;
+  const { bits } = buildPacket(0, mkHeader({ type: 15, n: 2, id: 3, rev: 3 }),
+    [svidHdr, (((0xFF01) << 16) | 0x0000) >>> 0]);
+  const p = decodeBits(bits);
+  check('Discover SVIDs', !!p && p.crcOk === true
+    && hasDetail(p, 'Object', 'VDO #2 · Responder VDO')
+    && (p.summary || '').includes('0xFF01'),
+    `summary: ${p?.summary}`);
+}
+
+/* ═══════════ ④ 采样率声明 ═══════════ */
+
 for (const [text, want, src] of [
   ['SamplingFrequency=2500', 2500000, 'declared'],
   ['SampleRate=2500000', 2500000, 'declared'],

@@ -21,16 +21,20 @@ const OUT = join(ROOT, 'dist', 'PDScope.html');
 /* ── 1. 收集模块依赖（后序遍历） ─────────────────────────── */
 const IMPORT_RE = /^[ \t]*import\s+(?:[\s\S]*?)\s*from\s*['"]([^'"]+)['"]\s*;?[ \t]*$/gm;
 const BARE_IMPORT_RE = /^[ \t]*import\s+['"][^'"]+['"]\s*;?[ \t]*$/gm;
+/** `export * from '...'` / `export { a, b } from '...'` —— 同样是模块依赖 */
+const EXPORT_FROM_RE = /^[ \t]*export\s*(?:\*|\{[\s\S]*?\})\s*from\s*['"]([^'"]+)['"]\s*;?[ \t]*$/gm;
 
 async function collect(file, seen = new Map(), order = []) {
   const abs = resolve(file);
   if (seen.has(abs)) return order;
   seen.set(abs, true);
   const src = await readFile(abs, 'utf8');
-  for (const m of src.matchAll(IMPORT_RE)) {
-    const spec = m[1];
-    if (!spec.startsWith('.')) continue;               // 跳过裸模块名（node 内置等）
-    await collect(resolve(dirname(abs), spec), seen, order);
+  for (const re of [IMPORT_RE, EXPORT_FROM_RE]) {
+    for (const m of src.matchAll(re)) {
+      const spec = m[1];
+      if (!spec.startsWith('.')) continue;             // 跳过裸模块名（node 内置等）
+      await collect(resolve(dirname(abs), spec), seen, order);
+    }
   }
   order.push(abs);
   return order;
@@ -41,12 +45,18 @@ function stripModuleSyntax(src, name) {
   let out = src.replace(IMPORT_RE, '').replace(BARE_IMPORT_RE, '');
   // export { a, b };  /  export { a as b };
   out = out.replace(/^[ \t]*export\s*\{[^}]*\}\s*;?[ \t]*$/gm, '');
+  // export * from '...' / export { a } from '...' —— 名已在被导出模块的顶层，直接去掉
+  out = out.replace(EXPORT_FROM_RE, '');
   // export default → 交给 default 本身（本项目未使用，出现即报错）
   if (/^[ \t]*export\s+default\b/m.test(out)) {
     throw new Error(`[${name}] 使用了 export default，打包器暂不支持`);
   }
   // export const/let/var/class/function/async function
   out = out.replace(/^([ \t]*)export\s+(async\s+function|function|class|const|let|var)\b/gm, '$1$2');
+  if (/^[ \t]*export\b/m.test(out)) {
+    const line = out.split('\n').find((l) => /^[ \t]*export\b/.test(l)) ?? '';
+    throw new Error(`[${name}] 残留无法处理的 export 语句：${line.trim()}`);
+  }
   return out;
 }
 

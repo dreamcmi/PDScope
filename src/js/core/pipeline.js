@@ -7,7 +7,7 @@
  */
 
 import { EdgeExtractor, BmcDecoder, collectRunStats, estimateSampleRate } from './bmc.js';
-import { PdDecoder } from './pd.js';
+import { PdDecoder } from '../pd/index.js';
 import { AtkccCapture } from './atkcc.js';
 
 /**

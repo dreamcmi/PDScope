@@ -45,6 +45,25 @@ const CANDIDATES = [
 const browser = CANDIDATES.find((p) => existsSync(p));
 if (!browser) { console.error('找不到 Chrome/Edge，请用 CHROME=/path/to/chrome 指定'); process.exit(1); }
 
+/* ── 预检：http 模式必须先有 serve 在跑 ─────────────────
+   忘了起服务时，Chrome 只会渲染一张 ERR_CONNECTION_REFUSED 错误页，
+   表现是「标题/主题/骨架/按钮」四项一起失败，很难看出根因。这里提前拦。 */
+if (!TARGET.startsWith('file:')) {
+  try {
+    const r = await fetch(TARGET, { signal: AbortSignal.timeout(3000) });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+  } catch (e) {
+    console.error('');
+    console.error(`  目标不可达：${TARGET}（${e.message || e}）`);
+    console.error('  请先另开一个终端启动本地服务：');
+    console.error(`      node tools/serve.mjs --port ${PORT}`);
+    console.error('  或改用免服务的单文件模式：');
+    console.error('      npm run e2e');
+    console.error('');
+    process.exit(1);
+  }
+}
+
 const DEBUG_PORT = 9333 + (Number(arg('--dbg', 0)) || 0);
 const profile = join(tmpdir(), 'pdscope-e2e-' + Date.now());
 
