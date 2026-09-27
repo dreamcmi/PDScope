@@ -1856,7 +1856,7 @@ window.pdscopeOpenUrl = async (name, url) => {
  * 外壳的启动流程应该是「等 `PDScope.ready === true`，再调 openBytes/openUrl」。
  */
 window.PDScope = {
-  version: '0.1.0',
+  version: '0.2.0',
   env: ENV,                       // { tauri, http, file, desktop, hasServer, name, label, proto }
   ready: false,
   openBytes: window.pdscopeOpenBytes,

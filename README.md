@@ -158,9 +158,9 @@ npm run app:build       # 出当前平台的全部安装包
 
 | 平台        | 只出可执行文件        | 出安装包             | 安装包产物                                          |
 | ----------- | --------------------- | -------------------- | --------------------------------------------------- |
-| **Windows** | `npm run app:exe`     | `npm run app:win`    | `bundle/nsis/PDScope_0.1.0_x64-setup.exe`（NSIS）<br>`npm run app:build` 还多出 `bundle/msi/PDScope_0.1.0_x64_zh-CN.msi` |
-| **macOS**   | `npm run app:exe`     | `npm run app:mac`    | `bundle/dmg/PDScope_0.1.0_x64.dmg` + `bundle/macos/PDScope.app` |
-| **Linux**   | `npm run app:exe`     | `npm run app:linux`  | `bundle/appimage/PDScope_0.1.0_amd64.AppImage` + `bundle/deb/PDScope_0.1.0_amd64.deb` |
+| **Windows** | `npm run app:exe`     | `npm run app:win`    | `bundle/nsis/PDScope_0.2.0_x64-setup.exe`（NSIS）<br>`npm run app:build` 还多出 `bundle/msi/PDScope_0.2.0_x64_zh-CN.msi` |
+| **macOS**   | `npm run app:exe`     | `npm run app:mac`    | `bundle/dmg/PDScope_0.2.0_x64.dmg` + `bundle/macos/PDScope.app` |
+| **Linux**   | `npm run app:exe`     | `npm run app:linux`  | `bundle/appimage/PDScope_0.2.0_amd64.AppImage` + `bundle/deb/PDScope_0.2.0_amd64.deb` |
 
 产物在 `src-tauri/target/<三元组>/release/` 下 —— **显式传 `--target` 时路径里会多一层三元组目录**，
 不传才是 `target/release/`。三个平台的依赖见[附录 B](#附录-b环境准备)。
@@ -270,7 +270,7 @@ npm run app:build       # 出当前平台的全部安装包
 | 推 `v*` 标签 | 发版：除了 Artifacts，再自动建一个**草稿** Release 汇总全部产物 |
 
 ```bash
-git tag v0.1.0 && git push origin v0.1.0     # 走发版那条路
+git tag v0.2.0 && git push origin v0.2.0     # 走发版那条路
 ```
 
 > Artifacts 要登录 GitHub 才能下载。想让任何人都能下，就推个标签，
@@ -364,7 +364,7 @@ GitHub 的 Windows runner 一直是 **Windows Server** 系列，从来没有过 
   上传后所有目录变 755、文件变 644，符号链接也不保留；而 macOS 的 `.app` 内部全是
   符号链接与可执行位、Linux 的 `.AppImage` 必须带 `+x`，散着上传会得到一个
   「解压后打不开」的包。`tar` 能把权限和链接原样保住，所以 macOS / Linux 用 `.tar.gz`。
-  ② 各目标的出包名是按架构走的（`pdscope.exe`、`PDScope_0.1.0_x64-setup.exe` …），
+  ② 各目标的出包名是按架构走的（`pdscope.exe`、`PDScope_0.2.0_x64-setup.exe` …），
   x64 与 arm64 之间、不同打包类型之间都可能撞名；而所有产物在 Release 里是平铺的，
   同名文件会互相覆盖且不报错。必须靠「归档名带目标名」区分开。
   Windows 用 `.zip`（没有可执行位这回事，zip 就够，也更合 Windows 用户的习惯）。
@@ -762,7 +762,7 @@ npm run check
 **`version-check.mjs`** 把版本号在五个文件里对一遍：`package.json`、`src-tauri/tauri.conf.json`、
 `src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`、`src/ui/app.js`，外加 README 里写着的安装包产物名。
 这几处分别被 npm、打包器、Cargo、锁文件、界面「关于」读走，只改一处不会报错，
-只会悄悄装出一个「文件名 0.2.0、关于里写 0.1.0」的包 —— 所以放在自检链最前面拦。
+只会悄悄装出一个「文件名 0.3.0、关于里写 0.2.0」的包 —— 所以放在自检链最前面拦。
 
 **`ackcheck.js`** 校验 `linkGoodCrc()`：配对覆盖率、是否自指、方向是否相反、
 **双方 CRC 完好时 MessageID 是否相同**（PD 规范的硬约束）、配对距离。
@@ -914,7 +914,7 @@ CRC 一栏在所有 `.sqlite` 上都是「未记录」—— 分析仪本来就�
 ## 已知限制
 
 * **桌面版不交叉编译**。想在 macOS 上用桌面版，就得在 macOS 上构建（或直接用单文件版）。
-  本机只实测了 Windows 产物：`pdscope.exe` 3.1 MB、NSIS 安装包 `PDScope_0.1.0_x64-setup.exe` 1.2 MB。
+  本机只实测了 Windows 产物：`pdscope.exe` 3.1 MB、NSIS 安装包 `PDScope_0.2.0_x64-setup.exe` 1.2 MB。
 * **安装包只验到「能打出来」**。打安装包时 Tauri 会从 GitHub Releases 下载打包辅助程序
   （NSIS / WiX / appimage 工具），本机已实测可下载并成功产出 NSIS 与 MSI；但**没有在本机执行安装**，
   所以「装完之后双击 `.atkcc` 直接打开」这条只在命令行与拖拽两条等效路径上实测过 ——

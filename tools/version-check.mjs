@@ -5,12 +5,12 @@
  * 为什么需要它：这个仓库的版本号散落在 5 个文件里，而它们各自被不同的东西读走：
  *
  *   package.json              npm 元数据
- *   src-tauri/tauri.conf.json  安装包名（PDScope_0.1.0_x64-setup.exe）、.app 的 CFBundleVersion
+ *   src-tauri/tauri.conf.json  安装包名（PDScope_0.2.0_x64-setup.exe）、.app 的 CFBundleVersion
  *   src-tauri/Cargo.toml       可执行文件自身的版本
  *   src-tauri/Cargo.lock       锁文件里的根包（漏改会让 cargo 认为它和 Cargo.toml 不一致）
  *   src/ui/app.js              界面「关于」里显示的版本
  *
- * 只改其中一处不会报错，只会悄悄装出来一个「文件名 0.2.0、关于里写 0.1.0」的包，
+ * 只改其中一处不会报错，只会悄悄装出来一个「文件名 0.3.0、关于里写 0.2.0」的包，
  * 而且这种不一致往往是发给别人之后才发现的。所以放在自检链最前面统一核对。
  *
  * 用法：node tools/version-check.mjs
@@ -47,7 +47,7 @@ const mApp = /\bversion:\s*'([^']+)'/.exec(read('src/ui/app.js'));
 add('src/ui/app.js', 'PDScope.version', mApp ? mApp[1] : null);
 
 // ── README.md（只提示，不拦） ────────────────────────────────────
-// 文档里会写安装包产物名（PDScope_0.1.0_x64-setup.exe），最容易忘记跟着改。
+// 文档里会写安装包产物名（PDScope_0.2.0_x64-setup.exe），最容易忘记跟着改。
 const readmeVers = [...new Set(
   [...read('README.md').matchAll(/PDScope_(\d+\.\d+\.\d+)/g)].map((m) => m[1]),
 )];
