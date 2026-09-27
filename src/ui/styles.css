@@ -151,6 +151,87 @@ html[data-theme="dark"] .logo{ filter:drop-shadow(0 0 1px rgba(255,255,255,.3));
   background:color-mix(in srgb, var(--warn) 12%, transparent);
 }
 
+/* ── 抓包标签栏 ────────────────────────────────────────
+   一份抓包一个标签。放在顶栏之下、主体之上：顶栏那枚 file-chip 只报「当前看的是哪一份」
+   （标签栏会横向滚动，它不滚），标签栏负责「有哪些、切哪个」。
+   标签与下方面板同色、并向下压 1px 盖住分隔线，看起来才是「连着的」。 */
+.tabbar{
+  flex:none; display:flex; align-items:flex-end; gap:6px;
+  padding:5px 8px 0 10px; min-height:34px;
+  background:var(--panel); border-bottom:1px solid var(--line);
+  z-index:29;
+}
+.tabbar[hidden]{ display:none; }
+
+.tabs{
+  flex:1 1 auto; min-width:0; display:flex; align-items:flex-end; gap:2px;
+  overflow-x:auto; overflow-y:hidden;
+}
+/* 标签栏的横向滚动条压到 5px —— 默认 10px 会把标签顶起来，高度不够用 */
+.tabs::-webkit-scrollbar{ height:5px; }
+.tabs::-webkit-scrollbar-thumb{ border-width:1px; }
+
+.tab{
+  flex:none; display:flex; align-items:center; gap:6px;
+  max-width:236px; height:28px; padding:0 5px 0 9px;
+  border:1px solid var(--line); border-bottom:none; border-radius:7px 7px 0 0;
+  margin-bottom:-1px;                     /* 盖住 .tabbar 的下边线 */
+  background:var(--bg2); color:var(--tx-2);
+  font-size:11.5px; cursor:pointer; user-select:none;
+  transition:background var(--dur), color var(--dur);
+}
+.tab:hover{ background:var(--row-hover); color:var(--tx); }
+.tab:focus-visible{ outline:2px solid var(--accent); outline-offset:-2px; }
+.tab.is-on{
+  background:var(--panel); color:var(--tx); font-weight:600;
+  box-shadow:inset 0 2px 0 var(--accent);   /* 顶部一道强调色，一眼看出当前标签 */
+}
+.tab-name{
+  overflow:hidden; white-space:nowrap; text-overflow:ellipsis; min-width:22px;
+}
+.tab.is-idle .tab-name{ color:var(--tx-3); font-style:italic; }
+.tab.is-err .tab-name{ color:var(--bad); }
+.tab-count{
+  flex:none; padding:0 5px; border-radius:9px;
+  font-family:var(--mono); font-size:9.5px;
+  color:var(--tx-3); background:var(--bg); border:1px solid var(--line);
+}
+.tab.is-on .tab-count{ color:var(--accent); border-color:color-mix(in srgb,var(--accent) 28%,var(--line)); }
+.tab-x{
+  flex:none; width:17px; height:17px; padding:0; border:0; border-radius:4px;
+  display:flex; align-items:center; justify-content:center;
+  background:transparent; color:var(--tx-3); cursor:pointer;
+}
+.tab-x:hover{ background:color-mix(in srgb,var(--err) 16%,transparent); color:var(--err); }
+.tab-x .i{ width:10px; height:10px; }
+
+/* 状态点：解出了报文=绿，有坏包/协议未实现=黄，打不开=红，待解析/解析中=空心 */
+.tab-dot{
+  flex:none; width:7px; height:7px; border-radius:50%;
+  background:var(--tx-3); box-shadow:0 0 0 1px color-mix(in srgb,var(--tx-3) 35%,transparent);
+}
+.tab-dot.is-ok{ background:var(--ok); }
+.tab-dot.is-warn{ background:var(--warn); }
+.tab-dot.is-err{ background:var(--err); }
+.tab-dot.is-idle{ background:transparent; border:1.5px solid var(--tx-3); }
+.tab-dot.is-busy{ background:var(--accent); animation:pulse 1s ease-in-out infinite; }
+@keyframes pulse{ 0%,100%{ opacity:1; } 50%{ opacity:.25; } }
+
+.tab-add{ flex:none; margin-bottom:4px; }
+
+/* 标签右键菜单（关闭 / 关闭其他 / 关闭全部） */
+.ctxmenu{
+  position:fixed; z-index:125; min-width:132px; padding:4px;
+  border-radius:8px; border:1px solid var(--line); background:var(--panel);
+  box-shadow:var(--shadow-lg); display:flex; flex-direction:column; gap:1px;
+}
+.ctxmenu-item{
+  height:26px; padding:0 10px; border:0; border-radius:5px; text-align:left;
+  background:transparent; color:var(--tx); font:inherit; font-size:11.5px; cursor:pointer;
+}
+.ctxmenu-item:hover:not(:disabled){ background:var(--bg2); }
+.ctxmenu-item:disabled{ opacity:.4; cursor:not-allowed; }
+
 .btn{
   display:inline-flex; align-items:center; gap:6px; justify-content:center;
   height:30px; padding:0 12px; border-radius:7px; cursor:pointer;

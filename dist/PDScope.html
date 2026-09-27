@@ -163,6 +163,87 @@ html[data-theme="dark"] .logo{ filter:drop-shadow(0 0 1px rgba(255,255,255,.3));
   background:color-mix(in srgb, var(--warn) 12%, transparent);
 }
 
+/* ── 抓包标签栏 ────────────────────────────────────────
+   一份抓包一个标签。放在顶栏之下、主体之上：顶栏那枚 file-chip 只报「当前看的是哪一份」
+   （标签栏会横向滚动，它不滚），标签栏负责「有哪些、切哪个」。
+   标签与下方面板同色、并向下压 1px 盖住分隔线，看起来才是「连着的」。 */
+.tabbar{
+  flex:none; display:flex; align-items:flex-end; gap:6px;
+  padding:5px 8px 0 10px; min-height:34px;
+  background:var(--panel); border-bottom:1px solid var(--line);
+  z-index:29;
+}
+.tabbar[hidden]{ display:none; }
+
+.tabs{
+  flex:1 1 auto; min-width:0; display:flex; align-items:flex-end; gap:2px;
+  overflow-x:auto; overflow-y:hidden;
+}
+/* 标签栏的横向滚动条压到 5px —— 默认 10px 会把标签顶起来，高度不够用 */
+.tabs::-webkit-scrollbar{ height:5px; }
+.tabs::-webkit-scrollbar-thumb{ border-width:1px; }
+
+.tab{
+  flex:none; display:flex; align-items:center; gap:6px;
+  max-width:236px; height:28px; padding:0 5px 0 9px;
+  border:1px solid var(--line); border-bottom:none; border-radius:7px 7px 0 0;
+  margin-bottom:-1px;                     /* 盖住 .tabbar 的下边线 */
+  background:var(--bg2); color:var(--tx-2);
+  font-size:11.5px; cursor:pointer; user-select:none;
+  transition:background var(--dur), color var(--dur);
+}
+.tab:hover{ background:var(--row-hover); color:var(--tx); }
+.tab:focus-visible{ outline:2px solid var(--accent); outline-offset:-2px; }
+.tab.is-on{
+  background:var(--panel); color:var(--tx); font-weight:600;
+  box-shadow:inset 0 2px 0 var(--accent);   /* 顶部一道强调色，一眼看出当前标签 */
+}
+.tab-name{
+  overflow:hidden; white-space:nowrap; text-overflow:ellipsis; min-width:22px;
+}
+.tab.is-idle .tab-name{ color:var(--tx-3); font-style:italic; }
+.tab.is-err .tab-name{ color:var(--bad); }
+.tab-count{
+  flex:none; padding:0 5px; border-radius:9px;
+  font-family:var(--mono); font-size:9.5px;
+  color:var(--tx-3); background:var(--bg); border:1px solid var(--line);
+}
+.tab.is-on .tab-count{ color:var(--accent); border-color:color-mix(in srgb,var(--accent) 28%,var(--line)); }
+.tab-x{
+  flex:none; width:17px; height:17px; padding:0; border:0; border-radius:4px;
+  display:flex; align-items:center; justify-content:center;
+  background:transparent; color:var(--tx-3); cursor:pointer;
+}
+.tab-x:hover{ background:color-mix(in srgb,var(--err) 16%,transparent); color:var(--err); }
+.tab-x .i{ width:10px; height:10px; }
+
+/* 状态点：解出了报文=绿，有坏包/协议未实现=黄，打不开=红，待解析/解析中=空心 */
+.tab-dot{
+  flex:none; width:7px; height:7px; border-radius:50%;
+  background:var(--tx-3); box-shadow:0 0 0 1px color-mix(in srgb,var(--tx-3) 35%,transparent);
+}
+.tab-dot.is-ok{ background:var(--ok); }
+.tab-dot.is-warn{ background:var(--warn); }
+.tab-dot.is-err{ background:var(--err); }
+.tab-dot.is-idle{ background:transparent; border:1.5px solid var(--tx-3); }
+.tab-dot.is-busy{ background:var(--accent); animation:pulse 1s ease-in-out infinite; }
+@keyframes pulse{ 0%,100%{ opacity:1; } 50%{ opacity:.25; } }
+
+.tab-add{ flex:none; margin-bottom:4px; }
+
+/* 标签右键菜单（关闭 / 关闭其他 / 关闭全部） */
+.ctxmenu{
+  position:fixed; z-index:125; min-width:132px; padding:4px;
+  border-radius:8px; border:1px solid var(--line); background:var(--panel);
+  box-shadow:var(--shadow-lg); display:flex; flex-direction:column; gap:1px;
+}
+.ctxmenu-item{
+  height:26px; padding:0 10px; border:0; border-radius:5px; text-align:left;
+  background:transparent; color:var(--tx); font:inherit; font-size:11.5px; cursor:pointer;
+}
+.ctxmenu-item:hover:not(:disabled){ background:var(--bg2); }
+.ctxmenu-item:disabled{ opacity:.4; cursor:not-allowed; }
+
 .btn{
   display:inline-flex; align-items:center; gap:6px; justify-content:center;
   height:30px; padding:0 12px; border-radius:7px; cursor:pointer;
@@ -669,12 +750,23 @@ body.detail-collapsed .detail-rail span{
       导出
     </button>
 
-    <button class="btn primary" id="btnOpen">
+    <button class="btn primary" id="btnOpen" title="打开抓包文件（Ctrl/⌘+O）· 可一次多选，会并排成标签页">
       <svg viewBox="0 0 16 16" class="i"><path d="M1.8 12.5V3.6a.9.9 0 0 1 .9-.9h3.1l1.4 1.6h6.1a.9.9 0 0 1 .9.9v7.3a.9.9 0 0 1-.9.9H2.7a.9.9 0 0 1-.9-.9Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
       打开抓包
     </button>
-    <input type="file" id="fileInput" accept=".atkcc,.sqlite,.db,.bin,.zip" hidden />
+    <!-- multiple：一次可以选多份，每份各占一个标签页 -->
+    <input type="file" id="fileInput" accept=".atkcc,.sqlite,.db,.bin,.zip" multiple hidden />
   </header>
+
+  <!-- ── 抓包标签栏 ─────────────────────────────────────────
+       一份抓包一个标签，可同时打开多份并随时切换；每份各自记住通道、筛选、时间窗口与滚动位置。
+       只有打开了文件才出现 —— 一份都没开时让位给表格里的空态引导，不白占一行。 -->
+  <div class="tabbar" id="tabBar" hidden>
+    <div class="tabs" id="tabs" role="tablist" aria-label="已打开的抓包"></div>
+    <button class="btn ghost icon-only tab-add" id="btnTabAdd" title="再打开一份抓包（可多选）">
+      <svg viewBox="0 0 16 16" class="i"><path d="M8 3.5v9M3.5 8h9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    </button>
+  </div>
 
   <!-- ── 主体 ─────────────────────────────────────────────── -->
   <div class="body" id="appBody">
@@ -818,7 +910,7 @@ body.detail-collapsed .detail-rail span{
             <button class="btn primary" id="btnOpen2">选择文件</button>
             <button class="btn" id="btnDemo">载入示例</button>
           </div>
-          <p class="tiny-note" id="emptyNote">也可以把文件直接拖进窗口</p>
+          <p class="tiny-note" id="emptyNote">可一次选多份，也可以直接把文件拖进窗口 —— 每份各占一个标签页</p>
         </div>
       </div>
 
@@ -871,8 +963,8 @@ body.detail-collapsed .detail-rail span{
   <div class="drop" id="drop">
     <div class="drop-inner">
       <svg viewBox="0 0 48 48" class="i"><path d="M24 8v24M14 24l10 10 10-10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      <b>松开以解析这份抓包</b>
-      <span>.atkcc · .sqlite</span>
+      <b>松开以解析抓包</b>
+      <span>.atkcc · .sqlite · 可一次拖多份</span>
     </div>
   </div>
 
@@ -5699,6 +5791,13 @@ async function makeAutoInflator() {
  *
  * 外壳（任何形态都可以有，也可以没有）通过下面两个入口与界面交互，见文件末尾的
  * 「外壳桥」一节：`window.pdscopeOpenUrl()` 由外壳调用，`window.PDScope` 由外壳/调试读取。
+ *
+ * ── 多文档 ─────────────────────────────────────────────
+ * 可以同时打开多份抓包，一份一个标签。状态是「一份文件一个 doc 对象」，见「文档」一节；
+ * 全局的 `S` 只是**当前激活那一份**的别名，所以下文几百处 `S.packets` / `S.filters`
+ * 读的都是「当前文件」，切换标签就是给 `S` 换个指向。
+ * 换文档时界面必须**整片重画**（见 `renderAll`）——面板只有一副、文档有多份，
+ * 只改个标题就会出现「勾着 A 的筛选、筛的是 B 的数据」。
  */
 
 
@@ -5791,24 +5890,19 @@ function pairAckTone(packets) {
 const POWER_TYPES = /Source_Cap|Request|EPR_Request|EPR_Mode|PPS|BIST|Source_Capabilities_Extended|EPR_Source|EPR_Sink|Sink_Cap/i;
 const ENTER_TYPES = /PS RDY|VDM|Alert|Status|Source_Info|Revision|Enter_USB|Discover|Sink_Cap|Notify/i;
 
-/* ═══════════════════════ 状态 ═══════════════════════ */
-const S = {
-  cap: null,
-  meta: null,
-  fileName: '',
-  fileSize: 0,
-  channel: 0,
-  /** 本文件实际采用的采样率（文件声明 → 波形自检 → 兜底，见 pipeline.resolveSampleRate） */
-  rate: 0,
-  packets: [],
-  view: [],          // 过滤 + 排序后的结果
-  stats: null,
-  busSeries: null,
-  selected: -1,
-  cancel: false,
-  /** 时间轴画哪一组曲线：'power' = VBUS/IBUS，'aux' = CC1/CC2（POWER-Z） */
-  tlMode: 'power',
-  filters: {
+/* ═══════════════════════ 文档（一份抓包 = 一个标签） ═══════════════════════ */
+/**
+ * 一份打开的抓包。
+ *
+ * 这些字段原先统统挂在全局 `S` 上，只装得下一份文件。改成「一份文件一个对象」之后，
+ * `S` 的含义收窄成**当前激活的那一份**，于是下面其余几百处 `S.packets`、`S.filters`
+ * 一字未改就是「当前文件的状态」，而切换标签只是给 `S` 换个指向。
+ *
+ * `filters / sort / viewMode / tlMode / channel / selected` 刻意也放在这里 ——
+ * 它们是「对这份抓包的看法」，不是全局偏好，切回来必须原样还在。
+ */
+function newFilters() {
+  return {
     roles: new Set(['SRC', 'SNK', 'Plug']),
     sops: new Set(['SOP', "SOP'", "SOP''", 'Hard Reset', 'Cable Reset']),
     cats: new Set(['Control', 'Data', 'Extended', 'VDM', 'Error']),
@@ -5820,12 +5914,56 @@ const S = {
     q: '',
     tFrom: 0,
     tTo: 1,
-  },
-  sort: { k: 'index', asc: true },
-  rowH: 30,
-  viewMode: 'all',
-  chActivity: new Map(),
-};
+  };
+}
+
+let docSeq = 0;
+/**
+ * @param {File|null} file 不给就是「还没打开任何文件」的空白占位文档
+ */
+function newDoc(file) {
+  return {
+    id: ++docSeq,
+    fileName: file?.name || '',
+    fileSize: file?.size || 0,
+    /** 空白占位文档：不进标签栏，也不在列表里 */
+    blank: !file,
+    cap: null,
+    meta: null,
+    channel: 0,
+    /** 本文件实际采用的采样率（声明 → 波形自检 → 兜底，见 pipeline.resolveSampleRate） */
+    rate: 0,
+    packets: [],
+    view: [],            // 过滤 + 排序后的结果
+    stats: null,
+    busSeries: null,
+    totalSamples: 0,
+    decodedMs: 0,
+    selected: -1,
+    cancel: false,
+    /** 时间轴画哪一组曲线：'power' = VBUS/IBUS，'aux' = CC1/CC2（分析仪导出才有） */
+    tlMode: 'power',
+    chActivity: new Map(),
+    /** 常驻提示条的内容（切回来要还原）；noticeOff 记「用户点过知道了」 */
+    notice: null,
+    noticeOff: false,
+    /** 'blank' 未开文件 | 'ready' 容器就绪待解析 | 'running' 解析中 | 'done' | 'error' 打不开 */
+    state: 'blank',
+    error: '',
+    /** 已排队等待解析（避免同一份文件被排进队列两次） */
+    pending: false,
+    filters: newFilters(),
+    sort: { k: 'index', asc: true },
+    viewMode: 'all',
+  };
+}
+
+/** 所有已打开的抓包，顺序即标签顺序 */
+const DOCS = [];
+/** 当前激活的文档 —— 下文所有 `S.xxx` 读的都是它（可能是不在 DOCS 里的空白占位文档） */
+let S = newDoc(null);
+/** 与「哪一份文件」无关的界面偏好，跨标签共用 */
+const UI = { rowH: 30 };
 
 const inflate = makeBrowserInflator();
 
@@ -5865,13 +6003,14 @@ const setProgress = (r, sub) => {
 const hideProgress = () => $('#progress').classList.remove('show');
 $('#progCancel').addEventListener('click', () => { S.cancel = true; });
 
-/* ═══════════════════════ 打开文件 ═══════════════════════ */
+/* ═══════════════════════ 打开文件（可多份） ═══════════════════════ */
 $('#btnOpen').addEventListener('click', () => $('#fileInput').click());
 $('#btnOpen2')?.addEventListener('click', () => $('#fileInput').click());
+$('#btnTabAdd').addEventListener('click', () => $('#fileInput').click());
 $('#fileInput').addEventListener('change', (e) => {
-  const f = e.target.files?.[0];
-  if (f) loadFile(f);
-  e.target.value = '';
+  const { files } = pickCaptureFiles(e.target.files || []);
+  if (files.length) openFiles(files);
+  e.target.value = '';       // 清空才能再次选中同一个文件
 });
 
 // 拖拽
@@ -5881,16 +6020,88 @@ addEventListener('dragover', (e) => e.preventDefault());
 addEventListener('dragleave', (e) => { e.preventDefault(); if (--dragDepth <= 0) { dragDepth = 0; $('#drop').classList.remove('show'); } });
 addEventListener('drop', (e) => {
   e.preventDefault(); dragDepth = 0; $('#drop').classList.remove('show');
-  const f = e.dataTransfer?.files?.[0];
-  if (f) loadFile(f);
+  const { files, skipped } = pickCaptureFiles(e.dataTransfer?.files || []);
+  if (!files.length) return;
+  if (skipped) toast(`已忽略 ${skipped} 个不像抓包的文件`, 'warn');
+  openFiles(files);
 });
 
-/** 打开一份抓包：读字节 -> 认格式 -> 解析容器 -> 选通道 -> 解码 */
-async function loadFile(file) {
-  S.cancel = false;
+/**
+ * 从拖进来/选进来的一堆文件里挑出要打开的。
+ *
+ * 拖进来的东西五花八门：文件夹会变成 0 字节的伪文件、顺手拖进来的图片、.DS_Store…
+ * 所以先按「名字像不像抓包」筛一道。但只要**一个都不像**，就把全部放进来交给内容嗅探
+ * （`sniffPowerz` / ZIP 魔数）自己判 —— 免得用户把抓包改了个扩展名就再也打不开。
+ */
+const CAPTURE_EXT = /\.(atkcc|sqlite|db|bin|zip)$/i;
+function pickCaptureFiles(list) {
+  const all = [...list].filter((f) => f && (f.size > 0 || f.name));
+  const named = all.filter((f) => CAPTURE_EXT.test(f.name));
+  return { files: named.length ? named : all, skipped: named.length ? all.length - named.length : 0 };
+}
+
+/* ── 载入 / 解码的串行队列 ──────────────────────────────
+ * 两份文件同时解会互相踩：`S` 是共享的、进度条只有一根、localStorage 也只有一个。
+ * 串行化最省事，代价只是每步之间多一次微任务。
+ * 注意两点：
+ *   ① 队列**不可重入**（任务里再 enqueue 并 await 会死锁），所以 openFiles / activateDoc
+ *      这两个「调度方」必须跑在队列外，只把具体活（loadContainer / decodeDoc）丢进去；
+ *   ② 任务的**返回值必须带出来**（`await job.run()` 的结果要交给 resolve）——
+ *      否则调用方拿到的是 undefined 而不是文档对象。
+ */
+const jobs = [];
+let jobRunning = false;
+async function pumpJobs() {
+  if (jobRunning) return;
+  jobRunning = true;
+  try {
+    while (jobs.length) {
+      const job = jobs.shift();
+      let out;
+      try { out = await job.run(); } catch (err) { console.error(err); }
+      job.done(out);
+    }
+  } finally { jobRunning = false; }
+}
+/** 排一个任务并等它跑完；resolve 的值就是任务的返回值 */
+const enqueue = (run) => new Promise((resolve) => { jobs.push({ run, done: resolve }); pumpJobs(); });
+
+/**
+ * 打开一批抓包 —— 每份一个标签，本批里**第一份成功载入的**自动激活。
+ *
+ * 解码推迟到标签被激活时（见 `activateDoc`）：一次拖 5 份文件时，
+ * 没必要把 5 份全解完才能看第一份。
+ */
+async function openFiles(files) {
+  const list = [...files];
+  if (!list.length) return;
+  const opened = [];
+  for (const f of list) opened.push(await enqueue(() => loadContainer(f)));
+
+  const first = opened.find((d) => !d?.error) || opened[0];
+  if (first) await activateDoc(first);
+  else renderAll();
+  if (opened.length > 1) {
+    const bad = opened.filter((d) => d?.error).length;
+    toast(bad ? `已打开 ${opened.length - bad} 份，${bad} 份打不开` : `已打开 ${opened.length} 份抓包，可点上方标签切换`,
+      bad ? 'warn' : 'ok');
+  }
+}
+
+/**
+ * 读字节 → 认格式 → 解析容器 → 挑通道，然后登记成一个标签。
+ * **到这里为止都不解码**，所以这一段的开销只跟文件大小有关、跟报文多少无关。
+ *
+ * 失败也不抛：把原因记在文档上（标签变红 + 表格区给出解释），
+ * 这样一次打开多份时，坏的那份不会把好的那份一起带崩。
+ */
+async function loadContainer(file) {
+  const doc = takeSlotDoc(file);
+  doc.state = 'running';
+  doc.error = '';
+  renderTabs();
   showProgress('正在读取文件…', file.name);
   try {
-    const t0 = performance.now();
     const buf = new Uint8Array(await file.arrayBuffer());
     setProgress(0.05, `${fmtSize(buf.length)} 已载入，解析容器…`);
 
@@ -5901,127 +6112,390 @@ async function loadFile(file) {
       ? PowerzCapture.open(buf)
       : await AtkccCapture.open(buf, { inflate });
 
-    S.cap = cap; S.meta = cap.meta;
-    S.fileName = file.name; S.fileSize = buf.length;
-    S.rate = cap.meta.sampleRate;      // 先用文件声明的值，解码时再由波形自检核一遍
-    S.tlMode = 'power';
-    hideNotice();
+    doc.cap = cap;
+    doc.meta = cap.meta;
+    doc.fileSize = buf.length;
+    doc.rate = cap.meta.sampleRate;      // 先用文件声明的值，解码时再由波形自检核一遍
+    doc.tlMode = 'power';
+    doc.decodedMs = 0;
 
-    const chs = cap.meta.channels;
     // 多通道时扫描活动度，自动挑一个「有报文」的通道（分析仪导出只有 1 个逻辑通道）
+    const chs = cap.meta.channels;
     let pick = chs[0].channel;
     if (chs.length > 1) {
       showProgress('正在扫描各通道活动度…', `${chs.length} 个通道`);
-      S.chActivity = new Map();
+      doc.chActivity = new Map();
       for (let i = 0; i < chs.length; i++) {
         const r = await scanChannelActivity(cap, chs[i].channel, inflate, 3);
-        S.chActivity.set(chs[i].channel, r.activity);
+        doc.chActivity.set(chs[i].channel, r.activity);
         setProgress(0.05 + 0.25 * (i + 1) / chs.length, `通道 ${chs[i].channel}：${r.activity} 个活动字节`);
       }
       let best = chs[0], bestA = -1;
-      for (const c of chs) { const a = S.chActivity.get(c.channel) ?? 0; if (a > bestA) { bestA = a; best = c; } }
+      for (const c of chs) { const a = doc.chActivity.get(c.channel) ?? 0; if (a > bestA) { bestA = a; best = c; } }
       pick = best.channel;
     }
-
-    renderMeta();
-    renderChannels();
-    await decodeAndShow(pick);
-    const dt = Math.round(performance.now() - t0);
-    toast(`解析完成 · ${S.packets.length} 条报文 · ${dt} ms`, 'ok');
+    doc.channel = pick;
+    doc.state = 'ready';
   } catch (err) {
     console.error(err);
-    // 失败时把状态清干净，别让上一份抓包的表格 / 时间轴留在屏幕上冒充新文件
-    S.cap = null; S.meta = null; S.fileName = ''; S.fileSize = 0;
-    S.packets = []; S.view = []; S.stats = null; S.busSeries = null;
-    S.totalSamples = 0; S.selected = -1; S.chActivity = new Map();
-    renderMeta(); renderChannels(); applyFilters(true); drawTimeline();
-    toast('解析失败：' + (err?.message || err), 'err');
+    doc.error = String(err?.message || err);
+    doc.cap = null; doc.meta = null;
+    doc.state = 'error';
+  } finally {
     hideProgress();
+    renderTabs();
   }
+  return doc;
 }
 
 /**
- * 解码指定通道并刷新整个界面。
+ * 取一个空位放这份文件：一份都没开过时复用那份空白占位文档，
+ * 否则新开一个 —— 这样「空白文档」始终只有一份，也不会在标签栏里多一个空标签。
+ */
+function takeSlotDoc(file) {
+  let doc;
+  if (S.blank && !DOCS.length) { doc = S; doc.blank = false; }
+  else doc = newDoc(file);
+  doc.fileName = file.name;
+  doc.fileSize = file.size || 0;
+  if (!DOCS.includes(doc)) DOCS.push(doc);
+  return doc;
+}
+
+/**
+ * 切到某个标签。
+ *
+ * 分两段：**同步段**立刻把 `S` 指过去并重画（点标签必须马上有反应），
+ * **解码段**排进串行队列（目标还没解过，或要换通道重解）。
+ * 切走时把上一份正在跑的解码置 `cancel`：它的结果会被丢弃、状态退回「待解析」，
+ * 下次转回来重解 —— 半截结果绝不能当成完整结果留下来。
+ */
+function activateDoc(doc, channel) {
+  if (!doc) return Promise.resolve();
+  const prev = S;
+  if (prev && prev.state === 'running' && (prev !== doc || channel != null)) prev.cancel = true;
+  S = doc;
+  if (channel != null) doc.channel = channel;
+  renderTabs();
+
+  const need = !doc.error && !doc.blank && (doc.state !== 'done' || channel != null);
+  if (!need) { renderAll(); return Promise.resolve(); }
+  if (doc.pending) { renderAll(); return Promise.resolve(); }   // 已排队，别重复排
+  doc.pending = true;
+  return enqueue(async () => { doc.pending = false; await decodeDoc(doc); });
+}
+
+/**
+ * 解码指定文档（用 `doc.channel` 那个通道），然后把整个界面刷新成它的样子。
  *
  * 两种格式在这里合流：ATK-C 要跑「分块 → BMC → 4B5B」，
  * POWER-Z 只要拆事件行并把逻辑字节交给同一个 PD 解码器。
  * 两者产出的 `{packets, stats}` 同形，所以下面这段渲染代码一份都不用复制。
  */
-async function decodeAndShow(channel) {
-  if (!S.cap) return;
-  S.cancel = false;
-  S.channel = channel;
-  const pz = S.meta?.source === 'powerz';
+async function decodeDoc(doc) {
+  if (!doc?.cap) { renderAll(); return; }
+  const channel = doc.channel;
+  doc.cancel = false;
+  doc.state = 'running';
+  const pz = doc.meta?.source === 'powerz';
+  /** 这段解码期间用户可能已经切走 —— 那就只把结果收进文档，一行界面都别动 */
+  const visible = () => S === doc;
+  renderTabs();
   showProgress(pz ? `正在解析通道 ${channel}…` : `正在解码通道 ${channel}…`,
     pz ? 'SQLite 事件流 → PD 报文' : 'BMC 位流 → 4B5B → PD 报文');
 
   const t0 = performance.now();
-  const { packets, stats } = pz
-    ? await S.cap.decode({
-      shouldStop: () => S.cancel,
-      onProgress: (p) => {
-        if (p.phase === 'read') setProgress(0.30 + 0.30 * p.ratio, `读取事件行 ${Math.round(p.ratio * 100)}%`);
-        else setProgress(0.60 + 0.35 * p.ratio, `已解出 ${p.packets} 条`);
-      },
-    })
-    : await decodeChannel(S.cap, channel, {
-      inflate,
-      bitOrder: 'lsb',
-      shouldStop: () => S.cancel,
-      onProgress: (p) => setProgress(0.3 + 0.65 * p.ratio, `分块 ${p.chunk}/${p.chunks} · 已解出 ${p.packets} 条`),
-    });
+  try {
+    const { packets, stats } = pz
+      ? await doc.cap.decode({
+        shouldStop: () => doc.cancel,
+        onProgress: (p) => {
+          if (!visible()) return;
+          if (p.phase === 'read') setProgress(0.30 + 0.30 * p.ratio, `读取事件行 ${Math.round(p.ratio * 100)}%`);
+          else setProgress(0.60 + 0.35 * p.ratio, `已解出 ${p.packets} 条`);
+        },
+      })
+      : await decodeChannel(doc.cap, channel, {
+        inflate,
+        bitOrder: 'lsb',
+        shouldStop: () => doc.cancel,
+        onProgress: (p) => {
+          if (!visible()) return;
+          setProgress(0.3 + 0.65 * p.ratio, `分块 ${p.chunk}/${p.chunks} · 已解出 ${p.packets} 条`);
+        },
+      });
 
-  // 附上 VBUS / IBUS
-  const bus = S.cap.meta.bus;
-  for (const p of packets) {
-    let v = 0, i = 0;
-    if (bus && bus.length) {
-      let lo = 0, hi = bus.length - 1, ans = 0;
-      while (lo <= hi) { const m = (lo + hi) >> 1; if (bus[m].sample <= p.startSample) { ans = m; lo = m + 1; } else hi = m - 1; }
-      v = bus[ans].vbus; i = bus[ans].ibus;
+    // 中途被取消 / 被切走：结果作废，退回「待解析」，下次转回来重解
+    if (doc.cancel || !visible()) { doc.state = 'ready'; return; }
+
+    // 附上 VBUS / IBUS
+    const bus = doc.cap.meta.bus;
+    for (const p of packets) {
+      let v = 0, i = 0;
+      if (bus && bus.length) {
+        let lo = 0, hi = bus.length - 1, ans = 0;
+        while (lo <= hi) { const m = (lo + hi) >> 1; if (bus[m].sample <= p.startSample) { ans = m; lo = m + 1; } else hi = m - 1; }
+        v = bus[ans].vbus; i = bus[ans].ibus;
+      }
+      p.vbus = v; p.ibus = i;
+      p.kind = kindOf(p);
     }
-    p.vbus = v; p.ibus = i;
-    p.kind = kindOf(p);
+    pairAckTone(packets);   // GOOD CRC 与它确认的报文同色
+
+    doc.packets = packets;
+    doc.stats = stats;
+    doc.decodedMs = Math.round(performance.now() - t0);
+    // 采样率以解码时定下来的为准（文件声明 / 波形实测 / 兜底），后面所有「采样点 → 秒」都用它
+    if (stats.sampleRate > 0) doc.rate = stats.sampleRate;
+    if (stats.sampleRateNote) toast(stats.sampleRateNote, 'warn');
+
+    // 时间轴数据
+    const total = stats.totalSamples || doc.cap.meta.totalSamples || 1;
+    doc.busSeries = buildBusSeries(bus, total, doc.rate, 2400);
+    doc.totalSamples = total;
+
+    // 该协议只有容器、没有语义解析（目前是 UFCS）→ 明确说清，别让人以为解析失败
+    doc.notice = stats.unsupported
+      ? { text: stats.unsupported, sub: `${stats.unsupportedMsgs} 条原始帧已读入，模拟量轨迹正常可用` }
+      : null;
+    doc.noticeOff = false;
+    doc.selected = -1;
+    doc.filters.tFrom = 0; doc.filters.tTo = 1;      // 换了文件/通道 → 时间窗口回到全时段
+    doc.state = 'done';
+
+    setProgress(1, '完成');
+    renderAll();
+    toast(`解析完成 · ${packets.length} 条报文 · ${doc.decodedMs} ms`, 'ok');
+  } finally {
+    hideProgress();
+    if (doc.state === 'running') doc.state = 'ready';
+    renderTabs();
   }
-  pairAckTone(packets);   // GOOD CRC 与它确认的报文同色
-  S.packets = packets;
-  S.stats = stats;
-  S.decodedMs = Math.round(performance.now() - t0);
-  // 采样率以解码时定下来的为准（文件声明 / 波形实测 / 兜底），后面所有「采样点 → 秒」都用它
-  if (stats.sampleRate > 0) S.rate = stats.sampleRate;
-  if (stats.sampleRateNote) toast(stats.sampleRateNote, 'warn');
+}
 
-  // 时间轴数据
-  const total = stats.totalSamples || S.cap.meta.totalSamples || 1;
-  S.busSeries = buildBusSeries(bus, total, S.rate, 2400);
-  S.totalSamples = total;
+/* ── 标签栏 ──────────────────────────────────────────── */
 
-  // 该协议只有容器、没有语义解析（目前是 UFCS）→ 明确说清，别让人以为解析失败
-  if (stats.unsupported) showNotice(stats.unsupported, `${stats.unsupportedMsgs} 条原始帧已读入，模拟量轨迹正常可用`);
-  else hideNotice();
+/**
+ * 重画标签栏。只在打开了文件时出现 —— 一份都没开就让位给表格里的空态引导，
+ * 免得顶着一排空标签。任一次整片重画都会把它带上，所以这里是唯一的标签渲染入口。
+ */
+function renderTabs() {
+  closeTabMenu();
+  const bar = $('#tabBar');
+  const box = $('#tabs');
+  bar.hidden = !DOCS.length;
+  if (bar.hidden) box.replaceChildren();
+  else {
+    box.replaceChildren(...DOCS.map(tabEl));
+    // 标签多了会横向滚动，保证当前这个始终看得见
+    box.querySelector('.tab.is-on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+  syncAppbarChip();
+}
 
-  buildTypeList();
-  resetTimeRange();
-  applyFilters(true);
+/** 一个标签：状态点 + 文件名 + 报文数 + 关闭按钮 */
+function tabEl(doc, i) {
+  const t = el('div', 'tab');
+  t.dataset.id = String(doc.id);
+  t.dataset.name = doc.fileName;
+  t.setAttribute('role', 'tab');
+  t.setAttribute('aria-selected', String(doc === S));
+  t.tabIndex = doc === S ? 0 : -1;
+  t.title = tabTitle(doc, i);
+  const on = doc === S;
+  if (on) t.classList.add('is-on');
+  if (doc.error) t.classList.add('is-err');
+  else if (doc.state !== 'done') t.classList.add('is-idle');
+
+  t.appendChild(el('i', 'tab-dot ' + tabTone(doc)));
+  t.appendChild(el('span', 'tab-name', doc.fileName || '未命名'));
+  const n = doc.state === 'done' ? doc.packets.length
+    : doc.error ? null
+      : doc.state === 'running' ? null
+        : (doc.stats?.unsupportedMsgs ?? null);
+  if (n != null) t.appendChild(el('span', 'tab-count', String(n)));
+
+  const x = el('button', 'tab-x');
+  x.type = 'button';
+  x.title = '关闭这份抓包（中键也可以）';
+  x.setAttribute('aria-label', `关闭 ${doc.fileName}`);
+  x.innerHTML = '<svg viewBox="0 0 16 16" class="i"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>';
+  x.addEventListener('click', (e) => { e.stopPropagation(); closeDoc(doc); });
+  t.appendChild(x);
+
+  t.addEventListener('click', () => activateDoc(doc));
+  t.addEventListener('auxclick', (e) => { if (e.button === 1) { e.preventDefault(); closeDoc(doc); } });
+  t.addEventListener('contextmenu', (e) => { e.preventDefault(); openTabMenu(doc, e.clientX, e.clientY); });
+  t.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activateDoc(doc); }
+    else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); closeDoc(doc); }
+    else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+      const j = i + (e.key === 'ArrowRight' ? 1 : -1);
+      if (DOCS[j]) { e.preventDefault(); activateDoc(DOCS[j]); $('#tabs .tab.is-on')?.focus(); }
+    }
+  });
+  return t;
+}
+
+/**
+ * 标签状态点的语义：解出了报文=绿；有坏包、或协议语义未实现=黄；
+ * 打不开=红；待解析=空心圈；正在解析=呼吸的蓝点。
+ */
+function tabTone(doc) {
+  if (doc.error) return 'is-err';
+  if (doc.state === 'running' || doc.pending) return 'is-busy';
+  if (doc.state !== 'done') return 'is-idle';
+  if (doc.stats?.badCrc || doc.stats?.unsupported) return 'is-warn';
+  return 'is-ok';
+}
+
+function tabTitle(doc, i) {
+  const parts = [`第 ${i + 1} / ${DOCS.length} 份`, doc.fileName];
+  if (doc.fileSize) parts.push(fmtSize(doc.fileSize));
+  if (doc.error) parts.push('打不开：' + doc.error);
+  else if (doc.state === 'done') parts.push(`${doc.packets.length} 条报文 · 通道 ${doc.channel}`);
+  else if (doc.state === 'running' || doc.pending) parts.push('正在解析…');
+  else parts.push('尚未解析，点一下开始');
+  return parts.join('  ·  ');
+}
+
+/**
+ * 顶栏那枚文件 chip。
+ * 与标签栏分工：标签栏会横向滚动、名字会截断，这枚不滚、悬停给全名，
+ * 所以它始终能回答「当前看的到底是哪一份」。
+ */
+function syncAppbarChip() {
+  const chip = $('#fileChip');
+  const i = DOCS.indexOf(S);
+  $('#fileName').textContent = S.fileName || '未打开抓包文件';
+  chip.title = S.fileName
+    ? `${S.fileName}  ·  ${fmtSize(S.fileSize)}`
+    + (DOCS.length > 1 ? `  ·  第 ${i + 1} / ${DOCS.length} 份（点上方标签切换）` : '')
+    : '还没打开抓包 · 可直接把文件拖进窗口（支持一次多份）';
+  chip.classList.toggle('has', !!S.fileName);
+}
+
+/**
+ * 关闭一个标签。
+ * 关的是当前标签时，接着激活「右边那个，没有就左边那个」—— 编辑器的老规矩；
+ * 全关光了就回到空白态（`S` 换成一份新的空白文档），而不是让指针悬空。
+ */
+function closeDoc(doc) {
+  const i = DOCS.indexOf(doc);
+  if (i < 0) return;
+  if (doc.state === 'running') doc.cancel = true;
+  DOCS.splice(i, 1);
+  if (!DOCS.length) { S = newDoc(null); renderAll(); return; }
+  if (S === doc) { S = null; activateDoc(DOCS[Math.min(i, DOCS.length - 1)]); }
+  else renderTabs();
+}
+
+/** 关闭其他 / 关闭全部：攒完再渲染一次，别每关一个就整片重画 */
+function closeOtherDocs(keep) {
+  const drop = DOCS.filter((d) => d !== keep);
+  if (!drop.length) return;
+  for (const d of drop) if (d.state === 'running') d.cancel = true;
+  DOCS.splice(0, DOCS.length, ...(keep ? [keep] : []));
+  if (!DOCS.length) { S = newDoc(null); renderAll(); return; }
+  if (S !== keep) { S = null; activateDoc(keep); } else renderTabs();
+}
+
+/* ── 标签右键菜单 ──────────────────────────────────────
+   标签开多了以后「关掉除了这个以外的全部」是高频操作，光靠一个个点 × 太慢。 */
+function openTabMenu(doc, x, y) {
+  closeTabMenu();
+  const m = el('div', 'ctxmenu');
+  m.id = 'tabMenu';
+  const item = (label, fn, disabled) => {
+    const b = el('button', 'ctxmenu-item', label);
+    b.type = 'button';
+    b.disabled = !!disabled;
+    b.addEventListener('click', () => fn());
+    return b;
+  };
+  m.append(
+    item('关闭', () => closeDoc(doc)),
+    item('关闭其他', () => closeOtherDocs(doc), DOCS.length < 2),
+    item('关闭全部', () => closeOtherDocs(null)),
+  );
+  document.body.appendChild(m);
+  // 贴边时翻转，别让菜单跑出窗口
+  const r = m.getBoundingClientRect();
+  m.style.left = Math.max(4, Math.min(x, innerWidth - r.width - 6)) + 'px';
+  m.style.top = Math.max(4, Math.min(y + 2, innerHeight - r.height - 6)) + 'px';
+}
+function closeTabMenu() { $('#tabMenu')?.remove(); }
+addEventListener('click', () => closeTabMenu());
+addEventListener('resize', () => closeTabMenu());
+
+/* ═══════════════════════ 整片重画 ═══════════════════════ */
+/**
+ * 把「当前文档」的全部界面重画一遍。
+ *
+ * 界面是共用的一副、文档是各自一份，所以每次换文档都必须整片重画，不能只改个标题：
+ * 左侧筛选控件的勾选状态、时间轴标题、详情面板全都要跟着换人。
+ */
+function renderAll() {
+  renderTabs();
   renderMeta();
   renderChannels();
+  renderNotice();
+  buildTypeList();
+  syncFilterUI();
+  applyFilters(true);
   renderTimelineHead();
-  setProgress(1, '完成');
-  hideProgress();
   drawTimeline();
+  renderDetailFor(S.selected);
+  refitDetailW();
 }
 
-/* ── 顶部提示条：用来讲清「这份文件为什么只解出一部分」这类事 ──
+/* ── 常驻提示条：讲清「这份文件为什么只解出一部分」这类事 ──
    目前只有一种情况用它：分析仪抓到的是本工程未实现语义解析的协议（UFCS）。
-   相比 toast，它不消失 —— 这个信息在整个浏览过程中都成立。 */
-function showNotice(text, sub) {
-  $('#noticeText').textContent = text;
-  $('#noticeSub').textContent = sub || '';
-  $('#noticeSub').hidden = !sub;
-  $('#notice').hidden = false;
+   与 toast 的分工：toast 是「刚刚发生了什么」，会自己消失；
+   提示条是「这份文件是什么情况」，在整个浏览过程中都成立，必须一直看得见。
+   内容按文档存（`doc.notice`），所以切回来还在；点过「知道了」的记在 `noticeOff` 上。 */
+function renderNotice() {
+  const n = S.notice;
+  const show = !!n && !S.noticeOff;
+  $('#notice').hidden = !show;
+  if (!show) return;
+  $('#noticeText').textContent = n.text;
+  $('#noticeSub').textContent = n.sub || '';
+  $('#noticeSub').hidden = !n.sub;
 }
-function hideNotice() { $('#notice').hidden = true; }
-$('#noticeClose').addEventListener('click', hideNotice);
+$('#noticeClose').addEventListener('click', () => {
+  S.noticeOff = true;
+  renderNotice();
+});
+
+/**
+ * 把「当前文档」的筛选状态推回左侧面板那副共用控件上。
+ *
+ * 切标签**必须**做这件事：面板只有一副，而筛选是每份文件各记一份，
+ * 不推回去就会出现「勾着 A 的选项、筛的是 B 的数据」这种最难查的错。
+ */
+function syncFilterUI() {
+  const f = S.filters;
+  $$('#fRole .chip').forEach((c) => c.classList.toggle('is-on', f.roles.has(c.dataset.v)));
+  $$('#fSop .chip').forEach((c) => c.classList.toggle('is-on', f.sops.has(c.dataset.v)));
+  $$('#fCat .chip').forEach((c) => c.classList.toggle('is-on', f.cats.has(c.dataset.v)));
+  $('#fHideGoodCrc').checked = f.hideGoodCrc;
+  $('#fOnlyBad').checked = f.onlyBad;
+  $('#fOnlyPower').checked = f.onlyPower;
+  $('#fOnlyEnter').checked = f.onlyEnter;
+  if ($('#fSearch').value !== f.q) $('#fSearch').value = f.q;
+  $('#tFrom').value = Math.round(f.tFrom * 1000);
+  $('#tTo').value = Math.round(f.tTo * 1000);
+  $$('#viewSeg .seg-item').forEach((b) => b.classList.toggle('is-on', b.dataset.v === S.viewMode));
+  $$('#msBody input').forEach((c) => (c.checked = f.types.has(c.value)));
+  updateMsHead();
+  $$('.th').forEach((x) => {
+    const hit = x.dataset.k && x.dataset.k === S.sort.k;
+    x.classList.toggle('sorted', !!hit);
+    x.classList.toggle('asc', !!hit && S.sort.asc);
+  });
+  renderTimeHint();
+}
 
 /* ═══════════════════════ 顶栏元信息 / 通道 ═══════════════════════ */
 /** 采样率按量级选单位（ATK-C 是 2.5 MHz，POWER-Z 的 1 ms/采样点只有 1 kHz） */
@@ -6032,16 +6506,17 @@ function fmtRate(hz) {
 }
 
 function renderMeta() {
-  const chip = $('#fileChip');
-  $('#fileName').textContent = S.fileName || '未打开抓包文件';
-  chip.title = S.fileName ? `${S.fileName}  ·  ${fmtSize(S.fileSize)}` : '';
-  chip.classList.toggle('has', !!S.fileName);
+  syncAppbarChip();
 
   const box = $('#metaChips');
   box.innerHTML = '';
   if (!S.meta) {
     $('#btnExport').disabled = true;
     document.documentElement.dataset.source = '';
+    if (S.error) {
+      box.appendChild(Object.assign(el('span', 'mchip'),
+        { innerHTML: `来源 <b style="color:var(--bad)">无法识别</b>` }));
+    }
     return;
   }
   const m = S.meta;
@@ -6111,7 +6586,7 @@ function renderChannels() {
     b.innerHTML = `<b>CH${c.channel}</b><span>${c.chunks.length} 块</span>`
       + (S.chActivity.has(c.channel) ? `<span class="act">${S.chActivity.get(c.channel)}</span>` : '');
     b.title = `${c.totalSamples} 采样点 ≈ ${(c.totalSamples / (S.rate || S.meta.sampleRate)).toFixed(2)} s`;
-    b.addEventListener('click', () => { if (c.channel !== S.channel) decodeAndShow(c.channel); });
+    b.addEventListener('click', () => { if (c.channel !== S.channel) activateDoc(S, c.channel); });
     box.appendChild(b);
   }
 }
@@ -6127,6 +6602,9 @@ function buildTypeList() {
   for (const [t, n] of arr) {
     const lab = el('label', 'ms-item');
     const cb = el('input'); cb.type = 'checkbox'; cb.value = t;
+    // 勾选状态跟着「当前文档」走 —— 这份列表在每次切标签时都会重建，
+    // 不还原就会出现「勾着的框没生效 / 生效的没勾」。
+    cb.checked = S.filters.types.has(t);
     cb.addEventListener('change', () => {
       if (cb.checked) S.filters.types.add(t); else S.filters.types.delete(t);
       updateMsHead(arr.length);
@@ -6159,17 +6637,22 @@ addEventListener('click', (e) => {
 });
 
 // 角色 / SOP / 类别 chips
-function wireChips(sel, set) {
+/**
+ * 注意传的是**键名**而不是 Set 本身：`S.filters` 每切一次标签就换一份，
+ * 初始化时抓一个 Set 引用下来，之后点 chip 改的就会一直是第一份文档的筛选集。
+ */
+function wireChips(sel, key) {
   $$(sel + ' .chip').forEach((c) => c.addEventListener('click', () => {
+    const set = S.filters[key];
     const v = c.dataset.v;
     if (set.has(v)) { set.delete(v); c.classList.remove('is-on'); }
     else { set.add(v); c.classList.add('is-on'); }
     applyFilters();
   }));
 }
-wireChips('#fRole', S.filters.roles);
-wireChips('#fSop', S.filters.sops);
-wireChips('#fCat', S.filters.cats);
+wireChips('#fRole', 'roles');
+wireChips('#fSop', 'sops');
+wireChips('#fCat', 'cats');
 
 // 开关
 const sw = (id, key) => $(id).addEventListener('change', (e) => { S.filters[key] = e.target.checked; applyFilters(); });
@@ -6201,8 +6684,7 @@ $$('.th').forEach((th) => th.addEventListener('click', () => {
   const k = th.dataset.k;
   if (!k) return;
   if (S.sort.k === k) S.sort.asc = !S.sort.asc; else { S.sort.k = k; S.sort.asc = true; }
-  $$('.th').forEach((x) => x.classList.remove('sorted', 'asc'));
-  th.classList.add('sorted'); if (S.sort.asc) th.classList.add('asc');
+  syncFilterUI();     // 表头的排序箭头（含清掉其它列）
   applyFilters();
 }));
 
@@ -6219,21 +6701,11 @@ $('#tTo').addEventListener('input', (e) => {
 $('#btnClearTime').addEventListener('click', () => { resetTimeRange(); applyFilters(); });
 $('#btnCurView').addEventListener('click', applyTimeRangeFromView);
 
+/** 重置当前文档的全部筛选（只影响这一份，其它标签各自的筛选原样保留） */
 $('#btnReset').addEventListener('click', () => {
-  const f = S.filters;
-  f.roles = new Set(['SRC', 'SNK', 'Plug']);
-  f.sops = new Set(['SOP', "SOP'", "SOP''", 'Hard Reset', 'Cable Reset']);
-  f.cats = new Set(['Control', 'Data', 'Extended', 'VDM', 'Error']);
-  f.types = new Set();
-  f.hideGoodCrc = true; f.onlyBad = false; f.onlyPower = false; f.onlyEnter = false; f.q = '';
-  resetTimeRange();
-  $('#fHideGoodCrc').checked = true; $('#fOnlyBad').checked = false;
-  $('#fOnlyPower').checked = false; $('#fOnlyEnter').checked = false; $('#fSearch').value = '';
-  $('#msBody').querySelectorAll('input').forEach((c) => (c.checked = false));
-  updateMsHead();
-  $$('#fRole .chip, #fSop .chip, #fCat .chip').forEach((c) => c.classList.add('is-on'));
+  S.filters = newFilters();
   S.viewMode = 'all';
-  $$('#viewSeg .seg-item').forEach((x, i) => x.classList.toggle('is-on', i === 0));
+  syncFilterUI();
   applyFilters();
 });
 
@@ -6301,6 +6773,12 @@ function updateCounters() {
       + (shown !== total ? ` <span style="color:var(--tx-3)">（已屏蔽 ${total - shown} 条）</span>` : '')
       + crc
       + (S.decodedMs ? ` · <span style="color:var(--tx-3)">解码 ${S.decodedMs} ms</span>` : '');
+  } else if (S.error) {
+    line = `打不开这份文件：<span class="bad">${esc(S.error)}</span>`;
+  } else if (S.state === 'running' || S.pending) {
+    line = '<span style="color:var(--tx-3)">正在解析…</span>';
+  } else if (S.state === 'ready') {
+    line = '这份抓包还没解析，点一下上方标签即可开始';
   } else if (S.meta?.source === 'powerz') {
     // 载入了文件但一条报文都没有：只有「协议未实现语义解析」这一种合理解释
     line = S.stats?.unsupported
@@ -6333,8 +6811,9 @@ function applyTimeRangeFromView() {
 const OVERSCAN = 8;
 
 /**
- * 空列表时说清「为什么空」——三种情况话术完全不同，混用会让人以为解析失败：
+ * 空列表时说清「为什么空」——四种情况话术完全不同，混用会让人以为解析失败：
  *   · 还没开文件       → 介绍支持的格式
+ *   · 文件打不开       → 说清是哪一步失败（格式不认识 / 容器坏了）
  *   · 开了但 0 条报文  → 多半是协议未实现语义解析（UFCS）
  *   · 有报文但被筛没   → 提示放宽筛选
  */
@@ -6345,6 +6824,20 @@ function setEmptyState(kind, extra) {
   if (kind === 'filtered') {
     t.textContent = '当前筛选条件下没有报文';
     p.textContent = '试试放宽左侧的方向 / 类型 / 时间筛选，或点「重置全部筛选」。';
+    n.textContent = '';
+    n.hidden = true;
+    return;
+  }
+  if (kind === 'failed') {
+    t.textContent = '这份文件打不开';
+    p.textContent = extra || '无法识别它的格式。';
+    n.textContent = '只认 ATK-C 的 .atkcc（ZIP 容器）与 POWER-Z 的 .sqlite（SQLite 库）—— 按文件内容判断，不看扩展名。';
+    n.hidden = false;
+    return;
+  }
+  if (kind === 'pending') {
+    t.textContent = '正在解析这份抓包';
+    p.textContent = '解析完成后这里会列出解出的 PD 报文。';
     n.textContent = '';
     n.hidden = true;
     return;
@@ -6366,7 +6859,7 @@ function setEmptyState(kind, extra) {
   t.textContent = '打开一份 PD 抓包文件';
   p.innerHTML = '支持正点原子 ATK-C 的 <b>.atkcc</b>（原始电平采样，走 BMC → 4B5B 解码）'
     + '与 POWER-Z 的 <b>.sqlite</b>（分析仪已解好的逻辑字节），两者解析后逐字段溯源。';
-  n.textContent = '也可以把文件直接拖进窗口';
+  n.textContent = '也可以把文件直接拖进窗口 —— 一次拖多份，每份各占一个标签页';
   n.hidden = false;
 }
 
@@ -6377,15 +6870,17 @@ function renderTable() {
 
   if (!n) {
     $('#emptyState').style.display = 'flex';
-    if (!S.meta) setEmptyState('none');
+    if (S.error) setEmptyState('failed', S.error);
+    else if (!S.meta) setEmptyState('none');
     else if (!S.packets.length) {
-      setEmptyState(S.stats?.unsupported ? 'unsupported' : 'nomsg', S.meta.protocol);
+      if (S.state === 'ready' || S.pending) setEmptyState('pending');
+      else setEmptyState(S.stats?.unsupported ? 'unsupported' : 'nomsg', S.meta.protocol);
     } else setEmptyState('filtered');
     vph.style.height = '0px'; vrows.innerHTML = ''; vrows.style.transform = 'translateY(0)';
     return;
   }
   $('#emptyState').style.display = 'none';
-  const RH = S.rowH;
+  const RH = UI.rowH;
   vph.style.height = n * RH + 'px';
 
   const top = tbody.scrollTop;
@@ -6452,13 +6947,24 @@ function select(i, scrollIntoView) {
   document.body.classList.remove('detail-collapsed');
   $$('#vrows .tr').forEach((r) => r.classList.toggle('sel', +r.dataset.i === i));
   if (scrollIntoView) {
-    const tbody = $('#tbody'), RH = S.rowH, top = tbody.scrollTop, h = tbody.clientHeight;
+    const tbody = $('#tbody'), RH = UI.rowH, top = tbody.scrollTop, h = tbody.clientHeight;
     const y = i * RH;
     if (y < top + RH) tbody.scrollTop = Math.max(0, y - RH * 2);
     else if (y + RH > top + h) tbody.scrollTop = y + RH * 3 - h;
   }
   renderDetail(p);
   if ($('#tlFollow').checked) drawTimeline(p);
+}
+
+/**
+ * 详情面板按「当前文档的第 i 条」重画。
+ * 切换标签时也要走它：每份抓包各自记着自己的选中项，切回来得跟过去一致；
+ * 没选中（或筛掉了 / 零报文）就回到引导文案，别留着上一份文件的字段解析。
+ */
+function renderDetailFor(i) {
+  const p = S.view[i];
+  if (p) renderDetail(p);
+  else $('#detailBody').innerHTML = '<div class="detail-empty">点击左侧任意报文查看逐位解析</div>';
 }
 function navDetail(d) {
   if (!S.view.length) return;
@@ -6917,10 +7423,11 @@ splitterEl.addEventListener('keydown', (e) => {
   scheduleTimelineDraw();
 });
 
+// 行高是界面偏好，不属于任何一份文件，所以放 UI 而不是文档
 $('#btnDense').addEventListener('click', (e) => {
-  S.rowH = S.rowH === 30 ? 23 : 30;
-  document.documentElement.style.setProperty('--rh', S.rowH + 'px');
-  e.target.textContent = S.rowH === 30 ? '紧凑' : '舒适';
+  UI.rowH = UI.rowH === 30 ? 23 : 30;
+  document.documentElement.style.setProperty('--rh', UI.rowH + 'px');
+  e.target.textContent = UI.rowH === 30 ? '紧凑' : '舒适';
   renderTable();
 });
 $('#btnDense').textContent = '紧凑';
@@ -6990,7 +7497,7 @@ async function initSamples() {
       showProgress('正在载入示例…', pick.name);
       const resp = await fetch('api/sample?name=' + encodeURIComponent(pick.name));
       const buf = new Uint8Array(await resp.arrayBuffer());
-      await loadFile(new File([buf], pick.name));
+      await openFiles([new File([buf], pick.name)]);
     });
     btn.title = `示例：${list.map((x) => x.name).join(', ')}`;
   } catch {
@@ -7002,17 +7509,27 @@ async function initSamples() {
 /**
  * 键盘快捷键同样按形态分工：
  *   · 单文件版 / 本地服务：浏览器里没有任何原生菜单，Ctrl+O 必须由页面自己接管；
- *   · 桌面版：Tauri 原生菜单已经注册了 CmdOrCtrl+O，页面再绑一次就会弹出两个文件对话框，
- *     所以这里在有原生菜单时主动让位（菜单项最终仍会去点同一个 `#fileInput`）。
- * 不带修饰键的快捷键（↑↓ / Esc / / / T / G）三种形态都不冲突，统一在页面里处理。
+ *   · 桌面版：Tauri 原生菜单已经注册了 CmdOrCtrl+O / CmdOrCtrl+W，页面再绑一次就会
+ *     弹出两个文件对话框、或和菜单抢同一个键，所以这里在有原生菜单时主动让位
+ *     （菜单项最终仍会去点同一个 `#fileInput` / 调 `PDScope.closeActive()`）。
+ * 不带修饰键的快捷键（↑↓ / Esc / / / T / G / Alt+数字）三种形态都不冲突，统一在页面里处理。
  */
 addEventListener('keydown', (e) => {
   if (e.target.matches('input,textarea')) return;
   const mod = e.ctrlKey || e.metaKey;
   if (mod && e.key.toLowerCase() === 'o') { if (!ENV.desktop) { e.preventDefault(); $('#fileInput').click(); } }
+  // Alt+1…9 跳到第 N 个标签 —— 浏览器不占这个组合，桌面上也不跟菜单打架
+  else if (e.altKey && /^[1-9]$/.test(e.key)) {
+    const d = DOCS[+e.key - 1];
+    if (d) { e.preventDefault(); activateDoc(d); }
+  }
   else if (e.key === 'ArrowDown') { e.preventDefault(); navDetail(1); }
   else if (e.key === 'ArrowUp') { e.preventDefault(); navDetail(-1); }
-  else if (e.key === 'Escape') { document.body.classList.add('detail-collapsed'); setTimeout(drawTimeline, 200); }
+  else if (e.key === 'Escape') {
+    // 标签右键菜单开着时，Esc 只关菜单，别顺手把详情面板也收了
+    if ($('#tabMenu')) { closeTabMenu(); return; }
+    document.body.classList.add('detail-collapsed'); setTimeout(drawTimeline, 200);
+  }
   else if (e.key === '/') { e.preventDefault(); $('#fSearch').focus(); }
   else if (e.key === 't' || e.key === 'T') {
     setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
@@ -7033,11 +7550,14 @@ addEventListener('keydown', (e) => {
  *
  * 为什么字节和 URL 两个入口都要：外壳把文件给页面的方式差别很大（读进内存、映射虚拟主机、
  * 临时文件、内嵌资源…）。给 URL 的走 URL，给字节的走字节，两边都不必为对方改变实现。
+ *
+ * 每次调用都**新开一个标签**：桌面版的文件关联/命令行、双击另一份抓包，
+ * 语义上都是「再加一份」，而不是把手上这份替换掉。
  */
 window.pdscopeOpenBytes = async (name, bytes) => {
   try {
     const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-    await loadFile(new File([u8], name));
+    await openFiles([new File([u8], name)]);
   } catch (err) {
     hideProgress();
     toast('打开失败：' + (err?.message || err), 'err');
@@ -7074,17 +7594,43 @@ window.PDScope = {
     channel: S.channel,
     packets: S.packets?.length ?? 0,
     filtered: S.view?.length ?? 0,
+    tabs: DOCS.length,
+    tabIndex: DOCS.indexOf(S),             // -1 = 只在看空白页，没有打开的抓包
   }),
+  /**
+   * 标签清单 —— 外壳自检与 e2e 用它核对「开了几份、各自解出多少、当前是哪份」。
+   * 这是给自动化读的稳定接口，界面内部结构变了也不用改测试。
+   */
+  tabs: () => DOCS.map((d, i) => ({
+    index: i,
+    name: d.fileName,
+    active: d === S,
+    state: d.state,
+    error: d.error || null,
+    source: d.meta?.source ?? null,
+    protocol: d.meta?.protocol ?? null,
+    channel: d.channel,
+    packets: d.packets.length,
+    filtered: d.view.length,
+    totalSamples: d.totalSamples,
+    notices: d.notice ? 1 : 0,
+  })),
+  /** 切到第 i 个标签 / 关掉第 i 个标签 / 关掉全部（桌面菜单与自动化用） */
+  activateTab: (i) => activateDoc(DOCS[i]),
+  closeTab: (i) => closeDoc(DOCS[i]),
+  closeAll: () => closeOtherDocs(null),
+  closeActive: () => { if (DOCS.length) closeDoc(S); },
 };
 
 /* 初始化 */
-document.documentElement.style.setProperty('--rh', S.rowH + 'px');
+document.documentElement.style.setProperty('--rh', UI.rowH + 'px');
 // 详情面板宽度：还原上次拖到的位置（越界由 setDetailW 夹回合法区间）
 let savedDetailW = NaN;
 try { savedDetailW = parseInt(localStorage.getItem(DETAIL_W_KEY), 10); } catch {}
 setDetailW(Number.isFinite(savedDetailW) ? savedDetailW : DETAIL_W_DEF, false);
 // 标注形态，便于 CSS 按形态微调（桌面版没有「载入示例」，单文件版可用 file: 特有能力）
 document.documentElement.dataset.env = ENV.name;
+renderTabs();
 initSamples();
 renderTimelineHead();
 requestAnimationFrame(() => drawTimeline());

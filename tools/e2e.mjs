@@ -29,7 +29,9 @@ const TARGET = FILE
   ? pathToFileURL(resolve(ROOT, FILE)).href
   : `http://127.0.0.1:${PORT}/`;
 const SHOT = arg('--out', join(ROOT, 'artifacts', 'e2e-screenshot.png'));
-const DROP = arg('--drop', null);          // 用拖拽事件注入的真实 .atkcc 路径（相对 ROOT）
+const DROP = arg('--drop', null);          // 用拖拽事件注入的真实抓包路径（相对 ROOT）
+// 第二份抓包：给了就额外跑「多文件」那一组断言（开两个标签、切换、各自保留状态、关闭）
+const DROP2 = arg('--drop2', null);
 
 const CANDIDATES = [
   process.env.CHROME,
@@ -173,29 +175,51 @@ class CDP {
 }
 
 /**
- * 把真实 .atkcc 以拖拽事件注入页面，并等到解码完成（统计行出现「显示」字样）。
+ * 把真实抓包以拖拽事件注入页面。
  * @param {CDP} cdp
- * @param {string} relPath 相对项目根目录的路径
+ * @param {string|string[]} relPaths 相对项目根目录的路径；给数组就是「一次拖多份」（一次 drop 多个 File）
+ * @param {RegExp} done 解码结束的判据，默认等统计行出现「显示」
+ * @returns {Promise<string>} 注入的文件名（多个用 + 连接）
  */
-async function injectDrop(cdp, relPath) {
-  const abs = resolve(ROOT, relPath);
-  const b64 = (await readFile(abs)).toString('base64');
-  const nm = basename(abs);
-  log(`  注入文件：${nm}（${(b64.length / 1365).toFixed(1)} KB）`);
+async function injectDrop(cdp, relPaths, done = /显示/) {
+  const list = Array.isArray(relPaths) ? relPaths : [relPaths];
+  const files = [];
+  for (const rel of list) {
+    const abs = resolve(ROOT, rel);
+    files.push({ nm: basename(abs), b64: (await readFile(abs)).toString('base64') });
+  }
+  log(`  注入文件：${files.map((f) => `${f.nm}（${(f.b64.length / 1365).toFixed(1)} KB）`).join(' + ')}`);
+  const arr = files
+    .map((f) => `(()=>{const b=atob('${f.b64}');const a=new Uint8Array(b.length);for(let i=0;i<b.length;i++)a[i]=b.charCodeAt(i);return new File([a], ${JSON.stringify(f.nm)});})()`)
+    .join(',');
   await cdp.eval(`(()=>{
-    const b=atob('${b64}'); const a=new Uint8Array(b.length);
-    for(let i=0;i<b.length;i++) a[i]=b.charCodeAt(i);
-    const f=new File([a], ${JSON.stringify(nm)});
-    const dt=new DataTransfer(); dt.items.add(f);
+    const dt=new DataTransfer();
+    for (const f of [${arr}]) dt.items.add(f);
     window.dispatchEvent(new DragEvent('drop',{dataTransfer:dt,bubbles:true,cancelable:true}));
     return true;
   })()`);
   for (let i = 0; i < 120; i++) {
     await sleep(500);
     const s = await cdp.eval(`document.querySelector('#statLine').textContent || ''`);
-    if (/显示/.test(s)) break;
+    if (done.test(s)) break;
   }
-  return nm;
+  return files.map((f) => f.nm).join(' + ');
+}
+
+/** 读标签清单（PDScope.tabs() 是对外稳定接口，测试只依赖它，不碰界面内部结构） */
+const tabList = (cdp) => cdp.eval(`window.PDScope.tabs()`);
+
+/**
+ * 等到第 index 个标签解析完成并且处于激活态。
+ * 比盯统计行的文案稳：不用区分「解出了报文」和「协议未实现」两种终态。
+ */
+async function waitTabDone(cdp, index, tries = 120) {
+  for (let i = 0; i < tries; i++) {
+    await sleep(500);
+    const t = await tabList(cdp);
+    if (t[index]?.state === 'done' && t[index]?.active) return t[index];
+  }
+  return null;
 }
 
 /* ── 主流程 ─────────────────────────────────────────── */
@@ -224,7 +248,8 @@ try {
   const EVAL = arg('--eval', null);
   if (EVAL) {
     if (DROP) await injectDrop(cdp, DROP);
-    else if (argv.includes('--eval-load')) {
+    if (DROP2) await injectDrop(cdp, DROP2, /显示|已读入/);
+    if (!DROP && !DROP2 && argv.includes('--eval-load')) {
       await cdp.eval(`document.querySelector('#btnDemo')?.click()`);
       for (let i = 0; i < 120; i++) {
         await sleep(500);
@@ -278,6 +303,13 @@ try {
       if (DONE.test(stat)) break;
     }
     check('抓包解码完成', DONE.test(stat) && !/等待打开/.test(stat), stat.replace(/\s+/g, ' ').trim());
+
+    /* 2.5 标签栏：打开一份就该出现一个标签（多文件能力的最小可见证据） */
+    const bar1 = await cdp.eval(`(()=>{const b=document.querySelector('#tabBar');return {hidden:!!b.hidden,n:b.querySelectorAll('.tab').length,on:b.querySelectorAll('.tab.is-on').length,name:(b.querySelector('.tab-name')||{}).textContent||''};})()`);
+    check('打开后出现标签栏', bar1.hidden === false && bar1.n === 1 && bar1.on === 1 && !!bar1.name,
+      `${bar1.n} 个标签「${bar1.name}」`);
+    const chipName = await cdp.eval(`document.querySelector('#fileName').textContent.trim()`);
+    check('顶栏文件 chip 跟随当前标签', chipName === bar1.name, chipName);
 
     const shown = await cdp.eval(`(document.querySelector('#statLine').textContent.match(/显示\\s*(\\d+)/)||[])[1]`);
     const noticeText = await cdp.eval(`(()=>{const n=document.querySelector('#notice');return n && !n.hidden ? n.innerText.replace(/\\s+/g,' ').trim() : '';})()`);
@@ -473,6 +505,51 @@ try {
     const w3 = await detailWidth();
     check('双击恢复默认宽度', w3 === 390, `→ ${w3} px`);
 
+    /* 7.8 多文件：再拖一份 → 新标签、能来回切、各自的筛选互不串、能单独关掉
+       这一段要的是「两份不同来源的抓包同时在手」，所以只有传了 --drop2 才跑。 */
+    if (DROP2 && !rowless) {
+      // 先在第一份上做一件「只属于它」的事：关掉 SNK 方向。
+      // 切到第二份时它必须复原成默认（SNK 开着），切回来时又必须还是关着的。
+      const pre = (await tabList(cdp))[0];
+      await cdp.eval(`(()=>{const c=document.querySelector('#fRole .chip[data-v="SNK"]');if(c.classList.contains('is-on'))c.click();})()`);
+      await sleep(400);
+      const t0 = (await tabList(cdp))[0];
+      check('第一份的方向筛选已改（预备）',
+        t0.filtered < pre.filtered && !(await cdp.eval(`document.querySelector('#fRole .chip[data-v="SNK"]').classList.contains('is-on')`)),
+        `屏蔽 Sink：${pre.filtered} → ${t0.filtered} 条`);
+
+      await injectDrop(cdp, DROP2, /显示|已读入/);
+      const first = await waitTabDone(cdp, 1);
+      check('拖入第二份后自动成为当前标签', !!first && first.active === true, first ? first.name : '超时');
+
+      const two = await tabList(cdp);
+      const bar2 = await cdp.eval(`(()=>{const b=document.querySelector('#tabBar');return {hidden:!!b.hidden,n:b.querySelectorAll('.tab').length,on:b.querySelectorAll('.tab.is-on').length};})()`);
+      check('标签栏变成两个标签', bar2.hidden === false && bar2.n === 2 && bar2.on === 1, `${bar2.n} 个，${bar2.on} 个激活`);
+      check('两份文件的报文数各自独立', two.length === 2
+        && two[0].packets === t0.packets && two[0].filtered === t0.filtered && two[1].packets > 0,
+        `${two[0].packets} / ${two[1].packets} 条`);
+      check('两份文件的来源各记各的', two[0].source !== two[1].source || two[0].packets !== two[1].packets,
+        `${two[0].source ?? 'atkcc'} · ${two[0].channel} 通道  vs  ${two[1].source ?? 'atkcc'} · ${two[1].channel} 通道`);
+
+      // 第二份是全新文档 → 筛选回到默认（SNK 开着）
+      const snkOnSecond = await cdp.eval(`document.querySelector('#fRole .chip[data-v="SNK"]').classList.contains('is-on')`);
+      check('新标签的筛选是默认值', snkOnSecond === true);
+
+      // 切回第一份：筛选面板要跟着回来，条数也要与切走前一致
+      await cdp.eval(`document.querySelectorAll('#tabs .tab')[0].click()`);
+      await sleep(700);
+      const back = await tabList(cdp);
+      const snkBack = await cdp.eval(`!document.querySelector('#fRole .chip[data-v="SNK"]').classList.contains('is-on')`);
+      const statBack = await cdp.eval(`document.querySelector('#statLine').textContent.replace(/\\s+/g,' ').trim()`);
+      check('切回第一份后筛选面板已还原', back[0].active === true && snkBack === true, statBack.slice(0, 60));
+      check('切回第一份后条数与切走前一致', back[0].filtered === t0.filtered && back[0].packets === t0.packets,
+        `${back[0].filtered} / ${back[0].packets} 条`);
+
+      // 两个标签都留着（截图里要看得见标签栏），关闭的动作挪到第 10 节
+      await cdp.eval(`document.querySelectorAll('#tabs .tab')[1].click()`);
+      await sleep(700);
+    }
+
     /* 8. 无运行时报错 */
     clearInterval(drain);
     for (const e of cdp.events.splice(0)) {
@@ -497,6 +574,28 @@ try {
   await writeFile(SHOT, Buffer.from(shot.data, 'base64'));
   log('');
   log(`  截图：${SHOT}`);
+
+  /* 10. 关闭标签 → 回到「一份都没打开」的空白态（截图已拍完，所以放最后） */
+  if (willLoad) {
+    const had = await tabList(cdp);
+    if (had.length > 1) {
+      // 点第二个标签的 × 关掉它，剩下的那个要自动接上
+      await cdp.eval(`document.querySelectorAll('#tabs .tab')[1].querySelector('.tab-x').click()`);
+      await sleep(700);
+      const one = await tabList(cdp);
+      const bar1 = await cdp.eval(`(()=>{const b=document.querySelector('#tabBar');return {hidden:!!b.hidden,n:b.querySelectorAll('.tab').length,on:b.querySelectorAll('.tab.is-on').length};})()`);
+      check('关掉一个标签后另一个接上', one.length === 1 && one[0].active === true
+        && bar1.hidden === false && bar1.n === 1 && bar1.on === 1, `剩「${one[0]?.name}」`);
+    }
+    await cdp.eval(`window.PDScope.closeAll()`);
+    await sleep(500);
+    const after = await tabList(cdp);
+    const st = await cdp.eval(`window.PDScope.status()`);
+    const barGone = await cdp.eval(`document.querySelector('#tabBar').hidden === true`);
+    const emptyBack = await cdp.eval(`(()=>{const e=document.querySelector('#emptyState');return e&&e.style.display!=='none'?e.querySelector('#emptyTitle').textContent.trim():'';})()`);
+    check('关闭全部后标签栏收起', after.length === 0 && barGone === true && st.tabs === 0, `关前 ${had.length} 个`);
+    check('关闭全部后回到打开引导', /打开一份 PD 抓包文件/.test(emptyBack), emptyBack);
+  }
 } catch (e) {
   fail++;
   log(`  \u2718 运行失败：${e.message}`);

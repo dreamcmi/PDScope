@@ -28,7 +28,14 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 /// 页面里本来就有这些元素，菜单只需「替用户点一下」，避免前端维护两套入口。
 const JS_OPEN: &str = "document.querySelector('#fileInput')?.click();";
-const JS_RELOAD: &str = "location.reload();";
+/// 「关闭抓包」= 关掉**当前标签**，而不是整页重载。
+/// 页面支持同时开多份抓包，整页 reload 会把别的标签一起清掉。
+/// 只开着一份时两者等价（都会回到打开引导页），所以这是纯粹的行为升级。
+/// 保留 `location.reload()` 兜底：万一外壳连的是旧版页面，也不至于点了没反应。
+const JS_CLOSE: &str =
+    "window.PDScope && window.PDScope.closeActive ? window.PDScope.closeActive() : location.reload();";
+/// 「关闭全部抓包」：一次收掉所有标签，回到打开引导页。
+const JS_CLOSE_ALL: &str = "window.PDScope && window.PDScope.closeAll && window.PDScope.closeAll();";
 const JS_EXPORT: &str = "document.querySelector('#btnExport')?.click();";
 const JS_SEARCH: &str = "document.querySelector('#fSearch')?.focus();";
 const JS_THEME: &str = "document.querySelector('#btnTheme')?.click();";
@@ -141,7 +148,8 @@ fn read_capture(path: String) -> Result<tauri::ipc::Response, String> {
 fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     // ── 文件 ────────────────────────────────────────────────
     let i_open = MenuItem::with_id(app, "open", "打开抓包…", true, Some("CmdOrCtrl+O"))?;
-    let i_reload = MenuItem::with_id(app, "reload", "关闭抓包", true, Some("CmdOrCtrl+W"))?;
+    let i_close = MenuItem::with_id(app, "close", "关闭当前标签", true, Some("CmdOrCtrl+W"))?;
+    let i_close_all = MenuItem::with_id(app, "close_all", "关闭全部抓包", true, None::<&str>)?;
     let i_export = MenuItem::with_id(app, "export", "另存为（当前筛选）", true, Some("CmdOrCtrl+S"))?;
     let f_sep1 = PredefinedMenuItem::separator(app)?;
     let f_sep2 = PredefinedMenuItem::separator(app)?;
@@ -150,7 +158,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         app,
         "文件",
         true,
-        &[&i_open, &i_reload, &f_sep1, &i_export, &f_sep2, &i_quit],
+        &[&i_open, &i_close, &i_close_all, &f_sep1, &i_export, &f_sep2, &i_quit],
     )?;
 
     // ── 查看 ────────────────────────────────────────────────
@@ -179,7 +187,8 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 fn on_menu(app: &AppHandle, id: &str) {
     match id {
         "open" => eval_in_main(app, JS_OPEN),
-        "reload" => eval_in_main(app, JS_RELOAD),
+        "close" => eval_in_main(app, JS_CLOSE),
+        "close_all" => eval_in_main(app, JS_CLOSE_ALL),
         "export" => eval_in_main(app, JS_EXPORT),
         "search" => eval_in_main(app, JS_SEARCH),
         "theme" => eval_in_main(app, JS_THEME),
@@ -208,7 +217,8 @@ fn show_about(app: &AppHandle) {
          · 正点原子 ATK-C 的 .atkcc：1 bit/采样 LSB 优先 → BMC → 4B5B → PD 报文\n\
          · POWER-Z 的 .sqlite：读 SQLite 事件流 → 逻辑字节 → 同一套 PD 语义解析\n\
          Source / Sink / 线缆方向自动区分，按方向 / SOP / 报文类型 / 时间窗口筛选屏蔽，\n\
-         Source_Cap、Request、PPS、AVS、VDM、扩展报文逐字段溯源。\n\n\
+         Source_Cap、Request、PPS、AVS、VDM、扩展报文逐字段溯源。\n\
+         可同时打开多份抓包，标签栏切换，各份的筛选与时间窗口互不干扰。\n\n\
          版本 {}  ·  Tauri {}  ·  {}",
         env!("CARGO_PKG_VERSION"),
         tauri::VERSION,

@@ -186,6 +186,31 @@ jobs:
           echo "打进包里的目录：$dirs"
           tar -czf "$GITHUB_WORKSPACE/PDScope-${{ matrix.name }}.tar.gz" $dirs
 
+      # 纯取证步骤：只把各 bundle 的原始体积写进运行摘要，任何异常都不许影响构建。
+      - name: 清点各 bundle 体积
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          b="src-tauri/target/${{ matrix.target }}/release/bundle"
+          if [ ! -d "$b" ]; then echo "没有 bundle 目录，跳过"; exit 0; fi
+          cd "$b"
+          {
+            echo ""
+            echo "**各 bundle 原始体积**（未压缩，Linux 那两行正是归档大的原因）"
+            echo ""
+            echo '| bundle | 体积 | 文件 |'
+            echo '| --- | --- | --- |'
+            for d in macos dmg deb appimage; do
+              if [ -d "$d" ]; then
+                for f in "$d"/*; do
+                  if [ -e "$f" ]; then
+                    printf '| `%s` | %s | `%s` |\n' "$d" "$(du -sh "$f" | cut -f1)" "$(basename "$f")"
+                  fi
+                done
+              fi
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
       # Windows 出两个 zip：安装包版（NSIS + MSI）与绿色版（单个 exe，解压即用）
       - name: 打包（Windows）
         if: runner.os == 'Windows'

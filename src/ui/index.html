@@ -42,12 +42,23 @@
       导出
     </button>
 
-    <button class="btn primary" id="btnOpen">
+    <button class="btn primary" id="btnOpen" title="打开抓包文件（Ctrl/⌘+O）· 可一次多选，会并排成标签页">
       <svg viewBox="0 0 16 16" class="i"><path d="M1.8 12.5V3.6a.9.9 0 0 1 .9-.9h3.1l1.4 1.6h6.1a.9.9 0 0 1 .9.9v7.3a.9.9 0 0 1-.9.9H2.7a.9.9 0 0 1-.9-.9Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
       打开抓包
     </button>
-    <input type="file" id="fileInput" accept=".atkcc,.sqlite,.db,.bin,.zip" hidden />
+    <!-- multiple：一次可以选多份，每份各占一个标签页 -->
+    <input type="file" id="fileInput" accept=".atkcc,.sqlite,.db,.bin,.zip" multiple hidden />
   </header>
+
+  <!-- ── 抓包标签栏 ─────────────────────────────────────────
+       一份抓包一个标签，可同时打开多份并随时切换；每份各自记住通道、筛选、时间窗口与滚动位置。
+       只有打开了文件才出现 —— 一份都没开时让位给表格里的空态引导，不白占一行。 -->
+  <div class="tabbar" id="tabBar" hidden>
+    <div class="tabs" id="tabs" role="tablist" aria-label="已打开的抓包"></div>
+    <button class="btn ghost icon-only tab-add" id="btnTabAdd" title="再打开一份抓包（可多选）">
+      <svg viewBox="0 0 16 16" class="i"><path d="M8 3.5v9M3.5 8h9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    </button>
+  </div>
 
   <!-- ── 主体 ─────────────────────────────────────────────── -->
   <div class="body" id="appBody">
@@ -191,7 +202,7 @@
             <button class="btn primary" id="btnOpen2">选择文件</button>
             <button class="btn" id="btnDemo">载入示例</button>
           </div>
-          <p class="tiny-note" id="emptyNote">也可以把文件直接拖进窗口</p>
+          <p class="tiny-note" id="emptyNote">可一次选多份，也可以直接把文件拖进窗口 —— 每份各占一个标签页</p>
         </div>
       </div>
 
@@ -244,8 +255,8 @@
   <div class="drop" id="drop">
     <div class="drop-inner">
       <svg viewBox="0 0 48 48" class="i"><path d="M24 8v24M14 24l10 10 10-10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      <b>松开以解析这份抓包</b>
-      <span>.atkcc · .sqlite</span>
+      <b>松开以解析抓包</b>
+      <span>.atkcc · .sqlite · 可一次拖多份</span>
     </div>
   </div>
 
