@@ -6,9 +6,32 @@
  * 全程流式处理，逐块回调进度，支持中断（长抓包可随时停止）。
  */
 
-import { EdgeExtractor, BmcDecoder, collectRunStats, estimateSampleRate } from './bmc.js';
+import { EdgeExtractor, BmcDecoder, collectRunStats, estimateSampleRate, nowMs, yieldToMain } from './bmc.js';
 import { PdDecoder } from '../pd/index.js';
 import { AtkccCapture } from './atkcc.js';
+
+/**
+ * 喂给边沿提取器的**单片**字节数（64 KiB = 52 万个采样点）。
+ *
+ * 为什么要切片：一块数据是 1 MiB，而「边沿提取 → BMC 状态机 → PD 解析」
+ * 全程同步。块本身如果边沿密集，单块就能占住主线程几百毫秒。
+ * 切成小片之后，片与片之间才有机会看时间预算让出主线程。
+ *
+ * 注意这**不改变解码结果**：`EdgeExtractor` / `BmcDecoder` 的状态都挂在实例上
+ * （当前电平、游程起点、已积累的位），连续小片依次喂入与整块一次喂入完全等价 ——
+ * 只是每次传入的 `baseSample` 要跟着片偏移走。
+ */
+const SLICE_BYTES = 65536;
+
+/**
+ * 两次让出主线程之间的时间预算。
+ *
+ * 原实现是「每 8 块让一次」（`if ((i & 7) === 7)`），这在真实抓包上够用
+ * （实测最长阻塞 67~83 ms），但它**与单块成本无关**：块贵起来就是
+ * 「8 × 单块成本」的连续阻塞。改成按时间算之后，无论数据多难解，
+ * 主线程最多被占住「一片 + 预算」≈ 30 ms，界面和进度条始终有反应。
+ */
+const YIELD_BUDGET_MS = 20;
 
 /**
  * @param {AtkccCapture} capture
@@ -41,6 +64,25 @@ export async function decodeChannel(capture, channel, opts) {
     if (pkt) packets.push(pkt);
   };
 
+  // 复用同一个回调，别在切片循环里每次新建闭包（切片数量很大，白造垃圾）
+  const onEdge = (edge) => {
+    const p = bmc.pushEdge(edge);
+    if (p) emit(p);
+  };
+
+  /**
+   * 时间预算到了就让出一次主线程。
+   * @returns {Promise<boolean>} false = 调用方要求中断，外层应立即收工
+   */
+  let lastYield = nowMs();
+  const breathe = async () => {
+    if (nowMs() - lastYield < YIELD_BUDGET_MS) return !shouldStop?.();
+    await yieldToMain();
+    lastYield = nowMs();
+    return !shouldStop?.();
+  };
+
+  outer:
   for (let i = 0; i < ch.chunks.length; i++) {
     if (shouldStop?.()) break;
     let data = await capture.readChunk(channel, i, inflate);
@@ -58,10 +100,12 @@ export async function decodeChannel(capture, channel, opts) {
     }
     data = data.subarray(0, keep);
 
-    ex.push(data, sampleBase, (edge) => {
-      const p = bmc.pushEdge(edge);
-      if (p) emit(p);
-    });
+    // 分片喂入：片内是同步的，片间可以让出主线程（见 SLICE_BYTES / YIELD_BUDGET_MS）
+    for (let off = 0; off < data.length; off += SLICE_BYTES) {
+      const end = Math.min(off + SLICE_BYTES, data.length);
+      ex.push(data.subarray(off, end), sampleBase + off * 8, onEdge);
+      if (!(await breathe())) break outer;         // 用户切走了 / 取消了，别再往下跑
+    }
     sampleBase += data.length * 8;
 
     onProgress?.({
@@ -72,9 +116,6 @@ export async function decodeChannel(capture, channel, opts) {
       packets: packets.length,
       samples: sampleBase,
     });
-
-    // 让出主线程，避免长任务卡死 UI
-    if ((i & 7) === 7) await new Promise((r) => setTimeout(r, 0));
   }
 
   // 收尾：补一个虚拟边沿，让最后一个包也能落地

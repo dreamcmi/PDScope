@@ -19,11 +19,15 @@
  */
 
 import { ZipReader } from './zip.js';
+import { nowMs, yieldToMain } from './bmc.js';
 
 export const CHUNK_SIZE = 1048576;      // 1 MiB
 
 /** 文件没声明采样率、且波形也认不出来时的兜底值（实测 ATK-C 一直导出 2.5 MHz） */
 export const DEFAULT_SAMPLE_RATE = 2500000;
+
+/** 通道活动度扫描两次让出主线程之间的时间预算（多通道文件要扫 通道数 × 3 块） */
+const SCAN_YIELD_MS = 20;
 
 /**
  * 从 ini 文本里读出采样率 —— 兼容不同版本 ATK-C 的写法，不假定键名。
@@ -184,19 +188,46 @@ export class AtkccCapture {
 
 /**
  * 对某个通道做活动度扫描：统计非空闲字节数量，用于判断哪条线才是 CC / 有报文。
- * 只扫前 maxChunks 块，保证耗时可控。
+ * 只扫前 maxChunks 块，保证耗时可控（每块 1 MiB，逐字节扫，所以块数必须封顶）。
+ *
+ * ⚠ **活动度高 ≠ 这条通道有报文**。浮空/未接的线会给出接近 50% 的随机电平，
+ * 得分比真正在跑 PD 的 CC 线（大部分时间空闲在 0xFF，只在报文期间才跳变）**更高**。
+ * 所以这里额外统计「长游程占比」：真实 PD 的空闲段是成千上万个连续同电平采样点，
+ * 噪声则几乎没有长游程。调用方应当用 `idleRatio` 把噪声通道排除掉，
+ * 而不是只看 activity —— 否则会把一条噪声线当成 CC 线去解码，
+ * 解出一堆垃圾不说，还会让解码器在无边沿的位流上空转（历史事故，见 bmc.js 的 MAX_PACKET_BITS）。
+ *
+ * @returns {Promise<{channel:number, activity:number, bytes:number, scannedChunks:number,
+ *                    idleRatio:number, liveRatio:number, edgeLike:number}>}
  */
 export async function scanChannelActivity(capture, channel, inflate, maxChunks = 4, onProgress) {
   const c = capture.meta.channelMap.get(channel);
-  if (!c) return { channel, activity: 0, bytes: 0, scannedChunks: 0 };
-  let activity = 0, bytes = 0;
+  if (!c) return { channel, activity: 0, bytes: 0, scannedChunks: 0, idleRatio: 0, liveRatio: 0, edgeLike: 0 };
+  let activity = 0, bytes = 0, idle = 0, live = 0, edgeLike = 0;
   const n = Math.min(maxChunks, c.chunks.length);
+  let lastYield = nowMs();
   for (let i = 0; i < n; i++) {
     const d = await capture.readChunk(channel, i, inflate);
     if (!d) continue;
-    for (let k = 0; k < d.length; k++) if (d[k] !== 0xFF) activity++;
+    for (let k = 0; k < d.length; k++) {
+      const b = d[k];
+      if (b !== 0xFF) activity++;
+      if (b === 0xFF) idle++;                            // 全高：空闲电平
+      else if (b === 0x00) live++;                       // 全低：也是电平，但少见
+      else edgeLike++;                                   // 混合字节：这段有电平跳变
+    }
     bytes += d.length;
     onProgress?.(channel, i + 1, n);
+    // 24 通道 × 3 块的逐字节扫描会累积成可感知的停顿，块间按时间预算让一次
+    if (nowMs() - lastYield > SCAN_YIELD_MS) {
+      await yieldToMain();
+      lastYield = nowMs();
+    }
   }
-  return { channel, activity, bytes, scannedChunks: n };
+  return {
+    channel, activity, bytes, scannedChunks: n,
+    idleRatio: bytes ? idle / bytes : 0,                 // 空闲字节占比（真实 PD 通道很高）
+    liveRatio: bytes ? live / bytes : 0,
+    edgeLike: bytes ? edgeLike / bytes : 0,              // 混合字节占比（噪声 ≈ 0.5）
+  };
 }

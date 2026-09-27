@@ -39,6 +39,7 @@
 import { SqliteReader, isSqlite } from './sqlite.js';
 import { PdDecoder } from '../pd/index.js';
 import { linkGoodCrc } from './pipeline.js';
+import { yieldToMain } from './bmc.js';
 
 /** 时间基准：1 采样点 = 1 毫秒（POWER-Z 只有毫秒时间戳） */
 export const POWERZ_RATE = 1000;
@@ -246,7 +247,7 @@ export class PowerzCapture {
       rows.push({ t: Number(r[0]) || 0, vbus: Number(r[1]) || 0, ibus: Number(r[2]) || 0, raw: r[3] });
       if ((i++ & 2047) === 2047) {
         onProgress?.({ phase: 'read', ratio: tableRows ? i / tableRows : 0, packets: 0 });
-        await new Promise((res) => setTimeout(res, 0));
+        await yieldToMain();
         if (shouldStop?.()) break;
       }
     }
@@ -302,7 +303,7 @@ export class PowerzCapture {
 
         if ((k & 255) === 255) {
           onProgress?.({ phase: 'decode', ratio: (k + 1) / msgs.length, packets: packets.length });
-          await new Promise((res) => setTimeout(res, 0));
+          await yieldToMain();
           if (shouldStop?.()) break;
         }
       }

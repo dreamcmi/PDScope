@@ -688,6 +688,9 @@ PDScope/
    ├─ pd-regress.mjs      与重构前解码器逐包逐字段对比（从 git HEAD 取旧版本）
    ├─ e2e.mjs             无头浏览器端到端自检 + 截图（测单文件版 / 本地服务版 / 多份抓包）
    ├─ tauri-e2e.mjs       真实 Tauri 窗口里的端到端自检 + 截图（测桌面版）
+   ├─ perf-probe.mjs      「打开卡不卡」探针：阻塞间隙 + longtask + 函数级 CPU 占比
+   ├─ make-test-atkcc.mjs 造 .atkcc 压力样本（逐位跳变 / 伪随机 / 真实波形重复 N 轮）
+   ├─ chunk-cost.mjs      逐块差分解码成本（cost(k) - cost(k-1)），定位贵的那一块
    ├─ serve.mjs           本地静态服务 + 示例文件接口
    ├─ build-standalone.mjs  打包单文件 dist/PDScope.html
    ├─ make-icon.py        生成图标源图 assets/icon.png（PIL 画方波 + PD 字样）
@@ -738,6 +741,12 @@ node tools/e2e.mjs --file dist/PDScope.html --drop "../山泽60w-ip18pro.sqlite"
 node tools/e2e.mjs --file dist/PDScope.html --drop "../ufcs_vivo_x300u.sqlite"
 node tools/e2e.mjs --file dist/PDScope.html \
      --drop "../制糖40w-ip18pro.atkcc" --drop2 "../山泽60w-ip18pro.sqlite"   # 多份抓包
+
+# 性能（「打开卡不卡」）
+npm run perf                              # 真实大样本，采阻塞间隙 / longtask / 函数级 CPU 占比
+npm run perf:headed                       # 同上，但走真实窗口（--headed 才测得到 canvas 合成等开销）
+npm run perf:fixture                      # 造压力样本到 artifacts/（18 KB 装 16 MiB，逐位跳变）
+npm run perf:worst                        # 上面两步一起：造样本 + 带界面跑，专门复现/守住卡顿
 
 # 桌面版（在真实 Tauri 窗口里跑）
 npm run app:exe                           # 先出可执行文件
@@ -808,6 +817,46 @@ UFCS 是 DP/DM，档名与标题跟着文件走）且切换后重绘并换标题
 最后用 `×` 关掉一个标签验证另一个平滑接管，`PDScope.closeAll()` 验证标签栏收起并回到打开引导页。
 这些断言读的是 `window.PDScope.tabs()` 返回的**纯数据数组**（名字 / 状态 / 来源 / 条数 / 是否激活），
 不碰标签栏的 DOM 结构 —— 外观再改，测试也不会跟着碎。
+
+**`perf-probe.mjs`** 回答的是另一类问题：「打开这个文件要多久、卡在谁身上」。
+e2e 只判「结果对不对」，不判「过程卡不卡」，所以单靠 e2e 抓不到主线程被占住这类问题。
+它一次采三样东西，缺一不可：
+
+| 采什么 | 怎么采 | 回答什么 |
+|---|---|---|
+| 主线程阻塞间隙 | 页面内 `setTimeout(0)` 心跳，记实际间隔 | 「卡死」的直接体感 —— 被占住 800 ms 就记一条 ~800 ms |
+| longtask | `PerformanceObserver` 的 `longtask` 条目（>50 ms） | 有多少个「超长任务」 |
+| 函数级 CPU 占比 | CDP `Profiler`（采样间隔 0.4 ms），按**自身耗时**聚合 | 最终依据：到底卡在哪个函数 |
+
+**`--headed` 不是可选项，是必须的。** 无头模式会跳过 canvas 合成、`backdrop-filter` 模糊、
+字体加载这些开销，而用户就是双击 HTML 用有头窗口打开的。另外**测量期间必须让窗口保持可见**：
+探针自己的心跳也是链式 `setTimeout`，而 Chrome 会把隐藏标签页里链式 `setTimeout` 钳到约 1 秒，
+于是探针会自己造出 1001 ms 的「假阻塞」记录。**探针给出反常数字时，先怀疑测量环境。**
+
+**`make-test-atkcc.mjs`** 用来造压力样本，因为**真实抓包复现不出卡顿**：
+
+```bash
+node tools/make-test-atkcc.mjs --fill 0x55  --chunks 16   --out artifacts/_worst.atkcc
+node tools/make-test-atkcc.mjs --fill random --chunks 32  --out artifacts/_noise.atkcc
+node tools/make-test-atkcc.mjs --src "../苹果40w-ip18pro.atkcc" --rounds 30 --out artifacts/_long.atkcc
+```
+
+`--fill 0x55` 让每块**逐位跳变**（840 万个边沿/块），deflate 后每块只剩 ~1 KB ——
+于是得到「**18 KB 的文件，内里是 16 MiB 密集数据**」。这正是用户说的
+「几十 KB 的文件打开却卡死」：**解码成本跟磁盘体积没有关系**，因为每块固定 1 MiB 未压缩，
+空闲段（全 `0xFF`/`0x00`）几乎不产生边沿，真实抓包里大多数块都很便宜。
+`--rounds N` 则是把真实文件的数据块重复 N 轮，保持真实波形不变只放大规模。
+
+**`chunk-cost.mjs`** 做逐块差分成本（把抓包限到 k 块，量 `cost(k) - cost(k-1)`），
+用来定位「是某一块特别贵，还是普遍变贵」。
+
+用这套工具定位到的一个真实缺陷：`BmcDecoder` 只在**空闲**（边沿间隔 > maxbit）或 flush 时才吐报文，
+而噪声 / 非 PD 波形**永不空闲**，于是内部 `bits` 一路涨到千万级，解码收尾时 `_scanSop()`
+要在**一个同步任务里**把它全扫完 —— 界面就冻住了。修法是给「切包」补一条与空闲无关的出口
+（`MAX_PACKET_BITS`，见 `src/js/core/bmc.js`），到上限即丢弃重来，
+顺带给单个报文的工作量设了硬上限。效果：**7966 ms → 803 ms，单次主线程阻塞 6328 ms → 80 ms**。
+同源问题还有两条：多通道自动选道时会把**浮空/噪声线**当成「最活跃」而选中它（选中后解码器空转），
+以及原先「每 8 块让出一次主线程」对 1 MiB 的块来说太粗。
 
 **`tauri-e2e.mjs`** 连的是 Tauri 真正在跑的那个 WebView2（靠
 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` 开调试端口），所以外壳本身也在被测范围里。

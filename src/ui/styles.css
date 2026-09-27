@@ -320,6 +320,10 @@ body.side-collapsed .sidebar{ width:0; opacity:0; overflow:hidden; border-right:
   font-size:11.5px; color:var(--tx-2);
 }
 .chitem.is-on{ border-color:var(--accent); background:var(--accent-sf); color:var(--tx); }
+/* 像浮空 / 噪声线的通道：压暗并给个告警色的活动度，省得看着「活动度最高」就选它
+   （真实 PD 的 CC 线大部分时间空闲，活动度反而比噪声线低得多） */
+.chitem.is-noisy{ border-style:dashed; color:var(--tx-3); }
+.chitem.is-noisy .act{ color:var(--warn); }
 .chitem b{ font-family:var(--mono); }
 .chitem .act{ margin-left:auto; font-family:var(--mono); font-size:10px; color:var(--tx-3); }
 /* 不可点的说明卡（分析仪导出只有一条通路，没有「选通道」这回事） */

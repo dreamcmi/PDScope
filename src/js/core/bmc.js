@@ -24,6 +24,52 @@
 /** PD 规范规定的 BMC 载波频率（1 UI = 半个位宽 = 1/600 kHz ≈ 1.6667 µs） */
 export const BMC_HZ = 600000;
 
+/**
+ * 单调时钟。浏览器与 Node 都有全局 `performance`；万一没有就退回 `Date.now()`。
+ *
+ * 只用来判断「距上次让出主线程过了多久」，精度要求很低，退回也不影响正确性。
+ *
+ * ⚠ **只在这里定义一份**。`tools/build-standalone.mjs` 会把整个模块图拍平进同一个
+ * IIFE 作用域，各模块再各写一份同名顶层 `const` 就会互相覆盖（打包器会告警），
+ * 所以统一从这里导出给 atkcc.js / pipeline.js 用。
+ */
+export const nowMs = (typeof performance !== 'undefined' && performance.now)
+  ? () => performance.now()
+  : () => Date.now();
+
+const IS_NODE = typeof process !== 'undefined' && !!process.versions && !!process.versions.node;
+
+/**
+ * 让出主线程一个宏任务，好让浏览器有机会渲染画面、响应点击。
+ *
+ * ★ 为什么不用 `setTimeout(0)`：实测（Chrome 有头模式，链式让出 12 次，单位 ms）
+ *     前台可见： setTimeout 0,0,0,0,0,0,5,5,5,4,4,5    MessageChannel 全 0
+ *     后台隐藏： setTimeout 0,0,0,0,0,0,730,996,997,1011,997,996    MessageChannel 全 0
+ *   即链式 `setTimeout` 先被「嵌套节流」钳到 4 ms，页面一旦隐藏再被钳到 **约 1 秒**。
+ *   解码循环是「每 20 ms 让出一次」，中等规模样本要几百次，被钳就会从
+ *   「每 20 ms 推进一片」退化成「每 1 秒才推进一片」。
+ *   `MessageChannel` 投递的是普通宏任务，两种情形下都不受钳制，同样会在任务之间
+ *   给浏览器留出渲染机会（React Scheduler 用的就是这套）。
+ *
+ *   注意：隐藏标签下**解码整体仍会慢约 3 倍**（实测 appMs 0.7 s → 2.2 s）。那是 Chrome
+ *   对不可见渲染进程的整体降级策略，跟换哪种让出方式无关（已用 A/B 构建验证：
+ *   setTimeout 版 2180 ms vs MessageChannel 版 2157 ms，无差别）。这里换原语只是为了
+ *   消除「让出本身变成 1 秒一次」这个可复现的钳制，不是为了治好隐藏标签的慢。
+ *
+ * Node 侧没有节流问题，而且 MessageChannel 的端口会把事件循环钉住不放、导致
+ * selftest / ackcheck 这类一次性脚本跑完不退出，所以 Node 一律走 `setTimeout`。
+ */
+export const yieldToMain = (() => {
+  if (IS_NODE) return () => new Promise((r) => setTimeout(r, 0));
+  if (typeof MessageChannel === 'function') {
+    const mc = new MessageChannel();
+    const waiters = [];
+    mc.port1.onmessage = () => { const r = waiters.shift(); if (r) r(); };
+    return () => new Promise((r) => { waiters.push(r); mc.port2.postMessage(0); });
+  }
+  return () => new Promise((r) => setTimeout(r, 0));
+})();
+
 export const UI_US = 1000000 / BMC_HZ;            // 1.6666666...
 export const THRESHOLD_US = (UI_US + 2 * UI_US) / 2; // 2.5
 export const MAXBIT_US = 3 * UI_US;               // 5.0
@@ -130,6 +176,22 @@ export class EdgeExtractor {
 }
 
 /**
+ * 单包允许累积的最大位数。超过就判定「根本不是 PD 报文」并就地丢弃。
+ *
+ * 为什么必须有这道闸：`pushEdge` 只在「长时间空闲」（`diff > maxbit`）或收尾时才收包。
+ * 于是遇到**噪声数据**（电平每个采样点都跳变，diff 永远很小）时，
+ * `bits` / `edges` 会一路涨到几千万位而从不重置；等到最后收尾那一次，
+ * `pd.decode()` 会对着这个巨型数组做一次 `_scanSop`（逐位取符号 + 逐位试匹配有序集），
+ * **整个扫描是同步的、几秒钟**——界面就彻底卡住，连进度条都来不及画。
+ * 实测：一份 18 KB 的噪声样本能让主线程连续阻塞 6.3 秒。
+ *
+ * 上限取 8192 位：PD 3.1 最长的扩展报文是 260 字节，
+ * 4B5B 后 260 × 10 = 2600 位，再加 SOP(20) / EOP(5) 也就 2625 位 ——
+ * 8192 是 3 倍余量，**任何合法报文都碰不到这道闸**，不会误伤。
+ */
+export const MAX_PACKET_BITS = 8192;
+
+/**
  * PD 包的 BMC 状态机。边沿进来，包出去。
  */
 export class BmcDecoder {
@@ -156,6 +218,20 @@ export class BmcDecoder {
   }
 
   /**
+   * 收完一包（或被丢弃的一段）之后重新对齐。
+   * `flush` 为真表示这是整个流的收尾，之后不再有数据，起点要置空。
+   */
+  _restart(sample, flush) {
+    this.startsample = flush ? null : sample;
+    this.bits = [];
+    this.edges = [];
+    this.bad = [];
+    this.halfOne = false;
+    this.startOne = 0;
+    this.previous = sample;
+  }
+
+  /**
    * 送入一个边沿。
    * @returns {null|{bits:number[],edges:number[],startSample:number,endSample:number,bad:number[][],bitrate:number}}
    */
@@ -172,15 +248,14 @@ export class BmcDecoder {
     if (diff > this.maxbit || flush) {
       if (!flush) this.edges.push(this.previous);
       const packet = this._emit();
-      // 重新开始
-      this.startsample = flush ? null : sample;
-      this.bits = [];
-      this.edges = [];
-      this.bad = [];
-      this.halfOne = false;
-      this.startOne = 0;
-      this.previous = sample;
+      this._restart(sample, flush);
       return packet;
+    }
+
+    // 位累积超限 => 不是 PD 报文，就地丢弃并重新对齐（见 MAX_PACKET_BITS）
+    if (this.bits.length >= MAX_PACKET_BITS) {
+      this._restart(sample, false);
+      return null;
     }
 
     const isZero = diff > this.threshold;

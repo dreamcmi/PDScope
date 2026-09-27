@@ -26,6 +26,11 @@
     "e2e:serve": "node tools/e2e.mjs",
     "test": "node tools/version-check.mjs && node tools/syntax.mjs && node tools/build-standalone.mjs && node tools/selftest.js && node tools/ackcheck.js && npm run e2e:all",
 
+    "perf": "node tools/perf-probe.mjs --file dist/PDScope.html --drop \"../apple_40w_avs_iphone_air.atkcc\"",
+    "perf:headed": "node tools/perf-probe.mjs --headed --file dist/PDScope.html --drop \"../apple_40w_avs_iphone_air.atkcc\"",
+    "perf:fixture": "node tools/make-test-atkcc.mjs --fill 0x55 --chunks 16 --out artifacts/_worst.atkcc",
+    "perf:worst": "npm run perf:fixture && node tools/perf-probe.mjs --headed --file dist/PDScope.html --drop \"artifacts/_worst.atkcc\"",
+
     "app": "tauri dev",
     "app:exe": "tauri build --no-bundle",
     "app:build": "tauri build",

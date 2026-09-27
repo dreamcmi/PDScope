@@ -169,6 +169,10 @@ function newDoc(file) {
     /** 时间轴画哪一组曲线：'power' = VBUS/IBUS，'aux' = CC1/CC2（分析仪导出才有） */
     tlMode: 'power',
     chActivity: new Map(),
+    /** 多通道文件自动挑通道的结果（挑中哪个、排除了几条噪声线） */
+    channelPick: null,
+    /** 加载期发现的问题（例如所有通道都像噪声线），解码后若一条报文都没有才顶上来显示 */
+    loadNotice: null,
     /** 常驻提示条的内容（切回来要还原）；noticeOff 记「用户点过知道了」 */
     notice: null,
     noticeOff: false,
@@ -189,6 +193,15 @@ const DOCS = [];
 let S = newDoc(null);
 /** 与「哪一份文件」无关的界面偏好，跨标签共用 */
 const UI = { rowH: 30 };
+
+/**
+ * 多通道文件自动挑通道时，混合字节占比超过这个值就认为「像浮空 / 噪声线」而不优先选它。
+ *
+ * 依据：真实 PD 的 CC 线上，绝大多数字节是整字节同电平（0xFF 空闲 / 0x00 低电平），
+ * 混合字节只在报文跳变处出现，实测占比远低于 10%；而浮空线的电平随机，
+ * 混合字节占比接近 50%。取 35% 落在两者之间，两边都不会误判。
+ */
+const NOISE_EDGE_LIKE = 0.35;
 
 const inflate = makeBrowserInflator();
 
@@ -324,6 +337,8 @@ async function loadContainer(file) {
   const doc = takeSlotDoc(file);
   doc.state = 'running';
   doc.error = '';
+  doc.loadNotice = null;
+  doc.channelPick = null;
   renderTabs();
   showProgress('正在读取文件…', file.name);
   try {
@@ -352,12 +367,35 @@ async function loadContainer(file) {
       doc.chActivity = new Map();
       for (let i = 0; i < chs.length; i++) {
         const r = await scanChannelActivity(cap, chs[i].channel, inflate, 3);
-        doc.chActivity.set(chs[i].channel, r.activity);
+        doc.chActivity.set(chs[i].channel, r);
         setProgress(0.05 + 0.25 * (i + 1) / chs.length, `通道 ${chs[i].channel}：${r.activity} 个活动字节`);
       }
-      let best = chs[0], bestA = -1;
-      for (const c of chs) { const a = doc.chActivity.get(c.channel) ?? 0; if (a > bestA) { bestA = a; best = c; } }
-      pick = best.channel;
+      // ⚠ 不能只挑「活动度最高」的通道。浮空 / 未接的线是接近 50% 的随机电平，
+      // 活动度反而**远高于**真正在跑 PD 的 CC 线（那条线大部分时间空闲在同一电平、
+      // 只在报文期间才跳变）。只看 activity 就会把噪声线当 CC 线去解，
+      // 解出一堆垃圾；更早的版本还会让解码器在无边沿的位流上空转几秒（见 bmc.js MAX_PACKET_BITS）。
+      // 所以先用「混合字节占比」把噪声排除，再在剩下的里挑活动度最高的。
+      const scored = chs.map((c) => {
+        const r = doc.chActivity.get(c.channel) || { activity: 0, edgeLike: 0 };
+        return { c, activity: r.activity, edgeLike: r.edgeLike };
+      });
+      const clean = scored.filter((s) => s.edgeLike <= NOISE_EDGE_LIKE);
+      const pool = clean.length ? clean : scored;
+      let best = pool[0];
+      for (const s of pool) if (s.activity > best.activity) best = s;
+      pick = best.c.channel;
+      doc.channelPick = {
+        picked: pick,
+        noiseRejected: scored.length - clean.length,
+        allNoisy: clean.length === 0,
+      };
+      if (!clean.length) {
+        doc.loadNotice = {
+          text: '所有通道都像浮空 / 噪声线',
+          sub: '没有一条呈现「大部分时间空闲在同一电平、只在报文期间跳变」的 PD 特征，'
+            + '下面的报文列表很可能是空的 —— 请确认探头接的是 CC 线',
+        };
+      }
     }
     doc.channel = pick;
     doc.state = 'ready';
@@ -479,10 +517,12 @@ async function decodeDoc(doc) {
     doc.busSeries = buildBusSeries(bus, total, doc.rate, 2400);
     doc.totalSamples = total;
 
-    // 该协议只有容器、没有语义解析（目前是 UFCS）→ 明确说清，别让人以为解析失败
+    // 该协议只有容器、没有语义解析（目前是 UFCS）→ 明确说清，别让人以为解析失败。
+    // 加载期记下的 loadNotice（比如「所有通道都像噪声线」）只在一条报文都没解出来时才顶上来，
+    // 免得正常抓包上挂个多余提示。
     doc.notice = stats.unsupported
       ? { text: stats.unsupported, sub: `${stats.unsupportedMsgs} 条原始帧已读入，模拟量轨迹正常可用` }
-      : null;
+      : (doc.loadNotice && !packets.length ? doc.loadNotice : null);
     doc.noticeOff = false;
     doc.selected = -1;
     doc.filters.tFrom = 0; doc.filters.tTo = 1;      // 换了文件/通道 → 时间窗口回到全时段
@@ -805,12 +845,23 @@ function renderChannels() {
   const chs = m.channels;
   $('#chHint').textContent = chs.length > 1 ? `${chs.length} 个通道（已按活动度排序）` : '';
 
-  const list = [...chs].sort((a, b) => (S.chActivity.get(b.channel) ?? 0) - (S.chActivity.get(a.channel) ?? 0));
+  /** 活动度扫描结果（新格式是对象；老的纯数字也认，避免历史数据路径踩空） */
+  const act = (ch) => {
+    const v = S.chActivity.get(ch);
+    return typeof v === 'number' ? { activity: v, edgeLike: 0 } : (v || { activity: 0, edgeLike: 0 });
+  };
+
+  const list = [...chs].sort((a, b) => act(b.channel).activity - act(a.channel).activity);
   for (const c of list) {
-    const b = el('button', 'chitem' + (c.channel === S.channel ? ' is-on' : ''));
+    const a = act(c.channel);
+    const noisy = a.edgeLike > NOISE_EDGE_LIKE;
+    const b = el('button', 'chitem' + (c.channel === S.channel ? ' is-on' : '') + (noisy ? ' is-noisy' : ''));
     b.innerHTML = `<b>CH${c.channel}</b><span>${c.chunks.length} 块</span>`
-      + (S.chActivity.has(c.channel) ? `<span class="act">${S.chActivity.get(c.channel)}</span>` : '');
-    b.title = `${c.totalSamples} 采样点 ≈ ${(c.totalSamples / (S.rate || S.meta.sampleRate)).toFixed(2)} s`;
+      + (S.chActivity.has(c.channel) ? `<span class="act">${a.activity}</span>` : '');
+    b.title = `${c.totalSamples} 采样点 ≈ ${(c.totalSamples / (S.rate || S.meta.sampleRate)).toFixed(2)} s`
+      + (S.chActivity.has(c.channel)
+        ? `｜活动字节 ${a.activity}（${(a.edgeLike * 100).toFixed(1)}% 是混合字节${noisy ? '，像浮空/噪声线' : ''}）`
+        : '');
     b.addEventListener('click', () => { if (c.channel !== S.channel) activateDoc(S, c.channel); });
     box.appendChild(b);
   }
@@ -1838,6 +1889,8 @@ window.PDScope = {
     packets: d.packets.length,
     filtered: d.view.length,
     totalSamples: d.totalSamples,
+    /** 上次解码花掉的毫秒数（0 = 还没解过）。性能排查靠它，别删。 */
+    decodedMs: d.decodedMs || 0,
     notices: d.notice ? 1 : 0,
   })),
   /** 切到第 i 个标签 / 关掉第 i 个标签 / 关掉全部（桌面菜单与自动化用） */
