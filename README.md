@@ -339,11 +339,15 @@ node tools/serve.mjs        # 默认 http://127.0.0.1:5188，会自动开浏览�
 | **CRC 错误标注**    | 校验未通过的报文在表格里整行标红，并在时间轴对应位置画一条贯穿的高亮竖线；配合「只看 CRC 错误」可一键筛出来 |
 | **时间窗口**        | 底部 VBUS/IBUS 时间轴可**拖拽刷选**一段区间，表格立即联动                                     |
 | **位域详情**        | 右侧面板逐位展开报文头（B15 扩展 / B14-12 对象数 / B11-9 MsgID / B8 PowerRole / B7-6 Rev / B5 DataRole / B4-0 类型）、扩展头、每个数据对象（PDO/RDO/VDM）的全部字段 |
+| **分组配色**        | 每个数据对象（VDO / PDO / RDO / 扩展消息的数据块）单独成组，**相邻分组换色相**（8 色循环）并带左侧色条；`Source_Capabilities` 这种七八个 PDO 的长报文，不用读标题也能一眼看出边界。分组标题**滚动吸顶**，长列表翻到哪都知道自己在看第几个对象 |
 | **导出**            | CSV（当前筛选结果）或 JSON（全部报文，含原始位域字段与 `ackOf` 配对序号）                     |
 | **其它**            | 明/暗主题、紧凑/舒适行高、上一条/下一条（↑↓）、`/` 聚焦搜索、`Ctrl/⌘+O` 打开、`T` 切主题、`G` 切 GOOD CRC 屏蔽、折叠筛选栏 |
 
 界面截图见 `artifacts/e2e-screenshot.png`（跑 `npm run e2e` 时自动生成），
-GOOD CRC 配对同色的效果见 `artifacts/ack-colors.png`。
+GOOD CRC 配对同色的效果见 `artifacts/ack-colors.png`，
+分组配色见 `artifacts/group-colors-srcap.png`（Source_Cap 七个 PDO）、
+`artifacts/group-colors-vdm.png`（线缆 e-Marker 的 VDO 链）、
+`artifacts/group-colors-dark.png`（暗色主题）。
 
 ---
 

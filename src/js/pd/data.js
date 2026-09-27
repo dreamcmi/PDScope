@@ -23,7 +23,7 @@ export function bistParse(em, data, idx, ctx) {
   const mode = pdField(data, 31, 28);
   const legacy = atLeast(ctx.revText, 3.0) ? null : (BIST_MODES_V2[mode] ?? null);
   const modern = BIST_MODES_V3[mode] ?? null;
-  em.detail('对象', `BIST 数据对象 #${idx + 1}`);
+  em.object(`BIST 数据对象 #${idx + 1}`);
   em.detail(`BIST Test Mode [${pdRange(31, 28)}]`, `0x${mode.toString(16).toUpperCase()} · ${modern ?? legacy ?? '无效取值（接收端应忽略本条报文）'}`);
   if (modern && legacy) em.detail('PD 2.0 旧值', `${legacy}（同一数值在旧版规范里含义不同）`);
   em.detail(`Reserved [${pdRange(27, 0)}]`, `0x${pdHex(data).slice(2)}`);
@@ -65,7 +65,7 @@ export function batteryStatusParse(em, data) {
 
 export function alertParse(em, data, idx) {
   const flags = pdField(data, 31, 24);
-  em.detail('对象', `Alert 数据对象 #${idx + 1}（ADO）`);
+  em.object(`Alert 数据对象 #${idx + 1}（ADO）`);
   em.detail(`Type of Alert [${pdRange(31, 24)}]`, `0x${flags.toString(16).padStart(2, '0').toUpperCase()} = `
     + (flags ? '' : '无告警位'));
 
@@ -143,7 +143,7 @@ export function sourceInfoParse(em, data, idx) {
   if (idx === 0) {
     /* SIDO1：1W 步长 */
     const portType = pdBit(data, 31);
-    em.detail('对象', 'Source_Info 数据对象 #1（SIDO1）');
+    em.object('Source_Info 数据对象 #1（SIDO1）');
     em.detail('Port Type [B31]', pdFlag(portType, 'Guaranteed Capability Port（供电能力固定）', 'Managed Capability Port（可动态调整）'));
     em.detail(`Reserved [${pdRange(30, 24)}]`, `0x${pdField(data, 30, 24).toString(16).toUpperCase()}`);
     em.detail(`Port Maximum PDP [${pdRange(23, 16)}]`, `${pdField(data, 23, 16)} W（1W 步长，端口最大能提供的功率）`);
@@ -157,7 +157,7 @@ export function sourceInfoParse(em, data, idx) {
     /* SIDO2：0.5W 步长，带 DPS 位 */
     const portType = pdBit(data, 31);
     const dps = pdBit(data, 30);
-    em.detail('对象', 'Source_Info 数据对象 #2（SIDO2）');
+    em.object('Source_Info 数据对象 #2（SIDO2）');
     em.detail('Port Type [B31]', pdFlag(portType, 'Guaranteed Capability Port', 'Managed Capability Port'));
     em.detail('DPS Port [B30]', pdFlag(dps, '动态电源（DPS），Port Type 应为 0b', '非 DPS'));
     em.detail(`Reserved [${pdRange(29, 18)}]`, `0x${pdField(data, 29, 18).toString(16).toUpperCase()}`);
@@ -167,7 +167,7 @@ export function sourceInfoParse(em, data, idx) {
     em.note(s);
     return s;
   }
-  em.detail('对象', `Source_Info 数据对象 #${idx + 1}`);
+  em.object(`Source_Info 数据对象 #${idx + 1}`);
   em.detail('原始值', `0x${pdHex(data)}`);
   return `Source_Info 数据对象 #${idx + 1}（规范只定义 2 个）`;
 }
@@ -193,7 +193,7 @@ export function eprModeParse(em, data, idx) {
   const action = pdField(data, 31, 24);
   const d = pdField(data, 23, 16);
   const actionText = EPR_MODE_ACTION[action] ?? '无效取值（接收端应忽略本条）';
-  em.detail('对象', `EPR_Mode 数据对象 #${idx + 1}（EPRMDO）`);
+  em.object(`EPR_Mode 数据对象 #${idx + 1}（EPRMDO）`);
   em.detail(`Action [${pdRange(31, 24)}]`, `0x${action.toString(16).padStart(2, '0').toUpperCase()} · ${actionText}`);
   let dText = `0x${d.toString(16).padStart(2, '0').toUpperCase()}`;
   if (action === 1) dText += ` · EPR Sink Operational PDP = ${d} W`;
@@ -211,7 +211,7 @@ export function eprModeParse(em, data, idx) {
 export function countryCodeParse(em, data) {
   const first = pdField(data, 31, 24), second = pdField(data, 23, 16);
   const code = pdCharPair(first, second);
-  em.detail('对象', 'Country Code 数据对象（CCDO）');
+  em.object('Country Code 数据对象（CCDO）');
   em.detail(`First Character [${pdRange(31, 24)}]`, `0x${first.toString(16).padStart(2, '0').toUpperCase()} · ${String.fromCharCode(first)}`);
   em.detail(`Second Character [${pdRange(23, 16)}]`, `0x${second.toString(16).padStart(2, '0').toUpperCase()} · ${String.fromCharCode(second)}`);
   em.detail(`Reserved [${pdRange(15, 0)}]`, `0x${pdField(data, 15, 0).toString(16).padStart(4, '0').toUpperCase()}`);

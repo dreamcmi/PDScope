@@ -30,6 +30,39 @@ function emitPeakCurrent(em, field, mode, range) {
 /* ══════════════════ PDO ══════════════════ */
 
 /**
+ * 从原始位域预判 PDO 类型名 —— 供分组标题用。
+ * 必须先于逐字段详情拿到名字，才能让整块 PDO 落在同一个分组里，
+ * 所以这里独立算一次，`pdoParse` 的 `name` 就以它为准。
+ */
+function pdoKindName(pdo, isEpr) {
+  const pre = isEpr ? 'EPR_' : '';
+  const t1 = pdField(pdo, 31, 30);
+  if (t1 === 0) return `${pre}Fixed`;
+  if (t1 === 1) return `${pre}Battery`;
+  if (t1 === 2) return `${pre}Variable`;
+  const t2 = pdField(pdo, 29, 28);
+  if (t2 === 0) return 'PPS';
+  if (t2 === 1) return 'EPR_AVS';
+  if (t2 === 2) return 'SPR_AVS';
+  return 'Reserved_APDO';
+}
+
+/** 类型名 → 中英对照的分组标题（详情面板里一眼看出这是哪种电源） */
+const PDO_KIND_TITLE = {
+  Fixed: 'Fixed 固定电源',
+  EPR_Fixed: 'EPR_Fixed 扩展固定电源',
+  Battery: 'Battery 电池',
+  EPR_Battery: 'EPR_Battery 扩展电池',
+  Variable: 'Variable 可变电源',
+  EPR_Variable: 'EPR_Variable 扩展可变电源',
+  PPS: 'PPS 可编程电源',
+  EPR_AVS: 'EPR_AVS 扩展可调电压',
+  SPR_AVS: 'SPR_AVS 标准可调电压',
+  Reserved: 'Reserved 保留',
+  Reserved_APDO: 'Reserved_APDO 保留',
+};
+
+/**
  * 解析一个 PDO 并写入详情，同时把它登记进状态（供后续 RDO 反查）。
  *
  * @param {object} st   解码器状态（st.pdos / st.pdoMeta）
@@ -45,17 +78,17 @@ export function pdoParse(st, em, pdo, o) {
   const roleName = role === 'source' ? 'Source' : 'Sink';
   const t1 = pdField(pdo, 31, 30);
 
+  const name = pdoKindName(pdo, isEpr);
+  em.object(`PDO #${pos} · ${PDO_KIND_TITLE[name] ?? name}（${roleName}）`);
   em.detail('原始值', `0x${pdHex(pdo)}`);
   em.detail('功率范围', isEpr ? 'EPR（扩展功率范围）' : 'SPR（标准功率范围）');
   em.detail('角色', roleName);
 
   const meta = { type: t1, role, isEpr, kind: 'unknown', position: pos };
-  let name = 'Reserved';
-  let summary = `[Reserved] [raw: 0x${pdHex(pdo)}]`;
+  let summary = `[${name}] [raw: 0x${pdHex(pdo)}]`;
 
   if (t1 === 0) {
     /* ── Fixed Supply PDO（Table 6.8 / 6.9 / 6.10）── */
-    name = isEpr ? 'EPR_Fixed' : 'Fixed';
     const mv = pdField(pdo, 19, 10) * V_STEP;
     const ma = pdField(pdo, 9, 0) * I_STEP;
     em.detail('Supply Type [B31-30]', '00b Fixed Supply PDO');
@@ -97,7 +130,6 @@ export function pdoParse(st, em, pdo, o) {
     meta.kind = 'fixed';
   } else if (t1 === 1) {
     /* ── Battery Supply PDO（Table 6.11）── */
-    name = isEpr ? 'EPR_Battery' : 'Battery';
     const minv = pdField(pdo, 19, 10) * V_STEP;
     const maxv = pdField(pdo, 29, 20) * V_STEP;
     const mw = pdField(pdo, 9, 0) * P_STEP_BATT;
@@ -109,7 +141,6 @@ export function pdoParse(st, em, pdo, o) {
     meta.kind = 'battery';
   } else if (t1 === 2) {
     /* ── Variable Supply PDO（Table 6.12）── */
-    name = isEpr ? 'EPR_Variable' : 'Variable';
     const minv = pdField(pdo, 19, 10) * V_STEP;
     const maxv = pdField(pdo, 29, 20) * V_STEP;
     const ma = pdField(pdo, 9, 0) * I_STEP;
@@ -125,7 +156,6 @@ export function pdoParse(st, em, pdo, o) {
     meta.apdoType = t2;
     em.detail('Supply Type [B31-30]', '11b Augmented PDO');
     if (t2 === 0) {
-      name = 'PPS';
       const minv = pdField(pdo, 15, 8) * V_STEP_AVS;
       const maxv = pdField(pdo, 24, 17) * V_STEP_AVS;
       const ma = pdField(pdo, 6, 0) * I_STEP_PPS;
@@ -142,7 +172,6 @@ export function pdoParse(st, em, pdo, o) {
       summary = `[PPS] ${pdNum(minv)}/${pdNum(maxv)}V ${pdNum(ma)}A${limited ? ' [limited]' : ''}`;
       meta.kind = 'pps';
     } else if (t2 === 1) {
-      name = 'EPR_AVS';
       const minv = pdField(pdo, 15, 8) * V_STEP_AVS;
       const maxv = pdField(pdo, 25, 17) * V_STEP_AVS;
       const pdp = pdField(pdo, 7, 0);
@@ -160,7 +189,6 @@ export function pdoParse(st, em, pdo, o) {
       summary = `[EPR_AVS] ${pdNum(minv)}~${pdNum(maxv)}V (${pdp}W)`;
       meta.kind = 'epr_avs';
     } else if (t2 === 2) {
-      name = 'SPR_AVS';
       const c15 = pdField(pdo, 19, 10) * I_STEP_AVS_MAX;
       const c20 = pdField(pdo, 9, 0) * I_STEP_AVS_MAX;
       em.detail('APDO Type [B29-28]', '10b SPR AVS（9~20V 可调）');
@@ -175,7 +203,6 @@ export function pdoParse(st, em, pdo, o) {
       summary = `[SPR_AVS] 9~20V  15V:${pdNum(c15)}A  20V:${pdNum(c20)}A`;
       meta.kind = 'spr_avs';
     } else {
-      name = 'Reserved_APDO';
       em.detail('APDO Type [B29-28]', `1${t2.toString(2).padStart(2, '0')}b Reserved`);
       em.detail('原始值', `0x${pdHex(pdo)}`);
       summary = `[Reserved_APDO] [raw: 0x${pdHex(pdo)}]`;
@@ -206,9 +233,11 @@ function summaryShort(s) {
  */
 export function rdoParse(st, em, rdo, o = {}) {
   const pos = pdField(rdo, 31, 28);
+  const posValid = pos !== 0 && pos < 0x0E;
+  em.object(`RDO · 请求数据对象${posValid ? `（引用 PDO #${pos}）` : ''}`);
   em.detail('原始值', `0x${pdHex(rdo)}`);
 
-  if (pos === 0 || pos >= 0x0E) {
+  if (!posValid) {
     em.detail(`Object Position [${pdRange(31, 28)}]`, `${pos} · 无效位置`);
     const s = `(RDO 位置 ${pos} 无效)`;
     em.note(s);

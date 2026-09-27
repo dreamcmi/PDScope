@@ -52,6 +52,10 @@ html[data-theme="light"]{
   --shadow:    0 1px 2px rgba(16,24,40,.05), 0 8px 24px -12px rgba(16,24,40,.18);
   --shadow-lg: 0 12px 40px -12px rgba(16,24,40,.35);
   --ok: #159c53; --warn: #b98600; --bad: #d93838;
+
+  /* 详情分组配色（相邻 VDO / PDO 用不同色相区分，8 组循环） */
+  --g0: #2563eb;  --g1: #0e8ba1;  --g2: #159c53;  --g3: #7a3cd8;
+  --g4: #c2410c;  --g5: #be185d;  --g6: #4f46e5;  --g7: #a16207;
 }
 
 html[data-theme="dark"]{
@@ -80,6 +84,10 @@ html[data-theme="dark"]{
   --shadow:    0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
   --shadow-lg: 0 12px 40px -12px rgba(0,0,0,.8);
   --ok: #4ed08a; --warn: #e6bf4a; --bad: #ff6b6b;
+
+  /* 详情分组配色（深色主题提高明度，保证在深底上可读） */
+  --g0: #6ba0ff;  --g1: #45c7dd;  --g2: #4ed08a;  --g3: #b28bfa;
+  --g4: #f0a35e;  --g5: #f472b6;  --g6: #a5b4fc;  --g7: #e6bf4a;
 }
 
 *{ box-sizing:border-box; }
@@ -414,6 +422,39 @@ body.detail-collapsed .detail{ width:0; opacity:0; overflow:hidden; border-left:
 .dsec > h5{
   margin:0 0 7px; font-size:10.5px; font-weight:600; letter-spacing:.6px;
   text-transform:uppercase; color:var(--tx-3);
+}
+
+/* ── 分组配色 ─────────────────────────────────────────
+   每个 VDO / PDO / 数据对象分到一组，相邻分组换色相（8 组循环），
+   Source_Capabilities 这种七八个 PDO 的长报文也能一眼看出边界。 */
+.dg-0{ --ga:var(--g0); }  .dg-1{ --ga:var(--g1); }
+.dg-2{ --ga:var(--g2); }  .dg-3{ --ga:var(--g3); }
+.dg-4{ --ga:var(--g4); }  .dg-5{ --ga:var(--g5); }
+.dg-6{ --ga:var(--g6); }  .dg-7{ --ga:var(--g7); }
+
+.dsec.dg{ margin-bottom:11px; }
+.dsec.dg > h5{
+  display:flex; align-items:center; gap:7px;
+  font-size:11px; letter-spacing:0; text-transform:none; color:var(--ga);
+  /* 吸顶：长分组滚动时始终知道当前在看哪一项 */
+  position:sticky; top:0; z-index:2;
+  margin:0; padding:5px 0 6px; background:var(--panel);
+}
+.dsec.dg > h5 .gd{
+  width:8px; height:8px; flex:none; border-radius:2px; background:var(--ga);
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--ga) 20%,transparent);
+}
+.dsec.dg > h5 .gl{
+  flex:1; height:1px; min-width:10px;
+  background:linear-gradient(90deg,color-mix(in srgb,var(--ga) 42%,transparent),transparent);
+}
+.dsec.dg .dbits{
+  border-color:color-mix(in srgb,var(--ga) 22%,var(--line));
+  border-left:3px solid var(--ga);
+}
+.dsec.dg .dbit .bk{
+  background:color-mix(in srgb,var(--ga) 6%,var(--panel-2));
+  color:color-mix(in srgb,var(--ga) 42%,var(--tx));
 }
 .dhero{
   padding:11px; border-radius:9px; border:1px solid var(--line);
@@ -2074,6 +2115,39 @@ function emitPeakCurrent(em, field, mode, range) {
 /* ══════════════════ PDO ══════════════════ */
 
 /**
+ * 从原始位域预判 PDO 类型名 —— 供分组标题用。
+ * 必须先于逐字段详情拿到名字，才能让整块 PDO 落在同一个分组里，
+ * 所以这里独立算一次，`pdoParse` 的 `name` 就以它为准。
+ */
+function pdoKindName(pdo, isEpr) {
+  const pre = isEpr ? 'EPR_' : '';
+  const t1 = pdField(pdo, 31, 30);
+  if (t1 === 0) return `${pre}Fixed`;
+  if (t1 === 1) return `${pre}Battery`;
+  if (t1 === 2) return `${pre}Variable`;
+  const t2 = pdField(pdo, 29, 28);
+  if (t2 === 0) return 'PPS';
+  if (t2 === 1) return 'EPR_AVS';
+  if (t2 === 2) return 'SPR_AVS';
+  return 'Reserved_APDO';
+}
+
+/** 类型名 → 中英对照的分组标题（详情面板里一眼看出这是哪种电源） */
+const PDO_KIND_TITLE = {
+  Fixed: 'Fixed 固定电源',
+  EPR_Fixed: 'EPR_Fixed 扩展固定电源',
+  Battery: 'Battery 电池',
+  EPR_Battery: 'EPR_Battery 扩展电池',
+  Variable: 'Variable 可变电源',
+  EPR_Variable: 'EPR_Variable 扩展可变电源',
+  PPS: 'PPS 可编程电源',
+  EPR_AVS: 'EPR_AVS 扩展可调电压',
+  SPR_AVS: 'SPR_AVS 标准可调电压',
+  Reserved: 'Reserved 保留',
+  Reserved_APDO: 'Reserved_APDO 保留',
+};
+
+/**
  * 解析一个 PDO 并写入详情，同时把它登记进状态（供后续 RDO 反查）。
  *
  * @param {object} st   解码器状态（st.pdos / st.pdoMeta）
@@ -2089,17 +2163,17 @@ function pdoParse(st, em, pdo, o) {
   const roleName = role === 'source' ? 'Source' : 'Sink';
   const t1 = pdField(pdo, 31, 30);
 
+  const name = pdoKindName(pdo, isEpr);
+  em.object(`PDO #${pos} · ${PDO_KIND_TITLE[name] ?? name}（${roleName}）`);
   em.detail('原始值', `0x${pdHex(pdo)}`);
   em.detail('功率范围', isEpr ? 'EPR（扩展功率范围）' : 'SPR（标准功率范围）');
   em.detail('角色', roleName);
 
   const meta = { type: t1, role, isEpr, kind: 'unknown', position: pos };
-  let name = 'Reserved';
-  let summary = `[Reserved] [raw: 0x${pdHex(pdo)}]`;
+  let summary = `[${name}] [raw: 0x${pdHex(pdo)}]`;
 
   if (t1 === 0) {
     /* ── Fixed Supply PDO（Table 6.8 / 6.9 / 6.10）── */
-    name = isEpr ? 'EPR_Fixed' : 'Fixed';
     const mv = pdField(pdo, 19, 10) * V_STEP;
     const ma = pdField(pdo, 9, 0) * I_STEP;
     em.detail('Supply Type [B31-30]', '00b Fixed Supply PDO');
@@ -2141,7 +2215,6 @@ function pdoParse(st, em, pdo, o) {
     meta.kind = 'fixed';
   } else if (t1 === 1) {
     /* ── Battery Supply PDO（Table 6.11）── */
-    name = isEpr ? 'EPR_Battery' : 'Battery';
     const minv = pdField(pdo, 19, 10) * V_STEP;
     const maxv = pdField(pdo, 29, 20) * V_STEP;
     const mw = pdField(pdo, 9, 0) * P_STEP_BATT;
@@ -2153,7 +2226,6 @@ function pdoParse(st, em, pdo, o) {
     meta.kind = 'battery';
   } else if (t1 === 2) {
     /* ── Variable Supply PDO（Table 6.12）── */
-    name = isEpr ? 'EPR_Variable' : 'Variable';
     const minv = pdField(pdo, 19, 10) * V_STEP;
     const maxv = pdField(pdo, 29, 20) * V_STEP;
     const ma = pdField(pdo, 9, 0) * I_STEP;
@@ -2169,7 +2241,6 @@ function pdoParse(st, em, pdo, o) {
     meta.apdoType = t2;
     em.detail('Supply Type [B31-30]', '11b Augmented PDO');
     if (t2 === 0) {
-      name = 'PPS';
       const minv = pdField(pdo, 15, 8) * V_STEP_AVS;
       const maxv = pdField(pdo, 24, 17) * V_STEP_AVS;
       const ma = pdField(pdo, 6, 0) * I_STEP_PPS;
@@ -2186,7 +2257,6 @@ function pdoParse(st, em, pdo, o) {
       summary = `[PPS] ${pdNum(minv)}/${pdNum(maxv)}V ${pdNum(ma)}A${limited ? ' [limited]' : ''}`;
       meta.kind = 'pps';
     } else if (t2 === 1) {
-      name = 'EPR_AVS';
       const minv = pdField(pdo, 15, 8) * V_STEP_AVS;
       const maxv = pdField(pdo, 25, 17) * V_STEP_AVS;
       const pdp = pdField(pdo, 7, 0);
@@ -2204,7 +2274,6 @@ function pdoParse(st, em, pdo, o) {
       summary = `[EPR_AVS] ${pdNum(minv)}~${pdNum(maxv)}V (${pdp}W)`;
       meta.kind = 'epr_avs';
     } else if (t2 === 2) {
-      name = 'SPR_AVS';
       const c15 = pdField(pdo, 19, 10) * I_STEP_AVS_MAX;
       const c20 = pdField(pdo, 9, 0) * I_STEP_AVS_MAX;
       em.detail('APDO Type [B29-28]', '10b SPR AVS（9~20V 可调）');
@@ -2219,7 +2288,6 @@ function pdoParse(st, em, pdo, o) {
       summary = `[SPR_AVS] 9~20V  15V:${pdNum(c15)}A  20V:${pdNum(c20)}A`;
       meta.kind = 'spr_avs';
     } else {
-      name = 'Reserved_APDO';
       em.detail('APDO Type [B29-28]', `1${t2.toString(2).padStart(2, '0')}b Reserved`);
       em.detail('原始值', `0x${pdHex(pdo)}`);
       summary = `[Reserved_APDO] [raw: 0x${pdHex(pdo)}]`;
@@ -2250,9 +2318,11 @@ function summaryShort(s) {
  */
 function rdoParse(st, em, rdo, o = {}) {
   const pos = pdField(rdo, 31, 28);
+  const posValid = pos !== 0 && pos < 0x0E;
+  em.object(`RDO · 请求数据对象${posValid ? `（引用 PDO #${pos}）` : ''}`);
   em.detail('原始值', `0x${pdHex(rdo)}`);
 
-  if (pos === 0 || pos >= 0x0E) {
+  if (!posValid) {
     em.detail(`Object Position [${pdRange(31, 28)}]`, `${pos} · 无效位置`);
     const s = `(RDO 位置 ${pos} 无效)`;
     em.note(s);
@@ -3457,7 +3527,7 @@ function bistParse(em, data, idx, ctx) {
   const mode = pdField(data, 31, 28);
   const legacy = atLeast(ctx.revText, 3.0) ? null : (BIST_MODES_V2[mode] ?? null);
   const modern = BIST_MODES_V3[mode] ?? null;
-  em.detail('对象', `BIST 数据对象 #${idx + 1}`);
+  em.object(`BIST 数据对象 #${idx + 1}`);
   em.detail(`BIST Test Mode [${pdRange(31, 28)}]`, `0x${mode.toString(16).toUpperCase()} · ${modern ?? legacy ?? '无效取值（接收端应忽略本条报文）'}`);
   if (modern && legacy) em.detail('PD 2.0 旧值', `${legacy}（同一数值在旧版规范里含义不同）`);
   em.detail(`Reserved [${pdRange(27, 0)}]`, `0x${pdHex(data).slice(2)}`);
@@ -3499,7 +3569,7 @@ function batteryStatusParse(em, data) {
 
 function alertParse(em, data, idx) {
   const flags = pdField(data, 31, 24);
-  em.detail('对象', `Alert 数据对象 #${idx + 1}（ADO）`);
+  em.object(`Alert 数据对象 #${idx + 1}（ADO）`);
   em.detail(`Type of Alert [${pdRange(31, 24)}]`, `0x${flags.toString(16).padStart(2, '0').toUpperCase()} = `
     + (flags ? '' : '无告警位'));
 
@@ -3577,7 +3647,7 @@ function sourceInfoParse(em, data, idx) {
   if (idx === 0) {
     /* SIDO1：1W 步长 */
     const portType = pdBit(data, 31);
-    em.detail('对象', 'Source_Info 数据对象 #1（SIDO1）');
+    em.object('Source_Info 数据对象 #1（SIDO1）');
     em.detail('Port Type [B31]', pdFlag(portType, 'Guaranteed Capability Port（供电能力固定）', 'Managed Capability Port（可动态调整）'));
     em.detail(`Reserved [${pdRange(30, 24)}]`, `0x${pdField(data, 30, 24).toString(16).toUpperCase()}`);
     em.detail(`Port Maximum PDP [${pdRange(23, 16)}]`, `${pdField(data, 23, 16)} W（1W 步长，端口最大能提供的功率）`);
@@ -3591,7 +3661,7 @@ function sourceInfoParse(em, data, idx) {
     /* SIDO2：0.5W 步长，带 DPS 位 */
     const portType = pdBit(data, 31);
     const dps = pdBit(data, 30);
-    em.detail('对象', 'Source_Info 数据对象 #2（SIDO2）');
+    em.object('Source_Info 数据对象 #2（SIDO2）');
     em.detail('Port Type [B31]', pdFlag(portType, 'Guaranteed Capability Port', 'Managed Capability Port'));
     em.detail('DPS Port [B30]', pdFlag(dps, '动态电源（DPS），Port Type 应为 0b', '非 DPS'));
     em.detail(`Reserved [${pdRange(29, 18)}]`, `0x${pdField(data, 29, 18).toString(16).toUpperCase()}`);
@@ -3601,7 +3671,7 @@ function sourceInfoParse(em, data, idx) {
     em.note(s);
     return s;
   }
-  em.detail('对象', `Source_Info 数据对象 #${idx + 1}`);
+  em.object(`Source_Info 数据对象 #${idx + 1}`);
   em.detail('原始值', `0x${pdHex(data)}`);
   return `Source_Info 数据对象 #${idx + 1}（规范只定义 2 个）`;
 }
@@ -3627,7 +3697,7 @@ function eprModeParse(em, data, idx) {
   const action = pdField(data, 31, 24);
   const d = pdField(data, 23, 16);
   const actionText = EPR_MODE_ACTION[action] ?? '无效取值（接收端应忽略本条）';
-  em.detail('对象', `EPR_Mode 数据对象 #${idx + 1}（EPRMDO）`);
+  em.object(`EPR_Mode 数据对象 #${idx + 1}（EPRMDO）`);
   em.detail(`Action [${pdRange(31, 24)}]`, `0x${action.toString(16).padStart(2, '0').toUpperCase()} · ${actionText}`);
   let dText = `0x${d.toString(16).padStart(2, '0').toUpperCase()}`;
   if (action === 1) dText += ` · EPR Sink Operational PDP = ${d} W`;
@@ -3645,7 +3715,7 @@ function eprModeParse(em, data, idx) {
 function countryCodeParse(em, data) {
   const first = pdField(data, 31, 24), second = pdField(data, 23, 16);
   const code = pdCharPair(first, second);
-  em.detail('对象', 'Country Code 数据对象（CCDO）');
+  em.object('Country Code 数据对象（CCDO）');
   em.detail(`First Character [${pdRange(31, 24)}]`, `0x${first.toString(16).padStart(2, '0').toUpperCase()} · ${String.fromCharCode(first)}`);
   em.detail(`Second Character [${pdRange(23, 16)}]`, `0x${second.toString(16).padStart(2, '0').toUpperCase()} · ${String.fromCharCode(second)}`);
   em.detail(`Reserved [${pdRange(15, 0)}]`, `0x${pdField(data, 15, 0).toString(16).padStart(4, '0').toUpperCase()}`);
@@ -5390,14 +5460,13 @@ function renderDetail(p) {
     h.push(`<div class="dsec"><h5>数据对象 (hex)</h5><div class="dobj"><div class="dobj-b hx">${esc(p.dataHex)}</div></div></div>`);
   }
 
-  // 逐字段解析（按 Object 分组）
+  // 逐字段解析（按 Object 分组，每组一个配色，便于区分相邻的 VDO / PDO / 数据对象）
   const groups = groupDetails(p.details || []);
+  let gi = 0;
   for (const g of groups) {
-    if (!g.title) {
-      h.push(`<div class="dsec"><h5>字段解析</h5><div class="dbits">${g.items.map(([k, v]) => `<div class="dbit"><div class="bk">${esc(k)}</div><div class="bv">${esc(v)}</div></div>`).join('')}</div></div>`);
-    } else {
-      h.push(`<div class="dsec"><h5>${esc(g.title)}</h5><div class="dbits">${g.items.map(([k, v]) => `<div class="dbit"><div class="bk">${esc(k)}</div><div class="bv">${esc(v)}</div></div>`).join('')}</div></div>`);
-    }
+    h.push(g.title
+      ? dgroupHtml(g.title, g.items, gi++)
+      : dgroupHtml('字段解析', g.items, null));
   }
 
   h.push(`<div class="dsec"><h5>解析文本</h5><div class="dobj"><div class="dobj-b hx">${esc(p.text || '')}</div></div></div>`);
@@ -5415,15 +5484,36 @@ function groupDetails(details) {
   const groups = [];
   let cur = null;
   for (const d of details) {
-    if (d.key === 'Object') { cur = { title: String(d.value), items: [] }; groups.push(cur); continue; }
-    if (!cur) { cur = { title: null, items: [] }; if (!groups.includes(cur)) groups.push(cur); }
-    if (cur.title === null) {
-      cur.items.push([d.key, d.value]);
-    } else {
-      cur.items.push([d.key, d.value]);
+    if (d.key === 'Object' || d.key === '对象') {
+      cur = { title: String(d.value), items: [] };
+      groups.push(cur);
+      continue;
     }
+    if (!cur) { cur = { title: null, items: [] }; if (!groups.includes(cur)) groups.push(cur); }
+    cur.items.push([d.key, d.value]);
   }
   return groups.filter((g) => g.items.length || g.title);
+}
+
+/* ── 详情分组配色 ──────────────────────────────────────
+   相邻分组用不同色相区分（8 色循环），这样一屏里的
+   多个 VDO / PDO / 数据对象不用读标题也能看出边界。
+   具体颜色在 styles.css 的 .dg-0…​.dg-7 里，深浅主题各一套。 */
+const DGROUP_HUES = 8;
+
+/**
+ * 渲染一个详情分组。
+ * @param {string} title 分组标题
+ * @param {Array<[string,string]>} items 字段行
+ * @param {number|null} idx 配色序号；null 表示不着色（通用字段）
+ */
+function dgroupHtml(title, items, idx) {
+  const cls = idx == null ? 'dsec' : `dsec dg dg-${idx % DGROUP_HUES}`;
+  const rows = items
+    .map(([k, v]) => `<div class="dbit"><div class="bk">${esc(k)}</div><div class="bv">${esc(v)}</div></div>`)
+    .join('');
+  return `<div class="${cls}"><h5><i class="gd"></i><span>${esc(title)}</span><i class="gl"></i></h5>`
+    + `<div class="dbits">${rows}</div></div>`;
 }
 
 /* ═══════════════════════ 时间轴 ═══════════════════════ */

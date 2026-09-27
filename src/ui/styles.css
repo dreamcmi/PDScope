@@ -41,6 +41,10 @@ html[data-theme="light"]{
   --shadow:    0 1px 2px rgba(16,24,40,.05), 0 8px 24px -12px rgba(16,24,40,.18);
   --shadow-lg: 0 12px 40px -12px rgba(16,24,40,.35);
   --ok: #159c53; --warn: #b98600; --bad: #d93838;
+
+  /* 详情分组配色（相邻 VDO / PDO 用不同色相区分，8 组循环） */
+  --g0: #2563eb;  --g1: #0e8ba1;  --g2: #159c53;  --g3: #7a3cd8;
+  --g4: #c2410c;  --g5: #be185d;  --g6: #4f46e5;  --g7: #a16207;
 }
 
 html[data-theme="dark"]{
@@ -69,6 +73,10 @@ html[data-theme="dark"]{
   --shadow:    0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
   --shadow-lg: 0 12px 40px -12px rgba(0,0,0,.8);
   --ok: #4ed08a; --warn: #e6bf4a; --bad: #ff6b6b;
+
+  /* 详情分组配色（深色主题提高明度，保证在深底上可读） */
+  --g0: #6ba0ff;  --g1: #45c7dd;  --g2: #4ed08a;  --g3: #b28bfa;
+  --g4: #f0a35e;  --g5: #f472b6;  --g6: #a5b4fc;  --g7: #e6bf4a;
 }
 
 *{ box-sizing:border-box; }
@@ -403,6 +411,39 @@ body.detail-collapsed .detail{ width:0; opacity:0; overflow:hidden; border-left:
 .dsec > h5{
   margin:0 0 7px; font-size:10.5px; font-weight:600; letter-spacing:.6px;
   text-transform:uppercase; color:var(--tx-3);
+}
+
+/* ── 分组配色 ─────────────────────────────────────────
+   每个 VDO / PDO / 数据对象分到一组，相邻分组换色相（8 组循环），
+   Source_Capabilities 这种七八个 PDO 的长报文也能一眼看出边界。 */
+.dg-0{ --ga:var(--g0); }  .dg-1{ --ga:var(--g1); }
+.dg-2{ --ga:var(--g2); }  .dg-3{ --ga:var(--g3); }
+.dg-4{ --ga:var(--g4); }  .dg-5{ --ga:var(--g5); }
+.dg-6{ --ga:var(--g6); }  .dg-7{ --ga:var(--g7); }
+
+.dsec.dg{ margin-bottom:11px; }
+.dsec.dg > h5{
+  display:flex; align-items:center; gap:7px;
+  font-size:11px; letter-spacing:0; text-transform:none; color:var(--ga);
+  /* 吸顶：长分组滚动时始终知道当前在看哪一项 */
+  position:sticky; top:0; z-index:2;
+  margin:0; padding:5px 0 6px; background:var(--panel);
+}
+.dsec.dg > h5 .gd{
+  width:8px; height:8px; flex:none; border-radius:2px; background:var(--ga);
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--ga) 20%,transparent);
+}
+.dsec.dg > h5 .gl{
+  flex:1; height:1px; min-width:10px;
+  background:linear-gradient(90deg,color-mix(in srgb,var(--ga) 42%,transparent),transparent);
+}
+.dsec.dg .dbits{
+  border-color:color-mix(in srgb,var(--ga) 22%,var(--line));
+  border-left:3px solid var(--ga);
+}
+.dsec.dg .dbit .bk{
+  background:color-mix(in srgb,var(--ga) 6%,var(--panel-2));
+  color:color-mix(in srgb,var(--ga) 42%,var(--tx));
 }
 .dhero{
   padding:11px; border-radius:9px; border:1px solid var(--line);

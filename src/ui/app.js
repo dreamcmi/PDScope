@@ -690,14 +690,13 @@ function renderDetail(p) {
     h.push(`<div class="dsec"><h5>数据对象 (hex)</h5><div class="dobj"><div class="dobj-b hx">${esc(p.dataHex)}</div></div></div>`);
   }
 
-  // 逐字段解析（按 Object 分组）
+  // 逐字段解析（按 Object 分组，每组一个配色，便于区分相邻的 VDO / PDO / 数据对象）
   const groups = groupDetails(p.details || []);
+  let gi = 0;
   for (const g of groups) {
-    if (!g.title) {
-      h.push(`<div class="dsec"><h5>字段解析</h5><div class="dbits">${g.items.map(([k, v]) => `<div class="dbit"><div class="bk">${esc(k)}</div><div class="bv">${esc(v)}</div></div>`).join('')}</div></div>`);
-    } else {
-      h.push(`<div class="dsec"><h5>${esc(g.title)}</h5><div class="dbits">${g.items.map(([k, v]) => `<div class="dbit"><div class="bk">${esc(k)}</div><div class="bv">${esc(v)}</div></div>`).join('')}</div></div>`);
-    }
+    h.push(g.title
+      ? dgroupHtml(g.title, g.items, gi++)
+      : dgroupHtml('字段解析', g.items, null));
   }
 
   h.push(`<div class="dsec"><h5>解析文本</h5><div class="dobj"><div class="dobj-b hx">${esc(p.text || '')}</div></div></div>`);
@@ -715,15 +714,36 @@ function groupDetails(details) {
   const groups = [];
   let cur = null;
   for (const d of details) {
-    if (d.key === 'Object') { cur = { title: String(d.value), items: [] }; groups.push(cur); continue; }
-    if (!cur) { cur = { title: null, items: [] }; if (!groups.includes(cur)) groups.push(cur); }
-    if (cur.title === null) {
-      cur.items.push([d.key, d.value]);
-    } else {
-      cur.items.push([d.key, d.value]);
+    if (d.key === 'Object' || d.key === '对象') {
+      cur = { title: String(d.value), items: [] };
+      groups.push(cur);
+      continue;
     }
+    if (!cur) { cur = { title: null, items: [] }; if (!groups.includes(cur)) groups.push(cur); }
+    cur.items.push([d.key, d.value]);
   }
   return groups.filter((g) => g.items.length || g.title);
+}
+
+/* ── 详情分组配色 ──────────────────────────────────────
+   相邻分组用不同色相区分（8 色循环），这样一屏里的
+   多个 VDO / PDO / 数据对象不用读标题也能看出边界。
+   具体颜色在 styles.css 的 .dg-0…​.dg-7 里，深浅主题各一套。 */
+const DGROUP_HUES = 8;
+
+/**
+ * 渲染一个详情分组。
+ * @param {string} title 分组标题
+ * @param {Array<[string,string]>} items 字段行
+ * @param {number|null} idx 配色序号；null 表示不着色（通用字段）
+ */
+function dgroupHtml(title, items, idx) {
+  const cls = idx == null ? 'dsec' : `dsec dg dg-${idx % DGROUP_HUES}`;
+  const rows = items
+    .map(([k, v]) => `<div class="dbit"><div class="bk">${esc(k)}</div><div class="bv">${esc(v)}</div></div>`)
+    .join('');
+  return `<div class="${cls}"><h5><i class="gd"></i><span>${esc(title)}</span><i class="gl"></i></h5>`
+    + `<div class="dbits">${rows}</div></div>`;
 }
 
 /* ═══════════════════════ 时间轴 ═══════════════════════ */
