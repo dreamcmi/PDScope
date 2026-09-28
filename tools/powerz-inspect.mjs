@@ -4,8 +4,11 @@
  * 做两件事：
  *   1. **全样本体检** —— 每个库打一行汇总（协议 / 报文数 / 连接事件 / 拆帧自检 /
  *      警告 / 跳过原因），有任何异常就非 0 退出，供改完解析后一把梭。
- *   2. **人工核对** —— 打印线缆链路（SOP'/SOP''）报文与首条扩展消息的完整详情分组，
- *      与 pd-inspect.mjs 看的是同一批东西，方便两条路径（.atkcc / .sqlite）对照。
+ *   2. **人工核对** —— PD 样本打印线缆链路（SOP'/SOP''）报文与首条扩展消息的完整详情分组，
+ *      与 pd-inspect.mjs 看的是同一批东西，方便两条路径（.atkcc / .sqlite）对照；
+ *      UFCS 样本（`ufcs_table`）改打前几条报文（报文对象字段与 PD 同形，看的是同一套详情渲染）。
+ *
+ * 两种导出都认：有 `pd_table` 走 PD，有 `ufcs_table` 走 UFCS（T/TAF 083—2024 独立解析库）。
  *
  * 用法：
  *   node tools/powerz-inspect.mjs [文件名子串] [--packets] [--json]
@@ -73,22 +76,32 @@ for (const name of files) {
   const { packets, stats } = await cap.decode();
   const ms = Math.round(performance.now() - t0);
 
+  const isUfcs = kind === 'ufcs';
   const cable = packets.filter((p) => p.link === 'cable');
   const ext = packets.filter((p) => p.msgKind === 'ext');
   const types = new Map();
   for (const p of packets) types.set(p.msgType, (types.get(p.msgType) ?? 0) + 1);
 
-  const ok = !stats.badWire && !stats.warnings && !stats.truncatedRows;
+  // UFCS 特有的两个计数也要算进「正常与否」：未定位的行与坏包一样是异常信号
+  const ok = !stats.badWire && !stats.warnings && !stats.truncatedRows && !stats.ufcsUnlocatedRows;
   console.log('══════════════════════════════════════════════');
   console.log(`## ${name}`);
   console.log(`   ${cap.meta.title}   报文 ${packets.length}`
     + (stats.unsupportedMsgs ? `  原始帧 ${stats.unsupportedMsgs}（未解析）` : '')
-    + `  线缆链路 ${cable.length}  扩展 ${ext.length}`
+    + (isUfcs
+      ? `  UFCS 帧 ${stats.ufcsFrames}  未定位行 ${stats.ufcsUnlocatedRows}`
+      : `  线缆链路 ${cable.length}  扩展 ${ext.length}`)
     + `  连接 ${stats.connectCount} / 断开 ${stats.disconnectCount}`);
   console.log(`   时长 ${stats.durationSec.toFixed(3)} s   ADC 采样 ${stats.chartRows}`
     + `   表行 ${stats.tableRows}   解码 ${ms} ms`);
+  // PD 的 pd_table 一律不存 CRC（只有「未记录」一种口径）；
+  // UFCS 存不存由容器决定，所以「未记录 / 通过 / 错误」三种都要列出来。
+  const crcCol = isUfcs
+    ? `${stats.crcUnknown ? `${stats.crcUnknown} 条未记录` : '已全部记录'}`
+      + (stats.badCrc ? ` / ${stats.badCrc} 条错误` : '')
+    : (stats.crcUnknown ? `${stats.crcUnknown} 条未记录（分析仪不存 CRC）` : '—');
   console.log(`   拆帧自检 badWire ${stats.badWire}   截断行 ${stats.truncatedRows}`
-    + `   警告 ${stats.warnings}   CRC ${stats.crcUnknown ? `${stats.crcUnknown} 条未记录（分析仪不存 CRC）` : '—'}`
+    + `   警告 ${stats.warnings}   CRC ${crcCol}`
     + `   ${ok ? '✔' : '✖'}`);
   if (stats.unsupportedMsgs) {
     console.log(`   ⚠ ${stats.unsupported ?? '该协议尚未实现语义解析'}`
@@ -99,8 +112,15 @@ for (const name of files) {
     console.log(`   类型分布：${[...types.entries()].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}×${v}`).join('  ')}`);
   }
 
-  for (const p of cable) printPacket(`${p.sop} ${p.msgType}`, p);
-  if (ext.length) printPacket('扩展消息示例', ext[0]);
+  if (isUfcs) {
+    // UFCS 没有 SOP'/扩展消息那一套：电缆链路报文优先（若有），否则打前 3 条，
+    // 让「报文对象字段与 PD 同形」这件事一眼可见。
+    const show = cable.length ? cable.slice(0, 2) : packets.slice(0, 3);
+    for (const p of show) printPacket(`${p.sop} ${p.msgType}`, p);
+  } else {
+    for (const p of cable) printPacket(`${p.sop} ${p.msgType}`, p);
+    if (ext.length) printPacket('扩展消息示例', ext[0]);
+  }
 
   // 异常时把告警明细打出来，便于定位
   if (!ok) {
@@ -117,6 +137,8 @@ for (const name of files) {
     chartRows: stats.chartRows, tableRows: stats.tableRows,
     connect: stats.connectCount, disconnect: stats.disconnectCount,
     badWire: stats.badWire, truncatedRows: stats.truncatedRows, warnings: stats.warnings,
+    badCrc: stats.badCrc, crcUnknown: stats.crcUnknown,
+    ufcsFrames: stats.ufcsFrames, ufcsUnlocatedRows: stats.ufcsUnlocatedRows,
     durationSec: stats.durationSec, ms,
   });
 }
@@ -135,8 +157,10 @@ if (failed) {
 
 function printPacket(title, p) {
   console.log(`\n──── ${title} ────`);
+  // UFCS 的 `nObjects` 借位存的是「数据字节数」，标成 len 更贴切
+  const amount = p.protocol === 'UFCS' ? `len=${p.dataLen}` : `n=${p.nObjects}`;
   console.log(`#${p.index ?? p.seq} ${p.sop} ${p.msgType} role=${p.role}`
-    + ` ${p.revText} id=${p.msgId} n=${p.nObjects} crc=${p.crcOk === null ? '未记录' : p.crcOk}`);
+    + ` ${p.revText} id=${p.msgId} ${amount} crc=${p.crcOk === null ? '未记录' : p.crcOk}`);
   console.log(`summary: ${p.summary}`);
   for (const d of p.details || []) {
     if (d.key === 'Object') { console.log(`  ▸ ${d.value}`); continue; }

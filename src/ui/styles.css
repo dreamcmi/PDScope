@@ -37,6 +37,7 @@ html[data-theme="light"]{
   --plug: #7a3cd8;  --plug-bg: #f1e9ff;
 
   --ctrl: #0e8ba1;  --data: #159c53;  --ext: #b98600;  --vdm: #7a3cd8;  --err: #d93838;
+  --custom: #4f46e5;
 
   --row-hover: #f2f6fd;
   --row-sel:   #dbeafe;
@@ -69,6 +70,7 @@ html[data-theme="dark"]{
   --plug: #b28bfa;  --plug-bg: #251a3c;
 
   --ctrl: #45c7dd;  --data: #4ed08a;  --ext: #e6bf4a;  --vdm: #b28bfa;  --err: #ff6b6b;
+  --custom: #a5b4fc;
 
   --row-hover: #1c2430;
   --row-sel:   #1e3352;
@@ -286,6 +288,7 @@ body.side-collapsed .sidebar{ width:0; opacity:0; overflow:hidden; border-right:
 .chip.cat-ext.is-on { color:var(--ext);  border-color:color-mix(in srgb,var(--ext) 45%,transparent); }
 .chip.cat-vdm.is-on { color:var(--vdm);  border-color:color-mix(in srgb,var(--vdm) 45%,transparent); }
 .chip.cat-err.is-on { color:var(--err);  border-color:color-mix(in srgb,var(--err) 45%,transparent); }
+.chip.cat-custom.is-on{ color:var(--custom); border-color:color-mix(in srgb,var(--custom) 45%,transparent); }
 
 .switch{
   display:flex; align-items:center; gap:8px; padding:4px 0;
@@ -305,6 +308,7 @@ body.side-collapsed .sidebar{ width:0; opacity:0; overflow:hidden; border-right:
 .switch input:checked + span::after{ transform:translateX(12px); }
 .switch input:checked ~ *{ color:var(--tx); }
 .switch.sm{ font-size:11px; }
+.switch .swlb{ font-style:normal; }   /* 开关文案：不用 <span>，免得被滑块样式命中 */
 
 .text{
   width:100%; height:28px; padding:0 9px; border-radius:7px;
@@ -471,6 +475,7 @@ body.side-collapsed .sidebar{ width:0; opacity:0; overflow:hidden; border-right:
 .cat-Extended { color:var(--ext);  }
 .cat-VDM      { color:var(--vdm);  }
 .cat-Error    { color:var(--err);  }
+.cat-Custom   { color:var(--custom); }
 .cat-Plug     { color:var(--plug); }
 .td.type.cat-Data{ font-weight:700; }
 

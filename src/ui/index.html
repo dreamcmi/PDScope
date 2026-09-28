@@ -82,7 +82,7 @@
         </section>
 
         <section class="fgroup">
-          <h4>SOP 类型</h4>
+          <h4 id="sopTitle">SOP 类型</h4>
           <div class="chips" id="fSop">
             <button class="chip is-on" data-v="SOP">SOP</button>
             <button class="chip is-on" data-v="SOP'">SOP&prime;</button>
@@ -93,7 +93,7 @@
         </section>
 
         <section class="fgroup">
-          <h4>报文类别</h4>
+          <h4 id="catTitle">报文类别</h4>
           <div class="chips" id="fCat">
             <button class="chip cat-ctrl is-on" data-v="Control">控制</button>
             <button class="chip cat-data is-on" data-v="Data">数据</button>
@@ -105,10 +105,13 @@
 
         <section class="fgroup">
           <h4>快速过滤</h4>
-          <label class="switch"><input type="checkbox" id="fHideGoodCrc" checked /><span></span>屏蔽 GoodCRC 心跳包</label>
-          <label class="switch"><input type="checkbox" id="fOnlyBad" /><span></span>只看 CRC 错误</label>
-          <label class="switch"><input type="checkbox" id="fOnlyPower" /><span></span>只看功率协商（Source_Cap / Request / PPS）</label>
-          <label class="switch"><input type="checkbox" id="fOnlyEnter" /><span></span>只看状态切换（PS_RDY / VDM / Alert）</label>
+          <!-- 文案用 <em class="swlb"> 而不是裸文本：切到 UFCS 抓包时这几条要换名字
+               （「GoodCRC 心跳」→「ACK/NCK 心跳」等），得有个能寻址的元素；
+               不能用 <span>，那会被 .switch span 当成滑块去画。 -->
+          <label class="switch"><input type="checkbox" id="fHideGoodCrc" checked /><span></span><em class="swlb" id="lbHideGoodCrc">屏蔽 GoodCRC 心跳包</em></label>
+          <label class="switch"><input type="checkbox" id="fOnlyBad" /><span></span><em class="swlb" id="lbOnlyBad">只看 CRC 错误</em></label>
+          <label class="switch"><input type="checkbox" id="fOnlyPower" /><span></span><em class="swlb" id="lbOnlyPower">只看功率协商（Source_Cap / Request / PPS）</em></label>
+          <label class="switch"><input type="checkbox" id="fOnlyEnter" /><span></span><em class="swlb" id="lbOnlyEnter">只看状态切换（PS_RDY / VDM / Alert）</em></label>
         </section>
 
         <section class="fgroup">
@@ -134,7 +137,7 @@
         <section class="fgroup">
           <h4>关键字</h4>
           <input class="text" id="fSearch" placeholder="消息名 / 数据hex / 备注…" />
-          <div class="row gap wrap mt6">
+          <div class="row gap wrap mt6" id="kwRow">
             <button class="btn tiny" data-kw="PPS">PPS</button>
             <button class="btn tiny" data-kw="AVS">AVS</button>
             <button class="btn tiny" data-kw="VID">VID</button>
@@ -180,11 +183,11 @@
       <div class="table-wrap" id="tableWrap">
         <div class="thead" id="thead">
           <div class="th c-idx"    data-k="index">#</div>
-          <div class="th c-sop"    data-k="sop">SOP</div>
+          <div class="th c-sop"    data-k="sop" id="thSop">SOP</div>
           <div class="th c-type"   data-k="msgType">报文类型</div>
           <div class="th c-id"     data-k="msgId">ID</div>
           <div class="th c-role"   data-k="role">方向</div>
-          <div class="th c-obj"    data-k="nObj">Obj</div>
+          <div class="th c-obj"    data-k="nObj" id="thObj">Obj</div>
           <div class="th c-time"   data-k="timeMs">时间</div>
           <div class="th c-bus"    data-k="vbus">VBUS / IBUS</div>
           <div class="th c-data"   data-k="dataHex">数据 (hex)</div>
@@ -243,7 +246,7 @@
 
     <!-- 详情面板收起后的展开把手。
          必需而非装饰：重开详情面板原本只有「点列表里的报文」一条路（select() 里
-         去掉 detail-collapsed），而零报文的抓包（如 UFCS，语义解析未实现）列表本就是空的 ——
+         去掉 detail-collapsed），而一行报文都没定位出来的抓包（容器格式对不上）列表本就是空的 ——
          那种文件一旦按 Esc / 点 × 收起，面板就再也打不开了。 -->
     <button class="detail-rail" id="btnDetailOpen" title="展开报文详情" aria-controls="detail">
       <svg viewBox="0 0 16 16" class="i" aria-hidden="true"><path d="M9.5 3.5 5 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
