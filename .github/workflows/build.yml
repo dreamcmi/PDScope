@@ -274,65 +274,66 @@ jobs:
       # Artifacts 列表里每一项就是一个文件，下载下来就是文件本身。
       # archive:false 时只能传单个文件、且 name 参数失效 —— 文件名（带版本段）会直接
       # 用作 artifact 名，所以列表里看到的就是 PDScope-<目标>-<版本段>-<内容>.<ext>。
+      # path 用精确文件名（归置脚本已保证确定性命名），避免 glob 误匹配到多个文件导致
+      # archive:false 报错。
       # 用 contains(matrix.bundles, ...) 判断该目标是否产这个文件，缺 MSI 的 arm64 不会误传。
-      # sha256 校验和也逐个直传（每个 .sha256 一个 artifact）。
 
       - name: 上传 NSIS 安装包
         if: contains(matrix.bundles, 'nsis')
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           if-no-files-found: error
           retention-days: 30
-          path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/*-setup.exe
+          path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/PDScope-${{ matrix.name }}-${{ env.VERSEG }}-setup.exe
           archive: false
 
       - name: 上传 MSI 安装包
         if: contains(matrix.bundles, 'msi')
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           if-no-files-found: error
           retention-days: 30
-          path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/*-setup.msi
+          path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/PDScope-${{ matrix.name }}-${{ env.VERSEG }}-setup.msi
           archive: false
 
       - name: 上传绿色版 exe
         if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           if-no-files-found: error
           retention-days: 30
-          path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/*-portable.exe
+          path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/PDScope-${{ matrix.name }}-${{ env.VERSEG }}-portable.exe
           archive: false
 
       - name: 上传 dmg
         if: contains(matrix.bundles, 'dmg')
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           if-no-files-found: error
           retention-days: 30
-          path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/*.dmg
+          path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/PDScope-${{ matrix.name }}-${{ env.VERSEG }}.dmg
           archive: false
 
       - name: 上传 deb
         if: contains(matrix.bundles, 'deb')
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           if-no-files-found: error
           retention-days: 30
-          path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/*.deb
+          path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/PDScope-${{ matrix.name }}-${{ env.VERSEG }}.deb
           archive: false
 
       - name: 上传 AppImage
         if: contains(matrix.bundles, 'appimage')
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           if-no-files-found: error
           retention-days: 30
-          path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/*.AppImage.zip
+          path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/PDScope-${{ matrix.name }}-${{ env.VERSEG }}.AppImage.zip
           archive: false
 
       - name: 上传 SHA256 校验和
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           # sha256 是多个文件（每个产物一个），archive:false 只能传单个，所以这里保持
           # 默认打包成一个 zip，集中放该目标的全部 .sha256
