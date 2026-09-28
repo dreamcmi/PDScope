@@ -5697,6 +5697,10 @@ const UFCS_BITS_PER_BYTE = 10;
  * 键 = `${消息类型}:${命令编号}`，值 = 发送方角色。
  * 双向命令（Ping / ACK / NCK / Accept / Soft_Reset / Refuse / Get_Device_Info /
  * Get_Error_Info / Exit_UFCS_Mode / Cable_Information / Verify_* …）不在表内。
+ *
+ * 表 15 的 `0xFF Test_Request` 也**不在表内**，尽管规范里它的发送者只有「测试设备」：
+ * 测试设备不是供电设备 / 充电设备 / 线缆电子标签三者之一，落不到 D+ / D- 上 ——
+ * 它可以挂在任意一侧，方向本就无从还原。别为了凑满表硬塞一个角色进来。
  */
 const UFCS_FIXED_DIR = {
   '0:0x05': 'SRC',   // Power_Ready                供电设备 → 充电设备
@@ -5775,7 +5779,12 @@ function ufcsCrc8(bytes, len = bytes.length) {
  * 「数据长度」只数**数据区**，不含命令/长度/厂家识别码本身，也不含 CRC。
  * 控制消息没有长度字段（恒为 1 字节命令）。
  *
- * ── 为什么需要 withCrc 两种读法 ────────────────────────────────────
+ * ── 线上还有一个 Training 字节 ────────────────────────────────────
+ * 规范 7.4.6：发送方在每个数据包**之前**先发一个 Training 序列 **0xAA**，
+ * 接收方靠它算出本次的波特率挡位。它属于物理层、不进 CRC 覆盖范围，
+ * 因此**不属于协议意义上的帧**，但分析仪会把它一并计入长度（见 parseUfcsRecord）。
+ *
+ * ── 两种读法：withCrc ─────────────────────────────────────────────
  * POWER-Z 这类分析仪导出时，有的实现把 CRC 一起存下来，有的只存到消息主体为止
  * （PD 那条路径就是后者，见 core/powerz.js）。两种情况下「整帧字节数」差 1，
  * 靠「哪一种读法刚好把 blob 消费完 / CRC 是否吻合」就能判定，不必猜。
@@ -5803,6 +5812,16 @@ function ufcsHeaderInfo(hdr) {
 
 /**
  * 一个包从消息头开始、到 CRC（不含）为止的字节数。
+ *
+ * 下面两个长度上限（数据 59 / 自定义 58）不是拍的 —— 它们被规范两处条款**同时**卡住：
+ *   • 图 25 / 图 40 的框上写死「数据（1~59 字节）」「数据（1~58 字节）」；
+ *   • 8.2.1 又规定「消息主体（= 本函数返回值 − 消息头 2 字节）为 1~61 字节」。
+ * 于是 数据消息 2+59 = 61、自定义消息 3+58 = 61，两边正好顶到 8.2.1 的上限。
+ * 改这两个数字前先回去对表：动一个，另一处就对不上了。
+ *
+ * 自定义消息的字段次序（头 → 厂家识别码 → 数据长度 → 数据）按图 40 的**框坐标**定，
+ * 不能信 PDF 的文本抽取顺序 —— 那玩意儿把图 25 的「命令」排到了「CRC」后面。
+ *
  * @returns {number} bodyEnd 相对 off 的偏移；-1 = 结构不成立（截断 / 长度域越界）
  */
 function ufcsFrameBodySize(bytes, off) {
@@ -5912,6 +5931,28 @@ function ufcsSplitFrames(bytes, off, withCrc, maxFrames = 64) {
 function ufcsLocateFrames(blob, { maxPrefix = 16 } = {}) {
   const n = blob.length;
   if (n < 3) return null;                 // 最小的一帧是「控制消息 + 无 CRC」= 3 字节
+
+  // ── 0. 先试分析仪容器布局（见下方 ufcsParseRecord）──
+  // 认得出来就用它：它额外给出「物理链路」与容器长度域，是穷举拿不到的信息。
+  // 认不出（空行 / 别的导出实现 / 残行）再往下穷举 —— 两条路都保留。
+  const rec = ufcsParseRecord(blob);
+  if (rec) {
+    const allOk = rec.frames.every((f) => f.crcOk === true);
+    return {
+      prefixBytes: rec.prefixBytes,
+      withCrc: true,
+      tier: allOk ? 0 : 1,
+      structScore: rec.frames.reduce((s, f) => s + f.structScore, 0),
+      frames: rec.frames,
+      prefix: blob.subarray(0, rec.prefixBytes),
+      line: rec.line,
+      counter: rec.counter,
+      lenField: rec.lenField,
+      training: rec.training,
+      tsMs: rec.tsMs,
+    };
+  }
+
   let best = null;
 
   const better = (a, b) => {
@@ -5941,6 +5982,138 @@ function ufcsLocateFrames(blob, { maxPrefix = 16 } = {}) {
     }
   }
   return best;
+}
+
+/* ══════════════ 分析仪（POWER-Z）的一行 Raw ══════════════
+
+   上一条 UFCS 报文在容器里长什么样，是从 **26099 行真实抓包**（vivo X300 Ultra，
+   `ufcs_table`）逐字节反推出来的，**零例外**：
+
+     帧记录（9 + N 字节）
+       ts(4B 小端, 毫秒)  x0(1B)  x1(1B)  len(1B)  flag(1B)  0xAA  │ UFCS 帧(N 字节，含 CRC)
+       ├──────────────── 9 字节前缀 ────────────────┤            └─ 消息头 + 主体 + CRC
+
+     状态事件（8 字节，不承载协议报文）
+       ts(4B 小端, 毫秒)  code(1B)  00  00  0x40
+
+   各字段的实测依据：
+   • `ts`  —— 与 SQLite 的 `Time` 列 ×1000 **逐行完全相等**（26094/26094）。属冗余副本，
+     时间基准仍以 `Time` 列为准（见 core/powerz.js），这里只作诊断。
+   • `len` —— **= N + 1**，即「线上字节数」，把 0xAA 也算进去了（26094/26094 吻合）。
+     规范 7.4.6 的 Training 序列确实走在线上，所以分析仪这样数是对的。
+   • `flag` —— **物理链路**：0 = 线缆 D+（供电设备侧发送），1 = 线缆 D−（充电设备侧发送）。
+     与规范表 14/15 的单向命令定义（`tables.js#UFCS_FIXED_DIR`）**100% 吻合**
+     （13045/13045，含 4 条发给线缆的 Get_Cable_Info），所以它是「谁在发」的硬依据，
+     不再是猜测。⚠ 它与「接收方地址」高度相关但不完全等价（线缆报文就是反例），
+     别拿接收方地址去替代它。
+   • `x0`/`x1` —— 该帧在**本方向字节流**里的起止游标（各 1 字节、回绕于 256）。
+     按帧长链式接续，实测 13045 + 13049 次接续**零断裂**。纯诊断信息。
+   • `0xAA` —— 规范 7.4.6 的 Training 序列。**它不是链路标记**：固定值，恒在帧前 1 字节。
+     （早先的实现把它当成「链路字节候选」，于是永远读不出 D+/D−，方向只能靠推断也不自知。）
+
+   上面这套是「实测归纳」而非规范规定的容器格式 —— 规范管不到分析仪怎么存盘。
+   因此它对**结构不吻合的导出**必须能退让：先试下面这条「认得出就用」的快路径，
+   认不出再落回上面的穷举定位。 */
+
+/** UFCS 的 Training 序列（规范 7.4.6），也在分析仪容器里作为帧前导出现 */
+const UFCS_TRAINING = 0xAA;
+
+/** 状态事件记录的尾标记（与 PD 侧 `45 … 00 code` 的 0x45 是同性质的容器约定） */
+const UFCS_EVENT_TAIL = 0x40;
+
+/**
+ * 一个状态事件记录的 opcode → 含义。
+ *
+ * ⚠ **只出现过 0x02 / 0x03 / 0x04 三种，且没有规范或文档可对照** —— 全部取证如下，
+ * 不要凭印象往上加：整个样本 2494 s 里只有 5 条事件，
+ *   开抓（t=5.107 s）：03 → 04
+ *   收尾（t=2293.499 / 2293.755 / 2293.766 s，紧跟 Exit_UFCS_Mode 之后）：02 → 03 → 04
+ * 由此**推断**（不是确证）：0x02 与「退出 / 断电」相关，0x03、0x04 是握手阶段的递进状态。
+ * 因此下表只给「倾向性」的说明文字，界面上一律带上「容器约定、待确认」的口径。
+ */
+const UFCS_EVENT_CODE = {
+  0x02: '状态 02（疑似：退出 / 断电）',
+  0x03: '状态 03（疑似：握手 / 起始）',
+  0x04: '状态 04（疑似：握手完成）',
+};
+
+/**
+ * 认一行 Raw 是不是 UFCS 的**状态事件记录**（8 字节，不承载协议报文）。
+ *
+ * 判据取「长度 + 尾标记」两个固定量，不看 opcode —— 未知 opcode 也要认出来
+ * （如实报「未知 opcode」比当成坏行丢掉更有用）。
+ *
+ * @param {Uint8Array} blob
+ * @returns {null | {tsMs:number, code:number}}
+ */
+function ufcsParseEvent(blob) {
+  if (blob.length !== 8 || blob[7] !== UFCS_EVENT_TAIL) return null;
+  return {
+    tsMs: (blob[0] | (blob[1] << 8) | (blob[2] << 16) | (blob[3] << 24)) >>> 0,
+    code: blob[4],
+  };
+}
+
+/**
+ * 按**已知容器布局**解一行 Raw。这是快路径：布局认得出来就用它，认不出来返回 null，
+ * 由调用方落回 `ufcsLocateFrames` 的穷举定位。
+ *
+ * 之所以值得有这条快路径（而不是全靠穷举）：
+ *   ① 穷举只输出「切帧结果」，拿不到 `flag`（链路）—— 那是**方向判定的硬依据**，
+ *      靠穷举根本恢复不了；早先的实现正是因此把 13048 条报文标成了「方向靠推断」。
+ *   ② 有了容器自带的 `len`，可以拿它当**逐帧校验**：帧边界算错立刻能发现，
+ *      而不必等 CRC 对不上才知道。
+ *
+ * @param {Uint8Array} blob
+ * @returns {null | {frames:Array<object>, prefixBytes:number, withCrc:boolean,
+ *                  line:('D+'|'D-'|null), counter:{x0:number,x1:number}|null,
+ *                  lenField:number|null, training:boolean, tsMs:number}}
+ */
+function ufcsParseRecord(blob) {
+  if (!blob || blob.length < 4 + 4 + 1 + 4) return null;      // 最短的一帧也要 13 字节
+  if (blob[8] !== UFCS_TRAINING) return null;
+
+  const prefixBytes = 9;
+  const frame = blob.subarray(prefixBytes);
+  if (frame.length < 4) return null;
+
+  const flag = blob[7];
+  // flag 只在 0/1 上才是「链路」；别的取值说明这不是我们认得的布局，交给穷举。
+  if (flag > 1) return null;
+
+  const bodySize = ufcsFrameBodySize(frame, 0);
+  if (bodySize < 0) return null;
+  const total = bodySize + 1;                                 // 含 CRC
+  if (total !== frame.length) return null;                    // 长度对不上 ⇒ 不是这个布局
+
+  const lenField = blob[6];
+  if (lenField !== frame.length + 1) return null;             // 容器声明的「线上字节数」校验
+
+  const calc = ufcsCrc8(frame.subarray(0, bodySize));
+  const crc = frame[bodySize];
+  const hdr = (frame[0] << 8) | frame[1];
+  const h = ufcsHeaderInfo(hdr);
+  if (!h.addrValid || !h.mtypeValid) return null;
+
+  return {
+    frames: [{
+      off: prefixBytes,
+      total: frame.length,
+      bodyEnd: prefixBytes + bodySize,
+      hdr,
+      calc,
+      crc,
+      crcOk: crc === calc,
+      structScore: ufcsFrameScore(frame, 0, true),
+    }],
+    prefixBytes,
+    withCrc: true,
+    line: flag === 0 ? 'D+' : 'D-',
+    counter: { x0: blob[4], x1: blob[5] },
+    lenField,
+    training: true,
+    tsMs: (blob[0] | (blob[1] << 8) | (blob[2] << 16) | (blob[3] << 24)) >>> 0,
+  };
 }
 
 /* ══════ src/js/ufcs/format.js ══════ */
@@ -6463,7 +6636,8 @@ const UFCS_AUTO_ACK = new Set(['ACK', 'NCK']);
  *      此时若消息头里的接收方对不上，说明报文被解错或设备实现有偏差，如实报出来。
  *   ② **物理链路**（分析仪容器给出的链路字节）—— 供电设备 D+ 是 TX、充电设备 D- 是 TX，
  *      配合接收方地址即可唯一确定发送方（线缆也在内）。
- *   ③ **按接收方推断** —— 两条都没有时只能推断，标记 inferred，界面会写明「推断」。
+ *   ③ **按接收方推断** —— 两条都没有时只能推断（规范未规定如何取舍），标记 inferred，
+ *      界面会写明「推断」。
  *
  * @param {number} addr 接收方设备地址（消息头 bit15…13）
  * @param {string|null} line 'D+' | 'D-' | null
@@ -6489,11 +6663,15 @@ function ufcsResolveDirection(addr, line, fixedSender = null) {
     return { sender, receiver, inferred: false, ambiguous: false, source: 'line', line, mismatch: false, expect: null };
   }
 
-  // 没有单向定义、也没有链路信息：只能按接收方推断
+  // 没有单向定义、也没有链路信息：只能按接收方推断。
+  // ⚠ 这一级是**本工具的兜底取舍，规范没有规定此时该取谁** —— 别去引某条条文给自己背书：
+  //   双向命令（Accept / Soft_Reset / Refuse / Exit_UFCS_Mode / Get_Device_Info …）两方都会发，
+  //   光看接收方地址推不出发送方，只能挑一个，并在结果里置 `inferred` 由界面注明「推断」。
+  //   实测样本走不到这里（容器给了链路字节，② 就定了），所以它只在换分析仪时才会生效。
   let sender;
-  if (addr === 0b010) sender = 'SRC';        // 发给充电设备的，只能是供电设备
-  else if (addr === 0b001) sender = 'SNK';   // 发给供电设备的，规范 7.8「缺省由充电设备发起线缆识别」→ 取充电设备
-  else sender = 'SNK';
+  if (addr === 0b010) sender = 'SRC';        // 发给充电设备的，通常是供电设备
+  else if (addr === 0b001) sender = 'SNK';   // 发给供电设备的，通常是充电设备
+  else sender = 'SNK';                       // 发给线缆的，按充电设备兜底
   return {
     sender, receiver, inferred: true,
     ambiguous: addr === 0b011 || addr === 0b001,
@@ -6568,15 +6746,22 @@ class UfcsDecoder {
    *   crcCalc    已知的计算值；不传则这里自己算
    *   timeMs     报文时间戳（毫秒）
    *   line       物理链路：'D+' | 'D-' | null（未知）
-   *   dirByte    容器里紧邻报文的那个字节（诊断用，可能是链路编码）
+   *   —— 以下 6 项是「容器（POWER-Z 导出）」的观测，**详情面板暂不展示**，
+   *      只随返回值透出，供自动化测试与排查取用 ——
+   *   dirByte    容器里表达「链路」的那一个字节（record 布局下是 0/1；诊断用）
    *   prefixBytes 报文前容器前缀的字节数（0 = 没有前缀）
+   *   counter    容器给的字节游标 {x0,x1}（诊断用，可省）
+   *   lenField   容器声明的一行长度（= 帧长 + 1，含 Training 字节）
+   *   training   容器是否存下了 Training 序列（0xAA）—— record 布局为 true
+   *   layout     'record'（已知分析仪布局，链路来自容器）/ 'scan'（穷举定位，链路靠推断）
    *   channel    通道号（固定 0）
    *   baud       波特率；不给按 115200 折算线上时长
    * @returns {object|null}
    */
   decode(body, {
     crc = null, crcCalc = null, timeMs = 0, line = null, dirByte = null,
-    prefixBytes = 0, channel = 0, baud = UFCS_DEFAULT_BAUD, withCrc = crc != null,
+    prefixBytes = 0, counter = null, lenField = null, training = false, layout = null,
+    channel = 0, baud = UFCS_DEFAULT_BAUD, withCrc = crc != null,
   } = {}) {
     if (!body || body.length < 3) return null;
 
@@ -6693,24 +6878,44 @@ class UfcsDecoder {
       em.note('CRC 由本工具按规范补算（容器未存），不据此宣布校验通过');
     }
 
-    /* ── 容器诊断 ── */
+    /* ── 容器诊断 ──（暂不展示）
+       这几项（时间戳 / 游标 / 长度 / 链路 / Training）是从 POWER-Z 导出样本反推的**观测**，
+       没有规范条文可对照。摆在面向用户的详情面板里，会跟旁边「消息头」「CRC」这类
+       有规范背书的字段混成一片，读者无从分辨哪些是标准、哪些是本工具的推测。
+       数据本身照常解析，仍进 decode() 的返回对象与 stats，只是不渲染。
+       要恢复展示，把下面整块解注释即可。原实现：
+
     if (prefixBytes > 0 || dirByte != null) {
       em.object('容器信息（POWER-Z 导出）');
-      em.detail('报文前缀', prefixBytes > 0 ? `${prefixBytes} 字节（应为时间戳 / 链路标记）` : '无');
-      if (dirByte != null) em.detail('链路字节候选', `0x${dirByte.toString(16).toUpperCase().padStart(2, '0')}${dirByte <= 2 ? `（按 0=D+/1=D−/2=线缆 解读为 ${['D+', 'D-', 'D±'][dirByte]}）` : ''}`);
+      em.detail('报文前缀', prefixBytes === 0 ? '无'
+        : layout === 'record'
+          ? '9 字节 = 容器私有 8（时间戳 4 · 游标 2 · 长度 1 · 链路 1）+ Training 1（规范）'
+          : `${prefixBytes} 字节（穷举定位出的偏移，内部结构未知）`);
+      if (dirByte != null) {
+        em.detail('链路字节 [前缀倒数第 2 字节]',
+          `0x${dirByte.toString(16).toUpperCase().padStart(2, '0')}`
+          + (dirByte <= 1 ? ` → ${['线缆 D+（供电设备侧发送）', '线缆 D−（充电设备侧发送）'][dirByte]}` : '（取值超出已知范围）'));
+      }
+      if (lenField != null) em.detail('容器长度域', `${lenField} 字节 = 本帧 ${body.length} + CRC 1 + Training 1`);
+      if (counter) em.detail('字节游标', `0x${counter.x0.toString(16).toUpperCase().padStart(2, '0')} → 0x${counter.x1.toString(16).toUpperCase().padStart(2, '0')}（该方向字节流内的偏移，回绕于 256）`);
+      em.detail('Training 序列', training
+        ? '0xAA（规范 7.4.6：发送方在每个数据包前先发它，接收方据此判定波特率；不进 CRC 覆盖范围）'
+        : '未记录');
       em.detail('本帧长度', `${body.length} 字节（消息头+主体）+ ${withCrc ? 1 : 0} 字节 CRC`);
     }
+
+    */
 
     /* ── 方向补充说明 ── */
     em.object('链路与方向');
     const how = dir.source === 'spec' ? '规范表单向定义（该命令只有唯一发送方）'
-      : dir.source === 'line' ? '分析仪容器给出的链路字节 + 接收方地址'
-        : '按接收方地址推断';
+      : dir.source === 'line' ? '分析仪容器给出的链路字节（实测与规范单向命令表 100% 吻合）'
+        : '按接收方地址推断（容器未给出链路）';
     em.detail('方向判据', how);
     em.detail('物理链路', `${lineLabel}${dir.source === 'line' ? '（容器给出）' : '（由方向折算）'}`);
     em.detail('接收方', UFCS_DEV_ADDR[h.addr] ?? '保留值');
     em.detail('发送方', `${ufcsRoleText(dir.sender)}${dir.source === 'addr' ? '（推断）' : ''}`);
-    if (dir.ambiguous) em.detail('⚠ 方向不确定', '此类命令供电设备与充电设备都会发送，单看报文无法区分，此处按规范 7.8「缺省由充电设备发起」处理');
+    if (dir.ambiguous) em.detail('⚠ 方向不确定', '此类命令供电设备与充电设备都会发送，单看报文分不出来；容器又没给链路字节，只能按接收方取反兜底显示（规范未规定此时取谁，本工具如实标为推断）');
     em.detail('线序依据', '规范 7.2：供电设备 D+ 为发送（TX）、充电设备 D- 为发送（TX）');
 
     /* ── 组装 ── */
@@ -6738,6 +6943,8 @@ class UfcsDecoder {
         cmd, dataLen, line: dir.line, sender: dir.sender, receiver: dir.receiver,
         dirInferred: dir.inferred, dirAmbiguous: dir.ambiguous,
         dirByte, prefixBytes, withCrc, baud,
+        layer: dir.source,                     // 'spec' | 'line' | 'addr'
+        counter, lenField, training, layout,
       },
 
       sop: lineLabel,
@@ -6820,6 +7027,7 @@ class UfcsDecoder {
  *   tables.js    消息头 / 控制命令 / 数据命令 / 输出模式 / 拒绝原因等常量表
  *   format.js    大端位域取值与格式化（ufcs* 前缀）
  *   frame.js     数据包切帧：消息头 + 主体 + CRC（7.6 / 8.2）
+ *                另含分析仪容器的行结构识别（ufcsParseRecord / ufcsParseEvent）
  *   payload.js   各类消息的载荷逐字段解析（8.2.4 / 8.2.5）
  *   decoder.js   主解码器 UfcsDecoder（8.2 / 7.2 方向还原）
  */
@@ -7019,31 +7227,57 @@ function parsePowerzConnectBlob(blob) {
  *
  * ── 为什么不像 PD 那样按固定 marker 拆 ──────────────────────────────
  * PD 那套 marker（0x80…0xBF 低 6 位 = 总长-1）是分析仪私有约定；UFCS 的 blob 是
- * **另一套帧结构**（4 字节毫秒时间戳打头、后面直接跟 UFCS 报文、没有 marker 字节），
+ * **另一套帧结构**，且各版本分析仪的存法并不统一（有的带 9 字节前缀，有的只带
+ * 4 字节时间戳，有的干脆存到消息主体为止，见 `src/js/ufcs/frame.js` 顶部那张结构图）。
  * 硬按 PD 去拆只会把每一行都判成「拼不通」。
  *
- * 因此这里不做结构假设，而是**穷举起始偏移 × 两种 CRC 读法**，用
- * 「能否正好消费完整行 + CRC-8 是否吻合 + 消息头字段是否合法」三项一起判定，
- * 取分最高的一种（见 `src/js/ufcs/frame.js#ufcsLocateFrames`）。这样无论前缀是
- * 0 / 4 字节时间戳 / 时间戳+链路字节，都落回同一条解析路径；分析仪存不存 CRC 也都能认。
+ * 所以这里分两步，**能认就认、认不出才穷举**：
+ *   ① 先试**已知的分析仪布局**（`ufcsParseRecord`）—— 它额外给出「物理链路」与容器
+ *      长度域，是穷举恢复不了的信息。布局认得出来时，方向就不必再靠推断。
+ *   ② 认不出再落回**穷举起始偏移 × 两种 CRC 读法**，用「能否正好消费完整行 +
+ *      CRC-8 是否吻合 + 消息头字段是否合法」三项一起判定，取分最高的一种
+ *      （`ufcsLocateFrames`）。
  *
  * @param {Uint8Array} blob
  * @returns {{frames:Array<{bytes:Uint8Array,crc:number|null,calc:number,crcOk:boolean|null,withCrc:boolean}>,
  *            truncated:boolean, prefixBytes:number, withCrc:boolean,
- *            dirByte:number|null, lineHint:'D+'|'D-'|null}}
+ *            dirByte:number|null, lineHint:'D+'|'D-'|null,
+ *            layout:'record'|'scan', counter:object|null, lenField:number|null, tsMs:number|null}}
  */
 function parseUfcsBlob(blob) {
+  const rec = ufcsParseRecord(blob);
+
+  // ── ① 已知布局：链路直接来自容器，不再推断 ──
+  if (rec) {
+    return {
+      frames: rec.frames.map((f) => ({
+        bytes: blob.subarray(f.off, f.bodyEnd),
+        crc: f.crc,
+        calc: f.calc,
+        crcOk: f.crcOk,
+        withCrc: true,
+      })),
+      truncated: false,
+      prefixBytes: rec.prefixBytes,
+      withCrc: true,
+      dirByte: blob[7],
+      lineHint: rec.line,
+      layout: 'record',
+      counter: rec.counter,
+      lenField: rec.lenField,
+      tsMs: rec.tsMs,
+    };
+  }
+
+  // ── ② 未知布局：穷举定位（拿不到链路，只能靠方向推断）──
   const loc = ufcsLocateFrames(blob);
   if (!loc) {
     return {
-      frames: [], truncated: true, prefixBytes: 0, withCrc: false, dirByte: null, lineHint: null,
+      frames: [], truncated: true, prefixBytes: 0, withCrc: false,
+      dirByte: null, lineHint: null, layout: 'scan',
+      counter: null, lenField: null, tsMs: null,
     };
   }
-  // 前缀 ≥5 字节时，紧邻报文的那一个字节很可能是「链路标记」（PD 侧对应 sop 字节）。
-  // 0/1 按「供电设备侧(D+) / 充电设备侧(D−)」解读，其余取值不作解释、只当诊断信息留着。
-  const dirByte = loc.prefixBytes >= 5 ? blob[loc.prefixBytes - 1] : null;
-  const lineHint = dirByte === 0 ? 'D+' : dirByte === 1 ? 'D-' : null;
-
   return {
     frames: loc.frames.map((f) => ({
       bytes: blob.subarray(f.off, f.bodyEnd),
@@ -7055,8 +7289,12 @@ function parseUfcsBlob(blob) {
     truncated: false,
     prefixBytes: loc.prefixBytes,
     withCrc: loc.withCrc,
-    dirByte,
-    lineHint,
+    dirByte: null,
+    lineHint: null,
+    layout: 'scan',
+    counter: null,
+    lenField: null,
+    tsMs: null,
   };
 }
 
@@ -7177,11 +7415,11 @@ class PowerzCapture {
 
     // ── 2. 拆事件 / 拆报文 ──
     // 两条协议各拆各的：PD 按分析仪私有的 marker 拆「包裹报文」，
-    // UFCS 按规范的消息头结构定位（见 parseUfcsBlob）。
+    // UFCS 先认已知布局、认不出再穷举定位（见 parseUfcsBlob）。
     const events = [];
     let truncated = 0;
     let frameCount = 0;
-    let unlocated = 0;          // UFCS：既拆不出报文、也不像连接事件的残行
+    let unlocated = 0;          // UFCS：既拆不出报文、也不像状态事件的残行
     const ufcsBlobs = [];       // UFCS：{ blob, t } —— 第 3 步再解
     if (kind === 'pd') {
       for (const row of rows) {
@@ -7197,8 +7435,12 @@ class PowerzCapture {
         if (!blob) continue;
         const r = parseUfcsBlob(blob);
         if (!r.frames.length) {
-          // 拆不出 UFCS 报文 —— 先看它是不是沿用了 PD 的连接/断开事件格式
-          if (isPowerzConnectBlob(blob)) events.push({ ...parsePowerzConnectBlob(blob), rowT: row.t });
+          // 拆不出 UFCS 报文 —— 先看它是不是「状态事件」行。
+          // UFCS 容器用的是自己的 8 字节格式（`ts | code | 00 00 | 0x40`），
+          // 与 PD 那套 `45 … 00 code` 不同；两种都认，免得同一家的两种导出互相漏。
+          const ev = ufcsParseEvent(blob);
+          if (ev) events.push({ kind: 'ufcs-event', tsMs: ev.tsMs, code: ev.code, rowT: row.t, vbus: row.vbus, ibus: row.ibus });
+          else if (isPowerzConnectBlob(blob)) events.push({ ...parsePowerzConnectBlob(blob), rowT: row.t });
           else unlocated++;
           continue;
         }
@@ -7209,6 +7451,10 @@ class PowerzCapture {
 
     const connects = events.filter((e) => e.kind === 'connect');
     const disconnects = events.filter((e) => e.kind === 'disconnect');
+    // UFCS 容器的状态事件：既不算「连接」也不算「断开」（语义未确证），单独统计并如实标注。
+    const ufcsEvents = events.filter((e) => e.kind === 'ufcs-event');
+    const ufcsEventCodes = new Map();
+    for (const e of ufcsEvents) ufcsEventCodes.set(e.code, (ufcsEventCodes.get(e.code) ?? 0) + 1);
 
     // ── 3. 逐条解报文 ──
     const packets = [];
@@ -7260,6 +7506,10 @@ class PowerzCapture {
             line: b.lineHint,
             dirByte: b.dirByte,
             prefixBytes: b.prefixBytes,
+            counter: b.counter,
+            lenField: b.lenField,
+            training: b.prefixBytes > 0 && b.layout === 'record',
+            layout: b.layout,
             channel: 0,
           });
           if (pkt) packets.push(pkt);
@@ -7304,10 +7554,16 @@ class PowerzCapture {
       truncatedRows: truncated,
       connectCount: connects.length,
       disconnectCount: disconnects.length,
+      /** UFCS 容器里那些不承载报文的状态事件行（`ts | code | 00 00 | 0x40`） */
+      ufcsEvents: kind === 'ufcs' ? ufcsEvents.length : 0,
+      ufcsEventCodes: kind === 'ufcs' ? [...ufcsEventCodes.entries()].map(([code, n]) => ({ code, n })) : [],
       unsupportedMsgs,
       ufcsFrames: kind === 'ufcs' ? frameCount : 0,
       ufcsUnlocatedRows: unlocated,
-      events: events.map((e) => ({ kind: e.kind, tsMs: e.tsMs })),
+      /** 报文的方向有多少条来自容器给出的链路（`layout==='record'`），多少条靠推断 */
+      ufcsDirFromLine: kind === 'ufcs' ? packets.filter((p) => !p.roleInferred).length : 0,
+      ufcsDirInferred: kind === 'ufcs' ? packets.filter((p) => p.roleInferred).length : 0,
+      events: events.map((e) => ({ kind: e.kind, tsMs: e.tsMs, code: e.code })),
       tableRows: rows.length,
       chartRows: this.meta.chartRows,
     };
@@ -7940,7 +8196,7 @@ async function decodeDoc(doc) {
       : (stats.ufcsUnlocatedRows
         ? {
           text: `${stats.ufcsUnlocatedRows} 行没能认出 UFCS 报文`,
-          sub: `已解出 ${stats.packetCount} 条报文；这些行既不是 UFCS 报文、也不像插拔事件，已跳过（不影响其余报文）`,
+          sub: `已解出 ${stats.packetCount} 条报文；这些行既不是 UFCS 报文、也不像状态事件，已跳过（不影响其余报文）`,
         }
         : (doc.loadNotice && !packets.length ? doc.loadNotice : null));
     doc.noticeOff = false;
@@ -8280,6 +8536,17 @@ function renderMeta() {
   if (pz && (S.stats?.connectCount || S.stats?.disconnectCount)) {
     add('插拔', `${S.stats.connectCount ?? 0} / ${S.stats.disconnectCount ?? 0}`);
   }
+  // UFCS 容器的「状态事件」行：既不是报文、也不是插拔，是分析仪记的链路状态变迁。
+  // 语义尚未确证（只见过 0x02/0x03/0x04 三种，无规范可对照），所以只报条数 + 明细 tooltip，
+  // 不硬起「插入/拔出」这种确定性的名字 —— 那会是无中生有。
+  if (pz && S.stats?.ufcsEvents) {
+    const chip = el('span', 'mchip');
+    chip.innerHTML = `状态事件 <b>${S.stats.ufcsEvents}</b>`;
+    chip.title = (S.stats.ufcsEventCodes ?? [])
+      .map((c) => `opcode 0x${c.code.toString(16).toUpperCase().padStart(2, '0')} × ${c.n}`).join('　')
+      + '\n容器约定、语义待确认（未见于规范）；已如实标注，不当作报文计入';
+    box.appendChild(chip);
+  }
   if (m.channels.length > 1) add('通道', m.channels.length);
 }
 
@@ -8604,7 +8871,7 @@ function setEmptyState(kind, extra) {
   }
   if (kind === 'noframe') {
     t.textContent = `${extra || '该抓包'} 里没有认出报文`;
-    p.textContent = '文件里的每一行都读过了，但既不像 UFCS 报文（消息头 + CRC-8 对不上）、也不像插拔事件。';
+    p.textContent = '文件里的每一行都读过了，但既不像 UFCS 报文（消息头 + CRC-8 对不上）、也不像状态事件。';
     n.textContent = '模拟量轨迹仍然可用；如果这条线路上确实跑着 UFCS，请把样本发来核对容器格式。';
     n.hidden = false;
     return;
@@ -9392,6 +9659,20 @@ window.PDScope = {
     /** 上次解码花掉的毫秒数（0 = 还没解过）。性能排查靠它，别删。 */
     decodedMs: d.decodedMs || 0,
     notices: d.notice ? 1 : 0,
+    /**
+     * UFCS 的方向依据分布：多少条来自容器的链路字节、多少条只能按接收方地址推断。
+     * 推断出来的方向在双向命令上会直接反 —— 这是最难被肉眼发现的一类错，
+     * 所以单独露给自动化盯（`dirInferred` 在真实样本上必须是 0）。
+     */
+    ufcs: d.meta?.protocol === 'UFCS'
+      ? {
+        frames: d.stats?.ufcsFrames ?? 0,
+        dirFromLine: d.stats?.ufcsDirFromLine ?? 0,
+        dirInferred: d.stats?.ufcsDirInferred ?? 0,
+        unlocatedRows: d.stats?.ufcsUnlocatedRows ?? 0,
+        events: d.stats?.ufcsEvents ?? 0,
+      }
+      : null,
   })),
   /** 切到第 i 个标签 / 关掉第 i 个标签 / 关掉全部（桌面菜单与自动化用） */
   activateTab: (i) => activateDoc(DOCS[i]),

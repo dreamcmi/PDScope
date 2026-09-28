@@ -17,6 +17,7 @@
  *   tables.js    消息头 / 控制命令 / 数据命令 / 输出模式 / 拒绝原因等常量表
  *   format.js    大端位域取值与格式化（ufcs* 前缀）
  *   frame.js     数据包切帧：消息头 + 主体 + CRC（7.6 / 8.2）
+ *                另含分析仪容器的行结构识别（ufcsParseRecord / ufcsParseEvent）
  *   payload.js   各类消息的载荷逐字段解析（8.2.4 / 8.2.5）
  *   decoder.js   主解码器 UfcsDecoder（8.2 / 7.2 方向还原）
  */
@@ -30,6 +31,7 @@ export { ufcsCrc8, UFCS_CRC8_POLY } from './crc.js';
 export {
   ufcsHeaderInfo, ufcsFrameBodySize, ufcsFrameScore,
   ufcsSplitFrames, ufcsLocateFrames,
+  ufcsParseRecord, ufcsParseEvent, UFCS_TRAINING, UFCS_EVENT_TAIL, UFCS_EVENT_CODE,
 } from './frame.js';
 
 /* 常量表 */

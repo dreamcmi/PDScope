@@ -45,7 +45,7 @@
 
 import { SqliteReader, isSqlite } from './sqlite.js';
 import { PdDecoder } from '../pd/index.js';
-import { UfcsDecoder, ufcsLocateFrames, ufcsLinkAck } from '../ufcs/index.js';
+import { UfcsDecoder, ufcsParseRecord, ufcsParseEvent, ufcsLocateFrames, ufcsLinkAck } from '../ufcs/index.js';
 import { linkGoodCrc } from './pipeline.js';
 import { yieldToMain } from './bmc.js';
 
@@ -176,31 +176,57 @@ export function parsePowerzConnectBlob(blob) {
  *
  * ── 为什么不像 PD 那样按固定 marker 拆 ──────────────────────────────
  * PD 那套 marker（0x80…0xBF 低 6 位 = 总长-1）是分析仪私有约定；UFCS 的 blob 是
- * **另一套帧结构**（4 字节毫秒时间戳打头、后面直接跟 UFCS 报文、没有 marker 字节），
+ * **另一套帧结构**，且各版本分析仪的存法并不统一（有的带 9 字节前缀，有的只带
+ * 4 字节时间戳，有的干脆存到消息主体为止，见 `src/js/ufcs/frame.js` 顶部那张结构图）。
  * 硬按 PD 去拆只会把每一行都判成「拼不通」。
  *
- * 因此这里不做结构假设，而是**穷举起始偏移 × 两种 CRC 读法**，用
- * 「能否正好消费完整行 + CRC-8 是否吻合 + 消息头字段是否合法」三项一起判定，
- * 取分最高的一种（见 `src/js/ufcs/frame.js#ufcsLocateFrames`）。这样无论前缀是
- * 0 / 4 字节时间戳 / 时间戳+链路字节，都落回同一条解析路径；分析仪存不存 CRC 也都能认。
+ * 所以这里分两步，**能认就认、认不出才穷举**：
+ *   ① 先试**已知的分析仪布局**（`ufcsParseRecord`）—— 它额外给出「物理链路」与容器
+ *      长度域，是穷举恢复不了的信息。布局认得出来时，方向就不必再靠推断。
+ *   ② 认不出再落回**穷举起始偏移 × 两种 CRC 读法**，用「能否正好消费完整行 +
+ *      CRC-8 是否吻合 + 消息头字段是否合法」三项一起判定，取分最高的一种
+ *      （`ufcsLocateFrames`）。
  *
  * @param {Uint8Array} blob
  * @returns {{frames:Array<{bytes:Uint8Array,crc:number|null,calc:number,crcOk:boolean|null,withCrc:boolean}>,
  *            truncated:boolean, prefixBytes:number, withCrc:boolean,
- *            dirByte:number|null, lineHint:'D+'|'D-'|null}}
+ *            dirByte:number|null, lineHint:'D+'|'D-'|null,
+ *            layout:'record'|'scan', counter:object|null, lenField:number|null, tsMs:number|null}}
  */
 export function parseUfcsBlob(blob) {
+  const rec = ufcsParseRecord(blob);
+
+  // ── ① 已知布局：链路直接来自容器，不再推断 ──
+  if (rec) {
+    return {
+      frames: rec.frames.map((f) => ({
+        bytes: blob.subarray(f.off, f.bodyEnd),
+        crc: f.crc,
+        calc: f.calc,
+        crcOk: f.crcOk,
+        withCrc: true,
+      })),
+      truncated: false,
+      prefixBytes: rec.prefixBytes,
+      withCrc: true,
+      dirByte: blob[7],
+      lineHint: rec.line,
+      layout: 'record',
+      counter: rec.counter,
+      lenField: rec.lenField,
+      tsMs: rec.tsMs,
+    };
+  }
+
+  // ── ② 未知布局：穷举定位（拿不到链路，只能靠方向推断）──
   const loc = ufcsLocateFrames(blob);
   if (!loc) {
     return {
-      frames: [], truncated: true, prefixBytes: 0, withCrc: false, dirByte: null, lineHint: null,
+      frames: [], truncated: true, prefixBytes: 0, withCrc: false,
+      dirByte: null, lineHint: null, layout: 'scan',
+      counter: null, lenField: null, tsMs: null,
     };
   }
-  // 前缀 ≥5 字节时，紧邻报文的那一个字节很可能是「链路标记」（PD 侧对应 sop 字节）。
-  // 0/1 按「供电设备侧(D+) / 充电设备侧(D−)」解读，其余取值不作解释、只当诊断信息留着。
-  const dirByte = loc.prefixBytes >= 5 ? blob[loc.prefixBytes - 1] : null;
-  const lineHint = dirByte === 0 ? 'D+' : dirByte === 1 ? 'D-' : null;
-
   return {
     frames: loc.frames.map((f) => ({
       bytes: blob.subarray(f.off, f.bodyEnd),
@@ -212,8 +238,12 @@ export function parseUfcsBlob(blob) {
     truncated: false,
     prefixBytes: loc.prefixBytes,
     withCrc: loc.withCrc,
-    dirByte,
-    lineHint,
+    dirByte: null,
+    lineHint: null,
+    layout: 'scan',
+    counter: null,
+    lenField: null,
+    tsMs: null,
   };
 }
 
@@ -334,11 +364,11 @@ export class PowerzCapture {
 
     // ── 2. 拆事件 / 拆报文 ──
     // 两条协议各拆各的：PD 按分析仪私有的 marker 拆「包裹报文」，
-    // UFCS 按规范的消息头结构定位（见 parseUfcsBlob）。
+    // UFCS 先认已知布局、认不出再穷举定位（见 parseUfcsBlob）。
     const events = [];
     let truncated = 0;
     let frameCount = 0;
-    let unlocated = 0;          // UFCS：既拆不出报文、也不像连接事件的残行
+    let unlocated = 0;          // UFCS：既拆不出报文、也不像状态事件的残行
     const ufcsBlobs = [];       // UFCS：{ blob, t } —— 第 3 步再解
     if (kind === 'pd') {
       for (const row of rows) {
@@ -354,8 +384,12 @@ export class PowerzCapture {
         if (!blob) continue;
         const r = parseUfcsBlob(blob);
         if (!r.frames.length) {
-          // 拆不出 UFCS 报文 —— 先看它是不是沿用了 PD 的连接/断开事件格式
-          if (isPowerzConnectBlob(blob)) events.push({ ...parsePowerzConnectBlob(blob), rowT: row.t });
+          // 拆不出 UFCS 报文 —— 先看它是不是「状态事件」行。
+          // UFCS 容器用的是自己的 8 字节格式（`ts | code | 00 00 | 0x40`），
+          // 与 PD 那套 `45 … 00 code` 不同；两种都认，免得同一家的两种导出互相漏。
+          const ev = ufcsParseEvent(blob);
+          if (ev) events.push({ kind: 'ufcs-event', tsMs: ev.tsMs, code: ev.code, rowT: row.t, vbus: row.vbus, ibus: row.ibus });
+          else if (isPowerzConnectBlob(blob)) events.push({ ...parsePowerzConnectBlob(blob), rowT: row.t });
           else unlocated++;
           continue;
         }
@@ -366,6 +400,10 @@ export class PowerzCapture {
 
     const connects = events.filter((e) => e.kind === 'connect');
     const disconnects = events.filter((e) => e.kind === 'disconnect');
+    // UFCS 容器的状态事件：既不算「连接」也不算「断开」（语义未确证），单独统计并如实标注。
+    const ufcsEvents = events.filter((e) => e.kind === 'ufcs-event');
+    const ufcsEventCodes = new Map();
+    for (const e of ufcsEvents) ufcsEventCodes.set(e.code, (ufcsEventCodes.get(e.code) ?? 0) + 1);
 
     // ── 3. 逐条解报文 ──
     const packets = [];
@@ -417,6 +455,10 @@ export class PowerzCapture {
             line: b.lineHint,
             dirByte: b.dirByte,
             prefixBytes: b.prefixBytes,
+            counter: b.counter,
+            lenField: b.lenField,
+            training: b.prefixBytes > 0 && b.layout === 'record',
+            layout: b.layout,
             channel: 0,
           });
           if (pkt) packets.push(pkt);
@@ -461,10 +503,16 @@ export class PowerzCapture {
       truncatedRows: truncated,
       connectCount: connects.length,
       disconnectCount: disconnects.length,
+      /** UFCS 容器里那些不承载报文的状态事件行（`ts | code | 00 00 | 0x40`） */
+      ufcsEvents: kind === 'ufcs' ? ufcsEvents.length : 0,
+      ufcsEventCodes: kind === 'ufcs' ? [...ufcsEventCodes.entries()].map(([code, n]) => ({ code, n })) : [],
       unsupportedMsgs,
       ufcsFrames: kind === 'ufcs' ? frameCount : 0,
       ufcsUnlocatedRows: unlocated,
-      events: events.map((e) => ({ kind: e.kind, tsMs: e.tsMs })),
+      /** 报文的方向有多少条来自容器给出的链路（`layout==='record'`），多少条靠推断 */
+      ufcsDirFromLine: kind === 'ufcs' ? packets.filter((p) => !p.roleInferred).length : 0,
+      ufcsDirInferred: kind === 'ufcs' ? packets.filter((p) => p.roleInferred).length : 0,
+      events: events.map((e) => ({ kind: e.kind, tsMs: e.tsMs, code: e.code })),
       tableRows: rows.length,
       chartRows: this.meta.chartRows,
     };

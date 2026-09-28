@@ -453,6 +453,17 @@ try {
         const crcText = await cdp.eval(`document.querySelector('#statLine').textContent.replace(/\\s+/g,' ').trim()`);
         check('CRC 口径与容器一致（未记录 / 全通过 / 错误 N）',
           /CRC (未记录|全通过|错误 \d+)/.test(crcText), crcText.slice(0, 100));
+
+        // 方向必须来自容器的链路字节，不能靠「按接收方地址猜」。
+        // 猜出来的方向在双向命令（Request / ACK）上会直接反，是肉眼最难发现的一类错。
+        const dirStat = await cdp.eval(`(()=>{const t=window.PDScope?.tabs?.()||[];const a=t.find(x=>x.active);return a&&a.ufcs?a.ufcs:null;})()`);
+        if (dirStat && dirStat.frames > 0) {
+          check('UFCS 方向全部有硬依据（无靠地址推断的）',
+            dirStat.dirInferred === 0 && dirStat.dirFromLine === dirStat.frames,
+            `容器链路 ${dirStat.dirFromLine} · 推断 ${dirStat.dirInferred} / 共 ${dirStat.frames}`);
+        } else {
+          skip('UFCS 方向全部有硬依据（无靠地址推断的）', '样本未走到容器布局（或取不到统计）');
+        }
       } else {
         // PD 的 pd_table 一律不存 CRC：界面必须说「未记录」，绝不能报「全通过」
         const crcText = await cdp.eval(`document.querySelector('#statLine').textContent.replace(/\\s+/g,' ').trim()`);

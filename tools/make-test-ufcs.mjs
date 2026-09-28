@@ -14,8 +14,13 @@
  * 造出来的库刻意覆盖了几种情形，好让 e2e 一次把岔路走全：
  *   · 数据 / 控制两类消息、一条单向命令（方向由规范表判定）
  *   · 一条**坏 CRC** 的报文（界面要标红、统计行要计数）
+ *   · 一行动**状态事件**（`ts | code | 00 00 | 0x40`，不承载报文）
  *   · 一行**定位不出报文**的残行（界面要说清「没有一行能认出」，而不是假装解析失败）
- *   · 每行前缀都是「4B 毫秒时间戳 + 1B 链路标记」，覆盖 `ufcsLocateFrames` 的 5 字节前缀分支
+ *   · 每行前缀都是实测归纳出的 9 字节容器布局，覆盖 `ufcsParseRecord` 那条「认得出来」的路
+ *
+ * ⚠ 容器布局（9 字节前缀 + 帧）是**实测归纳**出来的私有约定，不是规范内容。
+ *   这里照着它造样本，是为了让 e2e 走通「按容器给出的链路定方向」那条路；
+ *   证明容器格式正确仍是抓来的真实样本的职责。
  *
  * 用法：
  *   node tools/make-test-ufcs.mjs                        # → artifacts/_ufcs_synth.sqlite
@@ -47,6 +52,11 @@ const ADDR = { SRC: 0b001, SNK: 0b010, CABLE: 0b011 };
 const MTYPE = { control: 0b000, data: 0b001, custom: 0b010 };
 const be16 = (v) => [(v >> 8) & 0xFF, v & 0xFF];
 
+/** 容器每行固定的 0xAA 字节（Training 序列，规范 7.4.6，不进 CRC 覆盖范围） */
+const TRAINING = 0xAA;
+/** 状态事件行的末字节，把它与「残行」区分开 */
+const EVENT_TAIL = 0x40;
+
 /**
  * 拼一条 UFCS 帧：消息头(2B 大端) + 主体 + CRC-8(1B)。
  * 消息头里的地址栏是**接收方**（表 13），不是发送方。
@@ -59,10 +69,35 @@ function frame({ to, no, ver = VER_1_2_0, mtype, body }) {
   return Uint8Array.from(b);
 }
 
-/** 一行 Raw 的容器前缀：4B 毫秒时间戳（小端，只作诊断）+ 1B 链路标记（0=D+ 供电侧发 / 1=D− 充电侧发） */
-function wrap(tsMs, linkByte, fr) {
-  const pre = [tsMs & 0xFF, (tsMs >>> 8) & 0xFF, (tsMs >>> 16) & 0xFF, (tsMs >>> 24) & 0xFF, linkByte];
-  return Uint8Array.from([...pre, ...fr]);
+/**
+ * 一行 Raw 的容器布局（实测归纳，见 `src/js/ufcs/frame.js` 顶部）：
+ *
+ *     ts(4B 小端 ms) │ x0 │ x1 │ len │ flag │ 0xAA │ UFCS 帧(N 字节，末字节是 CRC-8)
+ *
+ *   · x0 / x1 —— 该帧在**本方向字节流**里的起止游标（各 1 字节，mod 256），诊断用；
+ *   · len     —— 长度域 = N + 1（把 Training 那一个字节也算进线上字节数）；
+ *   · flag    —— 物理链路：0 = D+（供电设备侧发送）/ 1 = D−（充电设备侧发送）。
+ *
+ * @param {number} tsMs
+ * @param {0|1} flag
+ * @param {Uint8Array} fr 已含 CRC 的完整帧
+ * @param {{x0:number, x1:number}} cur 该帧在本方向字节流里的起止游标
+ */
+function wrap(tsMs, flag, fr, cur) {
+  return Uint8Array.from([
+    tsMs & 0xFF, (tsMs >>> 8) & 0xFF, (tsMs >>> 16) & 0xFF, (tsMs >>> 24) & 0xFF,
+    cur.x0 & 0xFF, cur.x1 & 0xFF,
+    fr.length + 1, flag, TRAINING,
+    ...fr,
+  ]);
+}
+
+/** 一行**状态事件**：`ts(4B 小端 ms) │ code │ 00 │ 00 │ 0x40` */
+function wrapEvent(tsMs, code) {
+  return Uint8Array.from([
+    tsMs & 0xFF, (tsMs >>> 8) & 0xFF, (tsMs >>> 16) & 0xFF, (tsMs >>> 24) & 0xFF,
+    code, 0x00, 0x00, EVENT_TAIL,
+  ]);
 }
 
 /** 一种输出模式（表 16）→ 8 字节 */
@@ -74,11 +109,15 @@ function mode(no, curStep, voltStep, maxV, minV, maxI, minI) {
   return o;
 }
 
-/* ══════════════ 一段合成对话（时间单位：秒）══════════════ */
+/* ══════════════ 一段合成对话（时间单位：秒）══════════════
+   `line` 是**物理链路**，与规范的单向命令表必须自洽（否则方向判据会互相打架）：
+     0 = D+（供电设备侧发送）  1 = D−（充电设备侧发送）
+   —— 报文里那些 `to: ADDR.SNK` 的都是供电设备发的，所以 line=0；
+      `to: ADDR.SRC` 的都是充电设备发的，所以 line=1。 */
 
 const DIALOGUE = [
   { // 1. 供电设备报能力：3 种输出模式（5.5V/11V/20V）
-    t: 0.000, link: 0,
+    t: 0.000, line: 0,
     fr: frame({
       to: ADDR.SNK, no: 1, mtype: MTYPE.data,
       body: [0x01, 24,
@@ -88,43 +127,43 @@ const DIALOGUE = [
     }),
   },
   { // 2. 充电设备应答（控制消息 ACK，消息编号跟随被确认报文）
-    t: 0.005, link: 1,
+    t: 0.005, line: 1,
     fr: frame({ to: ADDR.SRC, no: 1, mtype: MTYPE.control, body: [0x01] }),
   },
   { // 3. 充电设备请求：模式 1、5.1 V、3 A
-    t: 0.010, link: 1,
+    t: 0.010, line: 1,
     fr: frame({
       to: ADDR.SRC, no: 2, mtype: MTYPE.data,
       body: [0x02, 8, 0x10, 0x00, 0x00, 0x00, ...be16(510), ...be16(300)],
     }),
   },
   { // 4. 供电设备表示已就绪（控制消息，Power_Ready 只可能由供电设备发）
-    t: 0.015, link: 0,
+    t: 0.015, line: 0,
     fr: frame({ to: ADDR.SNK, no: 2, mtype: MTYPE.control, body: [0x05] }),
   },
   { // 5. 供电设备上报当前状态：周期 1s、内部 25℃、接口 30℃、输出 9 V / 2 A
-    t: 0.020, link: 0,
+    t: 0.020, line: 0,
     fr: frame({
       to: ADDR.SNK, no: 3, mtype: MTYPE.data,
       body: [0x03, 8, 0x00, 0x0A, 75, 80, ...be16(900), ...be16(200)],
     }),
   },
   { // 6. 充电设备上报扩展状态：电池电量 95.5%、功率 65 W
-    t: 0.025, link: 1,
+    t: 0.025, line: 1,
     fr: frame({
       to: ADDR.SRC, no: 4, mtype: MTYPE.data,
       body: [0x0D, 6, 0x10, ...be16(0x254E), 0x20, ...be16(65)],
     }),
   },
-  { // 7. 线缆信息（接收方是线缆电子标签 011b，规范里没有单向定义 → 方向靠链路字节推）
-    t: 0.030, link: 0,
+  { // 7. 线缆信息（接收方是线缆电子标签 011b，规范里没有单向定义 → 方向只能靠链路字节给）
+    t: 0.030, line: 0,
     fr: frame({
       to: ADDR.CABLE, no: 5, mtype: MTYPE.data,
       body: [0x05, 10, 0x2C, 0xA3, 0x00, 0x01, 0x00, 0x64, ...be16(2000), ...be16(500)],
     }),
   },
   { // 8. 一条 **坏 CRC** 的请求：界面要标红、统计行要计入「CRC 错误」
-    t: 0.035, link: 1,
+    t: 0.035, line: 1,
     bad: true,
     fr: frame({
       to: ADDR.SRC, no: 6, mtype: MTYPE.data,
@@ -133,15 +172,32 @@ const DIALOGUE = [
   },
 ];
 
-/** 一行既不是 UFCS 报文、也不像插拔事件的残行（容器里凑不齐一帧的那种） */
-const UNLOCATED = Uint8Array.from([0x11, 0x22, 0x33]);
+/** 一行**状态事件**：`ts | 04 | 00 00 | 0x40`，不承载报文 */
+const STATE_EVENT = { t: 0.0375, code: 0x04 };
 
+/**
+ * 一行既拆不出 UFCS 报文、也不是状态事件的残行。
+ * 刻意让首字节落在 0x00 附近（既是合法地址也像消息头），CRC 又对不上 ——
+ * 这样穷举定位也得不出「正好消费完整行」的解，才真的会走「未定位」统计。
+ */
+const UNLOCATED = Uint8Array.from([0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00]);
+
+/* 一行的容器按键「行号」自增，同一方向的行还各带一条字节游标（x0..x1），
+   与真实样本一样链式接续 —— 这样 e2e 才能顺带验证「游标不跳号」这件事。 */
 const rows = [];
+let rowNo = 0;
+const cursor = { 0: 0, 1: 0 };          // 每条物理链路各自的字节游标
 for (const d of DIALOGUE) {
   const fr = Uint8Array.from(d.fr);
   if (d.bad) fr[fr.length - 1] ^= 0xFF;
-  rows.push({ t: d.t, blob: wrap(Math.round(d.t * 1000), d.link, fr) });
+  const x0 = cursor[d.line] & 0xFF;
+  const x1 = (cursor[d.line] + fr.length - 1) & 0xFF;
+  cursor[d.line] = (cursor[d.line] + fr.length) & 0xFF;
+  rows.push({ t: d.t, blob: wrap(Math.round(d.t * 1000), d.line, fr, { x0, x1 }) });
+  rowNo++;
 }
+rows.push({ t: STATE_EVENT.t, blob: wrapEvent(Math.round(STATE_EVENT.t * 1000), STATE_EVENT.code) });
+rowNo++;
 rows.push({ t: 0.040, blob: UNLOCATED });
 
 /** ADC 采样序列（ufcs_chart）：VBUS 跟着协商往上走，DP/DM 给一点点抖动好画出线 */
@@ -262,5 +318,6 @@ await writeFile(OUT, sqlite);
 
 console.log(`已生成  ${OUT}`);
 console.log(`  ${(sqlite.length / 1024).toFixed(1)} KB · ufcs_table ${rows.length} 行`
-  + `（其中 1 行坏 CRC、1 行定位不出报文）· ufcs_chart ${chartRows.length} 点`);
+  + `（${DIALOGUE.length} 条报文，其中 1 条坏 CRC；1 行状态事件；1 行定位不出报文）`
+  + `· ufcs_chart ${chartRows.length} 点`);
 console.log('  接着可以跑：npm run e2e:ufcs:synth');

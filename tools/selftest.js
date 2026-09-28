@@ -9,7 +9,7 @@ import { EdgeExtractor, BmcDecoder, UI_US, collectRunStats, estimateSampleRate }
 import { parseSampleRate, DEFAULT_SAMPLE_RATE } from '../src/js/core/atkcc.js';
 import { SqliteReader, isSqlite } from '../src/js/core/sqlite.js';
 import { PowerzCapture, sniffPowerz, parsePowerzBlob, POWERZ_RATE } from '../src/js/core/powerz.js';
-import { UfcsDecoder, ufcsCrc8, ufcsLocateFrames, ufcsSplitFrames, ufcsHeaderInfo } from '../src/js/ufcs/index.js';
+import { UfcsDecoder, ufcsCrc8, ufcsLocateFrames, ufcsSplitFrames, ufcsHeaderInfo, ufcsParseRecord, ufcsParseEvent } from '../src/js/ufcs/index.js';
 import { buildBusSeries } from '../src/js/core/pipeline.js';
 import {
   DEC4B5B, SOP_SEQUENCES, EOP_SYM,
@@ -717,15 +717,48 @@ function buildSqlite(specs) {
   const multi = Uint8Array.from([0x80 | 0, ...ping, ...mkFrame(0b010, 4, 0b001001, 0, [0x01])]);
   check('UFCS：一行两帧', ufcsSplitFrames(multi, 1, true)?.length === 2, String(ufcsSplitFrames(multi, 1, true)?.length));
 
-  /* ⑤ 端到端：手搓 SQLite（含真实 UFCS 帧）→ PowerzCapture → 报文列表 */
+  /* ④b 分析仪容器（实测归纳的 9 字节布局）—— 这条布局认出来，方向才有硬依据可依。
+         布局：ts(4B LE ms) │ x0 │ x1 │ len(=N+1) │ flag │ 0xAA │ 帧(N 含 CRC) */
+  const recLine = (tsMs, flag, fr, x0, x1) => Uint8Array.from([
+    tsMs & 0xFF, (tsMs >>> 8) & 0xFF, (tsMs >>> 16) & 0xFF, (tsMs >>> 24) & 0xFF,
+    x0, x1, fr.length + 1, flag, 0xAA, ...fr,
+  ]);
+  const rec = ufcsParseRecord(recLine(0x0001E240, 0, ping, 0x00, ping.length - 1));
+  check('UFCS：容器 9B 前缀被认出', !!rec && rec.prefixBytes === 9 && rec.training === true
+    && rec.lenField === ping.length + 1 && rec.tsMs === 0x0001E240,
+    rec ? `前缀 ${rec.prefixBytes}B len=${rec.lenField} ts=${rec.tsMs}` : 'null');
+  check('UFCS：容器链路字节 → 物理方向', rec && rec.line === 'D+' && rec.counter.x0 === 0x00
+    && rec.counter.x1 === ping.length - 1 && rec.frames[0].crcOk === true,
+    rec ? `${rec.line} x0=${rec.counter.x0} x1=${rec.counter.x1}` : 'null');
+  check('UFCS：容器链路字节 1 → D−', ufcsParseRecord(recLine(1, 1, ping, 0, 3))?.line === 'D-');
+
+  // 反证：长度域对不上、Training 字节不是 0xAA、flag 越界 —— 都不许硬认
+  const badLen = recLine(1, 0, ping, 0, 3); badLen[6] = 0x7F;
+  check('UFCS：容器长度域不符则不认', ufcsParseRecord(badLen) === null);
+  const badTr = recLine(1, 0, ping, 0, 3); badTr[8] = 0x55;
+  check('UFCS：容器无 Training 字节则不认', ufcsParseRecord(badTr) === null);
+  const badFlag = recLine(1, 2, ping, 0, 3);
+  check('UFCS：容器链路字节越界则不认', ufcsParseRecord(badFlag) === null);
+
+  // 状态事件行：ts(4B LE ms) │ code │ 00 │ 00 │ 0x40 —— 不承载报文，必须能单独认出来
+  const ev = ufcsParseEvent(Uint8Array.from([0x40, 0xE2, 0x01, 0x00, 0x04, 0x00, 0x00, 0x40]));
+  check('UFCS：状态事件行', ev && ev.code === 0x04 && ev.tsMs === 0x0001E240,
+    ev ? `code=0x${ev.code.toString(16)} ts=${ev.tsMs}` : 'null');
+  check('UFCS：状态事件不与报文混淆',
+    ufcsParseEvent(recLine(1, 0, ping, 0, 3)) === null
+    && ufcsParseEvent(Uint8Array.from([0x40, 0xE2, 0x01, 0x00, 0x04, 0x00, 0x00, 0x41])) === null);
+
+  /* ⑤ 端到端：手搓 SQLite（含真实 UFCS 帧）→ PowerzCapture → 报文列表
+        行的容器前缀用实测的 9 字节布局；再掺一行状态事件、一行残行 */
   const reqFull = [0x02, 8, 0x10, 0x00, 0x00, 0x00, ...be16(510), ...be16(300)];
   const lines = [
-    { t: 0, blob: mkFrame(0b010, 1, 0b001001, 1, ocBody) },                 // SRC → SNK
-    { t: 0.01, blob: mkFrame(0b001, 1, 0b001001, 0, [0x01]) },              // SNK 的 ACK
-    { t: 0.02, blob: mkFrame(0b001, 2, 0b001001, 1, reqFull) },             // SNK → SRC
-    { t: 0.03, blob: mkFrame(0b010, 2, 0b001001, 0, [0x05]) },              // SRC 的 Power_Ready
-    { t: 0.04, blob: (() => { const f = mkFrame(0b001, 3, 0b001001, 1, reqFull); f[f.length - 1] ^= 0xFF; return f; })() },
-    { t: 0.05, blob: Uint8Array.from([1, 2, 3]) },                          // 认不出来的残行
+    { t: 0, blob: recLine(0, 0, mkFrame(0b010, 1, 0b001001, 1, ocBody), 0x00, 0x1B) },  // SRC → SNK
+    { t: 0.01, blob: recLine(10, 1, mkFrame(0b001, 1, 0b001001, 0, [0x01]), 0x00, 0x03) }, // SNK 的 ACK
+    { t: 0.02, blob: recLine(20, 1, mkFrame(0b001, 2, 0b001001, 1, reqFull), 0x04, 0x12) },
+    { t: 0.03, blob: recLine(30, 0, mkFrame(0b010, 2, 0b001001, 0, [0x05]), 0x1C, 0x1E) },
+    { t: 0.04, blob: recLine(40, 1, (() => { const f = mkFrame(0b001, 3, 0b001001, 1, reqFull); f[f.length - 1] ^= 0xFF; return f; })(), 0x13, 0x21) },
+    { t: 0.045, blob: Uint8Array.from([0x40, 0x2C, 0x00, 0x00, 0x03, 0x00, 0x00, 0x40]) }, // 状态事件行
+    { t: 0.05, blob: Uint8Array.from([0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00]) },         // 认不出来的残行
   ];
   const ufcs = buildSqlite([
     {
@@ -755,6 +788,22 @@ function buildSqlite(specs) {
   check('UFCS：CRC 统计口径', stats.badCrc === 1 && stats.crcUnknown === 0
     && stats.unsupportedMsgs === 0 && stats.ufcsUnlocatedRows === 1 && stats.ufcsFrames === 5,
     `bad=${stats.badCrc} unknown=${stats.crcUnknown} 残行=${stats.ufcsUnlocatedRows}`);
+  // 方向全部来自容器给出的链路，一条都不该落到「按地址猜」——这是这次修的核心
+  check('UFCS：方向全部有硬依据（无推断）', stats.ufcsDirFromLine === 5 && stats.ufcsDirInferred === 0
+    && packets.every((p) => !p.roleInferred),
+    `link=${stats.ufcsDirFromLine} 推断=${stats.ufcsDirInferred}`);
+  // 容器来源字段（layout/training/lenField…）不再上界面，但必须照常随报文透出：
+  // 排查「换了别的分析仪」时，全靠这几个字段区分是容器层变了还是协议层有问题。
+  check('UFCS：报文仍带容器来源字段（界面不展示）', packets.every((p) => p.ufcs?.layout === 'record' && p.ufcs.training === true),
+    packets.map((p) => p.ufcs?.layout).join(','));
+  // 容器字段（时间戳 / 游标 / 长度 / 链路 / Training）不进详情面板：它们没有规范条文可对照，
+  // 摆在与「消息头」「CRC」相邻的位置会被当成标准字段读。数据照常透出（见上一条）即可。
+  const leaked = packets.flatMap((p) => p.details.filter((d) => d.key === 'Object' && d.value.includes('容器')));
+  check('UFCS：详情面板不含容器字段', leaked.length === 0, leaked.map((d) => d.value).join(' / '));
+  check('UFCS：状态事件单独统计，不计入报文', stats.ufcsEvents === 1
+    && stats.ufcsEventCodes.length === 1 && stats.ufcsEventCodes[0].code === 0x03
+    && stats.ufcsEventCodes[0].n === 1,
+    `n=${stats.ufcsEvents} ${JSON.stringify(stats.ufcsEventCodes)}`);
   check('UFCS：模拟量可用且不再标注未实现', cap.meta.busLabels.join('/') === 'DP/DM'
     && cap.meta.bus.length === 2 && cap.meta.unsupported === null && stats.unsupported === null);
 

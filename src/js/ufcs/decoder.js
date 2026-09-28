@@ -54,7 +54,8 @@ const UFCS_AUTO_ACK = new Set(['ACK', 'NCK']);
  *      此时若消息头里的接收方对不上，说明报文被解错或设备实现有偏差，如实报出来。
  *   ② **物理链路**（分析仪容器给出的链路字节）—— 供电设备 D+ 是 TX、充电设备 D- 是 TX，
  *      配合接收方地址即可唯一确定发送方（线缆也在内）。
- *   ③ **按接收方推断** —— 两条都没有时只能推断，标记 inferred，界面会写明「推断」。
+ *   ③ **按接收方推断** —— 两条都没有时只能推断（规范未规定如何取舍），标记 inferred，
+ *      界面会写明「推断」。
  *
  * @param {number} addr 接收方设备地址（消息头 bit15…13）
  * @param {string|null} line 'D+' | 'D-' | null
@@ -80,11 +81,15 @@ export function ufcsResolveDirection(addr, line, fixedSender = null) {
     return { sender, receiver, inferred: false, ambiguous: false, source: 'line', line, mismatch: false, expect: null };
   }
 
-  // 没有单向定义、也没有链路信息：只能按接收方推断
+  // 没有单向定义、也没有链路信息：只能按接收方推断。
+  // ⚠ 这一级是**本工具的兜底取舍，规范没有规定此时该取谁** —— 别去引某条条文给自己背书：
+  //   双向命令（Accept / Soft_Reset / Refuse / Exit_UFCS_Mode / Get_Device_Info …）两方都会发，
+  //   光看接收方地址推不出发送方，只能挑一个，并在结果里置 `inferred` 由界面注明「推断」。
+  //   实测样本走不到这里（容器给了链路字节，② 就定了），所以它只在换分析仪时才会生效。
   let sender;
-  if (addr === 0b010) sender = 'SRC';        // 发给充电设备的，只能是供电设备
-  else if (addr === 0b001) sender = 'SNK';   // 发给供电设备的，规范 7.8「缺省由充电设备发起线缆识别」→ 取充电设备
-  else sender = 'SNK';
+  if (addr === 0b010) sender = 'SRC';        // 发给充电设备的，通常是供电设备
+  else if (addr === 0b001) sender = 'SNK';   // 发给供电设备的，通常是充电设备
+  else sender = 'SNK';                       // 发给线缆的，按充电设备兜底
   return {
     sender, receiver, inferred: true,
     ambiguous: addr === 0b011 || addr === 0b001,
@@ -159,15 +164,22 @@ export class UfcsDecoder {
    *   crcCalc    已知的计算值；不传则这里自己算
    *   timeMs     报文时间戳（毫秒）
    *   line       物理链路：'D+' | 'D-' | null（未知）
-   *   dirByte    容器里紧邻报文的那个字节（诊断用，可能是链路编码）
+   *   —— 以下 6 项是「容器（POWER-Z 导出）」的观测，**详情面板暂不展示**，
+   *      只随返回值透出，供自动化测试与排查取用 ——
+   *   dirByte    容器里表达「链路」的那一个字节（record 布局下是 0/1；诊断用）
    *   prefixBytes 报文前容器前缀的字节数（0 = 没有前缀）
+   *   counter    容器给的字节游标 {x0,x1}（诊断用，可省）
+   *   lenField   容器声明的一行长度（= 帧长 + 1，含 Training 字节）
+   *   training   容器是否存下了 Training 序列（0xAA）—— record 布局为 true
+   *   layout     'record'（已知分析仪布局，链路来自容器）/ 'scan'（穷举定位，链路靠推断）
    *   channel    通道号（固定 0）
    *   baud       波特率；不给按 115200 折算线上时长
    * @returns {object|null}
    */
   decode(body, {
     crc = null, crcCalc = null, timeMs = 0, line = null, dirByte = null,
-    prefixBytes = 0, channel = 0, baud = UFCS_DEFAULT_BAUD, withCrc = crc != null,
+    prefixBytes = 0, counter = null, lenField = null, training = false, layout = null,
+    channel = 0, baud = UFCS_DEFAULT_BAUD, withCrc = crc != null,
   } = {}) {
     if (!body || body.length < 3) return null;
 
@@ -284,24 +296,44 @@ export class UfcsDecoder {
       em.note('CRC 由本工具按规范补算（容器未存），不据此宣布校验通过');
     }
 
-    /* ── 容器诊断 ── */
+    /* ── 容器诊断 ──（暂不展示）
+       这几项（时间戳 / 游标 / 长度 / 链路 / Training）是从 POWER-Z 导出样本反推的**观测**，
+       没有规范条文可对照。摆在面向用户的详情面板里，会跟旁边「消息头」「CRC」这类
+       有规范背书的字段混成一片，读者无从分辨哪些是标准、哪些是本工具的推测。
+       数据本身照常解析，仍进 decode() 的返回对象与 stats，只是不渲染。
+       要恢复展示，把下面整块解注释即可。原实现：
+
     if (prefixBytes > 0 || dirByte != null) {
       em.object('容器信息（POWER-Z 导出）');
-      em.detail('报文前缀', prefixBytes > 0 ? `${prefixBytes} 字节（应为时间戳 / 链路标记）` : '无');
-      if (dirByte != null) em.detail('链路字节候选', `0x${dirByte.toString(16).toUpperCase().padStart(2, '0')}${dirByte <= 2 ? `（按 0=D+/1=D−/2=线缆 解读为 ${['D+', 'D-', 'D±'][dirByte]}）` : ''}`);
+      em.detail('报文前缀', prefixBytes === 0 ? '无'
+        : layout === 'record'
+          ? '9 字节 = 容器私有 8（时间戳 4 · 游标 2 · 长度 1 · 链路 1）+ Training 1（规范）'
+          : `${prefixBytes} 字节（穷举定位出的偏移，内部结构未知）`);
+      if (dirByte != null) {
+        em.detail('链路字节 [前缀倒数第 2 字节]',
+          `0x${dirByte.toString(16).toUpperCase().padStart(2, '0')}`
+          + (dirByte <= 1 ? ` → ${['线缆 D+（供电设备侧发送）', '线缆 D−（充电设备侧发送）'][dirByte]}` : '（取值超出已知范围）'));
+      }
+      if (lenField != null) em.detail('容器长度域', `${lenField} 字节 = 本帧 ${body.length} + CRC 1 + Training 1`);
+      if (counter) em.detail('字节游标', `0x${counter.x0.toString(16).toUpperCase().padStart(2, '0')} → 0x${counter.x1.toString(16).toUpperCase().padStart(2, '0')}（该方向字节流内的偏移，回绕于 256）`);
+      em.detail('Training 序列', training
+        ? '0xAA（规范 7.4.6：发送方在每个数据包前先发它，接收方据此判定波特率；不进 CRC 覆盖范围）'
+        : '未记录');
       em.detail('本帧长度', `${body.length} 字节（消息头+主体）+ ${withCrc ? 1 : 0} 字节 CRC`);
     }
+
+    */
 
     /* ── 方向补充说明 ── */
     em.object('链路与方向');
     const how = dir.source === 'spec' ? '规范表单向定义（该命令只有唯一发送方）'
-      : dir.source === 'line' ? '分析仪容器给出的链路字节 + 接收方地址'
-        : '按接收方地址推断';
+      : dir.source === 'line' ? '分析仪容器给出的链路字节（实测与规范单向命令表 100% 吻合）'
+        : '按接收方地址推断（容器未给出链路）';
     em.detail('方向判据', how);
     em.detail('物理链路', `${lineLabel}${dir.source === 'line' ? '（容器给出）' : '（由方向折算）'}`);
     em.detail('接收方', UFCS_DEV_ADDR[h.addr] ?? '保留值');
     em.detail('发送方', `${ufcsRoleText(dir.sender)}${dir.source === 'addr' ? '（推断）' : ''}`);
-    if (dir.ambiguous) em.detail('⚠ 方向不确定', '此类命令供电设备与充电设备都会发送，单看报文无法区分，此处按规范 7.8「缺省由充电设备发起」处理');
+    if (dir.ambiguous) em.detail('⚠ 方向不确定', '此类命令供电设备与充电设备都会发送，单看报文分不出来；容器又没给链路字节，只能按接收方取反兜底显示（规范未规定此时取谁，本工具如实标为推断）');
     em.detail('线序依据', '规范 7.2：供电设备 D+ 为发送（TX）、充电设备 D- 为发送（TX）');
 
     /* ── 组装 ── */
@@ -329,6 +361,8 @@ export class UfcsDecoder {
         cmd, dataLen, line: dir.line, sender: dir.sender, receiver: dir.receiver,
         dirInferred: dir.inferred, dirAmbiguous: dir.ambiguous,
         dirByte, prefixBytes, withCrc, baud,
+        layer: dir.source,                     // 'spec' | 'line' | 'addr'
+        counter, lenField, training, layout,
       },
 
       sop: lineLabel,

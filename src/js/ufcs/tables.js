@@ -160,6 +160,10 @@ export const UFCS_BITS_PER_BYTE = 10;
  * 键 = `${消息类型}:${命令编号}`，值 = 发送方角色。
  * 双向命令（Ping / ACK / NCK / Accept / Soft_Reset / Refuse / Get_Device_Info /
  * Get_Error_Info / Exit_UFCS_Mode / Cable_Information / Verify_* …）不在表内。
+ *
+ * 表 15 的 `0xFF Test_Request` 也**不在表内**，尽管规范里它的发送者只有「测试设备」：
+ * 测试设备不是供电设备 / 充电设备 / 线缆电子标签三者之一，落不到 D+ / D- 上 ——
+ * 它可以挂在任意一侧，方向本就无从还原。别为了凑满表硬塞一个角色进来。
  */
 export const UFCS_FIXED_DIR = {
   '0:0x05': 'SRC',   // Power_Ready                供电设备 → 充电设备

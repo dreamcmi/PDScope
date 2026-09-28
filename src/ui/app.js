@@ -568,7 +568,7 @@ async function decodeDoc(doc) {
       : (stats.ufcsUnlocatedRows
         ? {
           text: `${stats.ufcsUnlocatedRows} 行没能认出 UFCS 报文`,
-          sub: `已解出 ${stats.packetCount} 条报文；这些行既不是 UFCS 报文、也不像插拔事件，已跳过（不影响其余报文）`,
+          sub: `已解出 ${stats.packetCount} 条报文；这些行既不是 UFCS 报文、也不像状态事件，已跳过（不影响其余报文）`,
         }
         : (doc.loadNotice && !packets.length ? doc.loadNotice : null));
     doc.noticeOff = false;
@@ -908,6 +908,17 @@ function renderMeta() {
   if (pz && (S.stats?.connectCount || S.stats?.disconnectCount)) {
     add('插拔', `${S.stats.connectCount ?? 0} / ${S.stats.disconnectCount ?? 0}`);
   }
+  // UFCS 容器的「状态事件」行：既不是报文、也不是插拔，是分析仪记的链路状态变迁。
+  // 语义尚未确证（只见过 0x02/0x03/0x04 三种，无规范可对照），所以只报条数 + 明细 tooltip，
+  // 不硬起「插入/拔出」这种确定性的名字 —— 那会是无中生有。
+  if (pz && S.stats?.ufcsEvents) {
+    const chip = el('span', 'mchip');
+    chip.innerHTML = `状态事件 <b>${S.stats.ufcsEvents}</b>`;
+    chip.title = (S.stats.ufcsEventCodes ?? [])
+      .map((c) => `opcode 0x${c.code.toString(16).toUpperCase().padStart(2, '0')} × ${c.n}`).join('　')
+      + '\n容器约定、语义待确认（未见于规范）；已如实标注，不当作报文计入';
+    box.appendChild(chip);
+  }
   if (m.channels.length > 1) add('通道', m.channels.length);
 }
 
@@ -1232,7 +1243,7 @@ function setEmptyState(kind, extra) {
   }
   if (kind === 'noframe') {
     t.textContent = `${extra || '该抓包'} 里没有认出报文`;
-    p.textContent = '文件里的每一行都读过了，但既不像 UFCS 报文（消息头 + CRC-8 对不上）、也不像插拔事件。';
+    p.textContent = '文件里的每一行都读过了，但既不像 UFCS 报文（消息头 + CRC-8 对不上）、也不像状态事件。';
     n.textContent = '模拟量轨迹仍然可用；如果这条线路上确实跑着 UFCS，请把样本发来核对容器格式。';
     n.hidden = false;
     return;
@@ -2020,6 +2031,20 @@ window.PDScope = {
     /** 上次解码花掉的毫秒数（0 = 还没解过）。性能排查靠它，别删。 */
     decodedMs: d.decodedMs || 0,
     notices: d.notice ? 1 : 0,
+    /**
+     * UFCS 的方向依据分布：多少条来自容器的链路字节、多少条只能按接收方地址推断。
+     * 推断出来的方向在双向命令上会直接反 —— 这是最难被肉眼发现的一类错，
+     * 所以单独露给自动化盯（`dirInferred` 在真实样本上必须是 0）。
+     */
+    ufcs: d.meta?.protocol === 'UFCS'
+      ? {
+        frames: d.stats?.ufcsFrames ?? 0,
+        dirFromLine: d.stats?.ufcsDirFromLine ?? 0,
+        dirInferred: d.stats?.ufcsDirInferred ?? 0,
+        unlocatedRows: d.stats?.ufcsUnlocatedRows ?? 0,
+        events: d.stats?.ufcsEvents ?? 0,
+      }
+      : null,
   })),
   /** 切到第 i 个标签 / 关掉第 i 个标签 / 关掉全部（桌面菜单与自动化用） */
   activateTab: (i) => activateDoc(DOCS[i]),
