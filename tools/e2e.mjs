@@ -343,7 +343,7 @@ try {
       const emptyText = await cdp.eval(`(()=>{const e=document.querySelector('#emptyState');return e && e.style.display!=='none' ? e.innerText.replace(/\\s+/g,' ').trim() : '';})()`);
       check('空列表给出解释', /未实现/.test(emptyText) && !/当前筛选条件下没有报文/.test(emptyText), emptyText.slice(0, 90));
 
-      for (const nm of ['解析出报文', '虚拟滚动渲染出行', 'GOOD CRC 被默认屏蔽', '首行内容合理',
+      for (const nm of ['解析出报文', '虚拟滚动渲染出行', 'GoodCRC 被默认屏蔽', '首行内容合理',
         '方向标识已渲染', '点击一行 → 详情面板', '位域表已渲染', '方向过滤生效',
         '重置筛选恢复全部', '关键字搜索生效']) skip(nm, '该样本无报文（协议语义未实现）');
     } else {
@@ -353,10 +353,10 @@ try {
       check('虚拟滚动渲染出行', rows > 0, `${rows} 行可见`);
 
       const total = await cdp.eval(`(document.querySelector('#statLine').textContent.match(/\\/\\s*(\\d+)\\s*条/)||[])[1]`);
-      check('GOOD CRC 被默认屏蔽', Number(shown) < Number(total), `显示 ${shown} / 全部 ${total}`);
+      check('GoodCRC 被默认屏蔽', Number(shown) < Number(total), `显示 ${shown} / 全部 ${total}`);
 
       const firstRow = await cdp.eval(`(()=>{const r=document.querySelector('#vrows .tr');return r?r.innerText.replace(/\\s+/g,' ').trim():'';})()`);
-      check('首行内容合理', /Source_Cap|VDM|Request|PS RDY|SOP/.test(firstRow), firstRow.slice(0, 90));
+      check('首行内容合理', /Source_Cap|VDM|Request|PS_RDY|SOP/.test(firstRow), firstRow.slice(0, 90));
 
       const dirPills = await cdp.eval(`document.querySelectorAll('#vrows .pill').length`);
       check('方向标识已渲染', dirPills > 0, `${dirPills} 个标签`);
@@ -383,7 +383,7 @@ try {
       await sleep(400);
       const resetStat = await cdp.eval(`(document.querySelector('#statLine').textContent.match(/显示\\s*(\\d+)/)||[])[1]`);
       check('重置筛选恢复全部', Number(resetStat) > 0, `${resetStat} 条`);
-      // 取第 2 行（非 GOOD CRC）的报文类型作为搜索词，保证断言与数据无关
+      // 取第 2 行（非 GoodCRC）的报文类型作为搜索词，保证断言与数据无关
       const probe = await cdp.eval(`(()=>{const r=document.querySelectorAll('#vrows .tr')[1];return r?r.children[2].textContent.trim():'';})()`);
       await cdp.eval(`(()=>{const i=document.querySelector('#fSearch');i.value=${JSON.stringify(probe)};i.dispatchEvent(new Event('input',{bubbles:true}));})()`);
       await sleep(500);

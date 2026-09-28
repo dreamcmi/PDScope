@@ -93,13 +93,13 @@ function kindOf(p) {
 const CAT_CLASS = { Control: 'cat-Control', Data: 'cat-Data', Extended: 'cat-Extended', VDM: 'cat-VDM', Error: 'cat-Error' };
 
 /**
- * GOOD CRC 配色配对（界面侧）。
+ * GoodCRC 配色配对（界面侧）。
  *
  * 配对关系由内核 `linkGoodCrc()` 算好（p.ackOf），这里只负责取色：
  * 让回应包与它所确认的报文同色，一眼看出「哪条被谁确认了」；
- * 否则 GOOD CRC 只能笼统地取 Control 色，与它确认的报文各成一色。
+ * 否则 GoodCRC 只能笼统地取 Control 色，与它确认的报文各成一色。
  *
- * 坏掉的 GOOD CRC 保持错误色，不参与配对。
+ * 坏掉的 GoodCRC 保持错误色，不参与配对。
  */
 function pairAckTone(packets) {
   for (const p of packets) {
@@ -111,9 +111,14 @@ function pairAckTone(packets) {
   }
 }
 
-/** 是否属于「功率协商」/「状态切换」这两类关注点 */
+/**
+ * 是否属于「功率协商」/「状态切换」这两类关注点。
+ *
+ * 这两条正则匹配的是**协议表里的类型名**（`src/js/pd/tables.js`），
+ * 所以类型名一改，这里必须跟着改；名字变更时请一并核对。
+ */
 const POWER_TYPES = /Source_Cap|Request|EPR_Request|EPR_Mode|PPS|BIST|Source_Capabilities_Extended|EPR_Source|EPR_Sink|Sink_Cap/i;
-const ENTER_TYPES = /PS RDY|VDM|Alert|Status|Source_Info|Revision|Enter_USB|Discover|Sink_Cap|Notify/i;
+const ENTER_TYPES = /PS_RDY|VDM|Alert|Status|Source_Info|Revision|Enter_USB|Discover|Sink_Cap|Notify/i;
 
 /* ═══════════════════════ 文档（一份抓包 = 一个标签） ═══════════════════════ */
 /**
@@ -503,7 +508,7 @@ async function decodeDoc(doc) {
       p.vbus = v; p.ibus = i;
       p.kind = kindOf(p);
     }
-    pairAckTone(packets);   // GOOD CRC 与它确认的报文同色
+    pairAckTone(packets);   // GoodCRC 与它确认的报文同色
 
     doc.packets = packets;
     doc.stats = stats;
@@ -868,14 +873,28 @@ function renderChannels() {
 }
 
 /* ═══════════════════════ 筛选 ═══════════════════════ */
+/**
+ * 报文类型清单（筛选面板的「类型」多选）。
+ *
+ * 配色取自该类型**首条报文自己的语义类别**（`toneOf`，即协议解析出的 `msgKind`），
+ * 而不是拿类型名去猜。名字是给人看的，不该反过来决定颜色：
+ * 早先这里用一条「正则猜类别」的兜底，一旦协议表里改名（`PS RDY` → `PS_RDY`）
+ * 或冒出正则没覆盖的类型，同一语义的报文就会在清单里被涂成两种颜色。
+ * 现在颜色随报文走，改名不会再影响它，`guessKind()` 也随之删掉。
+ */
 function buildTypeList() {
-  const counts = new Map();
-  for (const p of S.packets) counts.set(p.msgType, (counts.get(p.msgType) || 0) + 1);
-  const arr = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  /** msgType → { n, kind }：同一类型名只可能来自同一类别，取首条即可 */
+  const byType = new Map();
+  for (const p of S.packets) {
+    const e = byType.get(p.msgType);
+    if (e) e.n++;
+    else byType.set(p.msgType, { n: 1, kind: toneOf(p) });
+  }
+  const arr = [...byType.entries()].sort((a, b) => b[1].n - a[1].n || a[0].localeCompare(b[0]));
 
   const body = $('#msBody');
   body.innerHTML = '';
-  for (const [t, n] of arr) {
+  for (const [t, { n, kind }] of arr) {
     const lab = el('label', 'ms-item');
     const cb = el('input'); cb.type = 'checkbox'; cb.value = t;
     // 勾选状态跟着「当前文档」走 —— 这份列表在每次切标签时都会重建，
@@ -887,17 +906,11 @@ function buildTypeList() {
       applyFilters();
     });
     const dot = el('span', 'dot');
-    dot.style.background = catColor(kindOf({ msgType: t, msgKind: guessKind(t) }));
+    dot.style.background = catColor(kind);
     lab.append(cb, dot, el('span', '', t), el('span', 'cnt', String(n)));
     body.appendChild(lab);
   }
   updateMsHead(arr.length);
-}
-function guessKind(t) {
-  if (t === 'VDM') return 'data';
-  if (/GOOD CRC|ACCEPT|REJECT|PING|PS RDY|GOTO MIN|Swap|Wait|Soft_Reset|Data_Reset|Not_Supported|FR_Swap|Get_/.test(t)) return 'control';
-  if (/Extended|_Info$|Status|Battery|Country|Manufacturer|Security|Firmware|Revision/.test(t)) return 'ext';
-  return 'data';
 }
 function catColor(k) {
   const v = getComputedStyle(document.documentElement).getPropertyValue('--' + ({ Control: 'ctrl', Data: 'data', Extended: 'ext', VDM: 'vdm', Error: 'err' }[k] || 'ctrl'));
@@ -996,7 +1009,7 @@ function applyFilters(keepScroll) {
     if (!f.sops.has(p.sop)) continue;
     if (!f.cats.has(p.kind)) continue;
     if (f.types.size && !f.types.has(p.msgType)) continue;
-    if (f.hideGoodCrc && p.msgType === 'GOOD CRC') continue;
+    if (f.hideGoodCrc && p.msgType === 'GoodCRC') continue;
     if (f.onlyBad && p.crcOk !== false) continue;
     if (f.onlyPower && !POWER_TYPES.test(p.msgType)) continue;
     if (f.onlyEnter && !ENTER_TYPES.test(p.msgType)) continue;
@@ -1182,7 +1195,7 @@ function rowEl(p, i) {
   const cls = CAT_CLASS[p.tone] || '';
   const hex = p.dataHex || '';
   const note = highlight(p.summary || '');
-  // GOOD CRC 取被确认报文的颜色，悬停提示它确认的是哪一条
+  // GoodCRC 取被确认报文的颜色，悬停提示它确认的是哪一条
   const tip = p.ackOf != null ? ` title="确认 #${p.ackOf} · ${p.ackType || ''}"` : '';
   r.innerHTML =
     `<div class="td num">${p.index}</div>`

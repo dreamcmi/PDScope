@@ -61,9 +61,11 @@ export const SOP_SHORT = {
 };
 
 // ── 控制消息（Number of Data Objects == 0）─────────────────────────────
+// ⚠ 命名口径必须与 `src/js/pd/tables.js` 逐字一致（界面 / 筛选 / 分类都读那份）。
+//   这里只是给 tools/selftest.js、tools/pd-regress.mjs 留的兼容副本。
 export const CTRL_TYPES = {
-  0: 'Reserved', 1: 'GOOD CRC', 2: 'GOTO MIN', 3: 'ACCEPT', 4: 'REJECT',
-  5: 'PING', 6: 'PS RDY', 7: 'GET SOURCE CAP', 8: 'GET SINK CAP',
+  0: 'Reserved', 1: 'GoodCRC', 2: 'GotoMin', 3: 'Accept', 4: 'Reject',
+  5: 'Ping', 6: 'PS_RDY', 7: 'Get_Source_Cap', 8: 'Get_Sink_Cap',
   9: 'DR_Swap', 10: 'PR_Swap', 11: 'VCONN_Swap', 12: 'Wait', 13: 'Soft_Reset',
   14: 'Data_Reset', 15: 'Data_Reset_Complete', 16: 'Not_Supported',
   17: 'Get_Source_Cap_Extended', 18: 'Get_Status', 19: 'FR_Swap',
@@ -138,8 +140,8 @@ export const PEAK_CURRENT_DETAILS = {
  * 归类维度：握手 / 能力 / 电源协商 / 控制 / 数据 / 厂商 / 告警 / 错误
  */
 export const MSG_CATEGORY = {
-  'GOOD CRC': 'handshake',
-  'PING': 'handshake',
+  'GoodCRC': 'handshake',
+  'Ping': 'handshake',
   'Source_Cap': 'capability',
   'Sink_Cap': 'capability',
   'Source_Capabilities_Extended': 'capability',
@@ -149,10 +151,10 @@ export const MSG_CATEGORY = {
   'EPR_Sink_Capabilities': 'capability',
   'Request': 'negotiate',
   'EPR_Request': 'negotiate',
-  'ACCEPT': 'negotiate',
-  'REJECT': 'negotiate',
-  'PS RDY': 'negotiate',
-  'GOTO MIN': 'negotiate',
+  'Accept': 'negotiate',
+  'Reject': 'negotiate',
+  'PS_RDY': 'negotiate',
+  'GotoMin': 'negotiate',
   'Wait': 'negotiate',
   'PPS_Status': 'negotiate',
   'EPR_Mode': 'negotiate',

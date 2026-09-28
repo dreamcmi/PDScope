@@ -77,6 +77,17 @@ async function decodeBoth(cap) {
 }
 
 let totalDiff = 0, totalPkt = 0;
+/**
+ * 已知的「消息类型重命名」——统一命名口径时把 1…8 号控制消息从
+ * sigrok / ATK-C 的「空格 + 全大写」改成规范写法，共 8 条。
+ * 新旧解码器只在名字上不同、字段与语义完全一致，
+ * 比对前先归一化，免得把**有意的改名**报成解析回归。
+ */
+const TYPE_RENAME = {
+  'GOOD CRC': 'GoodCRC', 'GOTO MIN': 'GotoMin', 'ACCEPT': 'Accept', 'REJECT': 'Reject',
+  'PING': 'Ping', 'PS RDY': 'PS_RDY', 'GET SOURCE CAP': 'Get_Source_Cap', 'GET SINK CAP': 'Get_Sink_Cap',
+};
+
 for (const f of files) {
   let cap;
   try { cap = await AtkccCapture.open(new Uint8Array(await readFile(D + f + '.atkcc')), { inflate }); }
@@ -91,7 +102,7 @@ for (const f of files) {
     if (!o || !p) { diffs.push(`#${i} 只在一侧：old=${o ? o.msgType : '-'} new=${p ? p.msgType : '-'}`); continue; }
     const f2 = [];
     if (o.sop !== p.sop) f2.push(`sop ${o.sop} → ${p.sop}`);
-    if (o.msgType !== p.msgType) f2.push(`type ${o.msgType} → ${p.msgType}`);
+    if ((TYPE_RENAME[o.msgType] ?? o.msgType) !== p.msgType) f2.push(`type ${o.msgType} → ${p.msgType}`);
     if (o.header !== p.header) f2.push(`header 0x${o.header?.toString(16)} → 0x${p.header?.toString(16)}`);
     if (o.crcOk !== p.crcOk) f2.push(`crcOk ${o.crcOk} → ${p.crcOk}`);
     if (o.nObjects !== p.nObjects) f2.push(`n ${o.nObjects} → ${p.nObjects}`);

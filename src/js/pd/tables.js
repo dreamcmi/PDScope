@@ -14,11 +14,19 @@
 /**
  * 控制消息（Number of Data Objects == 0）
  * PD 3.2 Table 6.4。`0` 与 `25…31` 是 Reserved（接收端应回 Not_Supported）。
+ *
+ * ⚠ 命名口径（全库唯一真源，界面 / 筛选 / 导出 / 分类表都读这里的字符串）：
+ *   一律采用**规范原文写法**——单词首字母大写、词间用 `_`、简称保持大写
+ *   （DR / PR / VCONN / FR / EPR / PPS / PS / CRC）。
+ *   旧版曾对 1…8 号沿用 sigrok / ATK-C 的「空格 + 全大写」风格
+ *   （`GOOD CRC`、`GET SOURCE CAP` …），与 9 号起的 `DR_Swap`
+ *   `Get_Source_Cap_Extended` 混在一起，列表里一眼就是两种风格；
+ *   现在统一成规范写法，`Get_Source_Cap` 正好是 `Get_Source_Cap_Extended` 的前缀。
  */
 export const CTRL_TYPES = {
   0: 'Reserved',
-  1: 'GOOD CRC', 2: 'GOTO MIN', 3: 'ACCEPT', 4: 'REJECT',
-  5: 'PING', 6: 'PS RDY', 7: 'GET SOURCE CAP', 8: 'GET SINK CAP',
+  1: 'GoodCRC', 2: 'GotoMin', 3: 'Accept', 4: 'Reject',
+  5: 'Ping', 6: 'PS_RDY', 7: 'Get_Source_Cap', 8: 'Get_Sink_Cap',
   9: 'DR_Swap', 10: 'PR_Swap', 11: 'VCONN_Swap', 12: 'Wait', 13: 'Soft_Reset',
   14: 'Data_Reset', 15: 'Data_Reset_Complete', 16: 'Not_Supported',
   17: 'Get_Source_Cap_Extended', 18: 'Get_Status', 19: 'FR_Swap',
@@ -26,10 +34,10 @@ export const CTRL_TYPES = {
   23: 'Get_Source_Info', 24: 'Get_Revision',
 };
 
-/** 控制消息里已废弃、只能被 Not_Supported 回应的类型 */
+/** 控制消息里已废弃、只能被 Not_Supported 回应的类型（键名与 CTRL_TYPES 的取值逐字一致） */
 export const CTRL_DEPRECATED = {
-  'GOTO MIN': 'PD 3.0 起废弃，接收端应回 Not_Supported',
-  'PING': 'PD 3.0 起废弃，接收端可回 Not_Supported 或忽略（线缆插头必须忽略）',
+  'GotoMin': 'PD 3.0 起废弃，接收端应回 Not_Supported',
+  'Ping': 'PD 3.0 起废弃，接收端可回 Not_Supported 或忽略（线缆插头必须忽略）',
 };
 
 /** 数据消息（Number of Data Objects > 0）—— PD 3.2 Table 6.5 */
@@ -71,8 +79,8 @@ export const EXT_MIN_REV = { 16: 3.1, 17: 3.1, 18: 3.1 };
  * 归类维度：握手 / 能力 / 电源协商 / 控制 / 数据 / 厂商 / 告警 / 错误
  */
 export const MSG_CATEGORY = {
-  'GOOD CRC': 'handshake',
-  'PING': 'handshake',
+  'GoodCRC': 'handshake',
+  'Ping': 'handshake',
   'Source_Cap': 'capability',
   'Sink_Cap': 'capability',
   'Source_Capabilities_Extended': 'capability',
@@ -82,10 +90,10 @@ export const MSG_CATEGORY = {
   'EPR_Sink_Capabilities': 'capability',
   'Request': 'negotiate',
   'EPR_Request': 'negotiate',
-  'ACCEPT': 'negotiate',
-  'REJECT': 'negotiate',
-  'PS RDY': 'negotiate',
-  'GOTO MIN': 'negotiate',
+  'Accept': 'negotiate',
+  'Reject': 'negotiate',
+  'PS_RDY': 'negotiate',
+  'GotoMin': 'negotiate',
   'Wait': 'negotiate',
   'PPS_Status': 'negotiate',
   'EPR_Mode': 'negotiate',

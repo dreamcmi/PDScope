@@ -39,7 +39,9 @@ const mCargo = /^\s*version\s*=\s*"([^"]+)"/m.exec(pkgSec);
 add('src-tauri/Cargo.toml', '[package] version', mCargo ? mCargo[1] : null);
 
 // ── src-tauri/Cargo.lock ─────────────────────────────────────────
-const mLock = /\[\[package\]\]\nname = "pdscope"\nversion = "([^"]+)"/.exec(read('src-tauri/Cargo.lock'));
+// ⚠ Windows 上这个文件是 CRLF 换行，正则里必须写 `\r?\n`，
+//   只写 `\n` 会静默匹配不到（表现为「读不到版本」而不是报错）。
+const mLock = /\[\[package\]\]\r?\nname = "pdscope"\r?\nversion = "([^"]+)"/.exec(read('src-tauri/Cargo.lock'));
 add('src-tauri/Cargo.lock', '[[package]] pdscope', mLock ? mLock[1] : null);
 
 // ── src/ui/app.js ────────────────────────────────────────────────

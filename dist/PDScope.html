@@ -817,7 +817,7 @@ body.detail-collapsed .detail-rail span{
 
         <section class="fgroup">
           <h4>快速过滤</h4>
-          <label class="switch"><input type="checkbox" id="fHideGoodCrc" checked /><span></span>屏蔽 GOOD CRC 心跳包</label>
+          <label class="switch"><input type="checkbox" id="fHideGoodCrc" checked /><span></span>屏蔽 GoodCRC 心跳包</label>
           <label class="switch"><input type="checkbox" id="fOnlyBad" /><span></span>只看 CRC 错误</label>
           <label class="switch"><input type="checkbox" id="fOnlyPower" /><span></span>只看功率协商（Source_Cap / Request / PPS）</label>
           <label class="switch"><input type="checkbox" id="fOnlyEnter" /><span></span>只看状态切换（PS_RDY / VDM / Alert）</label>
@@ -1904,11 +1904,19 @@ function matchOrderedSet(symbols) {
 /**
  * 控制消息（Number of Data Objects == 0）
  * PD 3.2 Table 6.4。`0` 与 `25…31` 是 Reserved（接收端应回 Not_Supported）。
+ *
+ * ⚠ 命名口径（全库唯一真源，界面 / 筛选 / 导出 / 分类表都读这里的字符串）：
+ *   一律采用**规范原文写法**——单词首字母大写、词间用 `_`、简称保持大写
+ *   （DR / PR / VCONN / FR / EPR / PPS / PS / CRC）。
+ *   旧版曾对 1…8 号沿用 sigrok / ATK-C 的「空格 + 全大写」风格
+ *   （`GOOD CRC`、`GET SOURCE CAP` …），与 9 号起的 `DR_Swap`
+ *   `Get_Source_Cap_Extended` 混在一起，列表里一眼就是两种风格；
+ *   现在统一成规范写法，`Get_Source_Cap` 正好是 `Get_Source_Cap_Extended` 的前缀。
  */
 const CTRL_TYPES = {
   0: 'Reserved',
-  1: 'GOOD CRC', 2: 'GOTO MIN', 3: 'ACCEPT', 4: 'REJECT',
-  5: 'PING', 6: 'PS RDY', 7: 'GET SOURCE CAP', 8: 'GET SINK CAP',
+  1: 'GoodCRC', 2: 'GotoMin', 3: 'Accept', 4: 'Reject',
+  5: 'Ping', 6: 'PS_RDY', 7: 'Get_Source_Cap', 8: 'Get_Sink_Cap',
   9: 'DR_Swap', 10: 'PR_Swap', 11: 'VCONN_Swap', 12: 'Wait', 13: 'Soft_Reset',
   14: 'Data_Reset', 15: 'Data_Reset_Complete', 16: 'Not_Supported',
   17: 'Get_Source_Cap_Extended', 18: 'Get_Status', 19: 'FR_Swap',
@@ -1916,10 +1924,10 @@ const CTRL_TYPES = {
   23: 'Get_Source_Info', 24: 'Get_Revision',
 };
 
-/** 控制消息里已废弃、只能被 Not_Supported 回应的类型 */
+/** 控制消息里已废弃、只能被 Not_Supported 回应的类型（键名与 CTRL_TYPES 的取值逐字一致） */
 const CTRL_DEPRECATED = {
-  'GOTO MIN': 'PD 3.0 起废弃，接收端应回 Not_Supported',
-  'PING': 'PD 3.0 起废弃，接收端可回 Not_Supported 或忽略（线缆插头必须忽略）',
+  'GotoMin': 'PD 3.0 起废弃，接收端应回 Not_Supported',
+  'Ping': 'PD 3.0 起废弃，接收端可回 Not_Supported 或忽略（线缆插头必须忽略）',
 };
 
 /** 数据消息（Number of Data Objects > 0）—— PD 3.2 Table 6.5 */
@@ -1961,8 +1969,8 @@ const EXT_MIN_REV = { 16: 3.1, 17: 3.1, 18: 3.1 };
  * 归类维度：握手 / 能力 / 电源协商 / 控制 / 数据 / 厂商 / 告警 / 错误
  */
 const MSG_CATEGORY = {
-  'GOOD CRC': 'handshake',
-  'PING': 'handshake',
+  'GoodCRC': 'handshake',
+  'Ping': 'handshake',
   'Source_Cap': 'capability',
   'Sink_Cap': 'capability',
   'Source_Capabilities_Extended': 'capability',
@@ -1972,10 +1980,10 @@ const MSG_CATEGORY = {
   'EPR_Sink_Capabilities': 'capability',
   'Request': 'negotiate',
   'EPR_Request': 'negotiate',
-  'ACCEPT': 'negotiate',
-  'REJECT': 'negotiate',
-  'PS RDY': 'negotiate',
-  'GOTO MIN': 'negotiate',
+  'Accept': 'negotiate',
+  'Reject': 'negotiate',
+  'PS_RDY': 'negotiate',
+  'GotoMin': 'negotiate',
   'Wait': 'negotiate',
   'PPS_Status': 'negotiate',
   'EPR_Mode': 'negotiate',
@@ -4928,7 +4936,7 @@ async function decodeChannel(capture, channel, opts) {
   packets.sort((a, b) => a.startSample - b.startSample);
   packets.forEach((p, i) => { p.index = i; });
 
-  // 建立 GOOD CRC → 被确认报文的对应关系（供界面「同色配对」及导出使用）
+  // 建立 GoodCRC → 被确认报文的对应关系（供界面「同色配对」及导出使用）
   linkGoodCrc(packets);
 
   return {
@@ -5040,16 +5048,16 @@ async function resolveSampleRate(capture, channel, inflate, opts = {}) {
   return out;
 }
 
-// ── GOOD CRC 配对 ────────────────────────────────────────────────────
+// ── GoodCRC 配对 ─────────────────────────────────────────────────────
 
 /**
- * 给每条 GOOD CRC 找出「它所确认的那条报文」，写入：
+ * 给每条 GoodCRC 找出「它所确认的那条报文」，写入：
  *   p.ackOf   —— 被确认报文的序号（packets 下标）
  *   p.ackType —— 被确认报文的类型名（便于展示）
  *
  * 判据来源：
  *   ① **紧邻性**——GoodCRC 是对报文的即时应答，必然落在被确认报文之后最近处。
- *      向前找最近一条「非 GOOD CRC 且方向相反」的报文，即物理上唯一合理的对象。
+ *      向前找最近一条「非 GoodCRC 且方向相反」的报文，即物理上唯一合理的对象。
  *      这一条也能覆盖 Hard Reset / Cable Reset 这类没有 MessageID 的报文。
  *   ② **MessageID**——PD 规范要求 GoodCRC 的 MessageID 与被确认报文相同。
  *      用它校验 ①；若邻近报文 CRC 完好却 ID 对不上（说明中间夹了别的方向的报文），
@@ -5057,21 +5065,21 @@ async function resolveSampleRate(capture, channel, inflate, opts = {}) {
  *
  * 注意不能只用 ②：被确认报文本身是坏包时 MessageID 不可信，若拿它去查
  * 「最近登记的同 ID 报文」，会误配到几十条报文之前的一条陈旧记录上。
- * 坏掉的 GOOD CRC 不参与配对（保持错误标识，便于定位）。
+ * 坏掉的 GoodCRC 不参与配对（保持错误标识，便于定位）。
  */
 const ACK_WINDOW = 16;   // 向前搜索窗口（条）
 function linkGoodCrc(packets) {
   const pick = (p, needId) => {
     for (let j = p.index - 1; j >= 0 && j > p.index - ACK_WINDOW; j--) {
       const q = packets[j];
-      if (q.msgType === 'GOOD CRC' || q.role === p.role) continue;
+      if (q.msgType === 'GoodCRC' || q.role === p.role) continue;
       if (needId && q.crcOk !== false && q.msgId !== p.msgId) continue;
       return q;
     }
     return null;
   };
   for (const p of packets) {
-    if (p.msgType !== 'GOOD CRC' || p.crcOk === false) continue;
+    if (p.msgType !== 'GoodCRC' || p.crcOk === false) continue;
     let ref = pick(p, false);
     if (!ref) continue;
     // 邻近报文 CRC 完好但 MessageID 对不上 → 改按 MessageID 精确匹配
@@ -6020,13 +6028,13 @@ function kindOf(p) {
 const CAT_CLASS = { Control: 'cat-Control', Data: 'cat-Data', Extended: 'cat-Extended', VDM: 'cat-VDM', Error: 'cat-Error' };
 
 /**
- * GOOD CRC 配色配对（界面侧）。
+ * GoodCRC 配色配对（界面侧）。
  *
  * 配对关系由内核 `linkGoodCrc()` 算好（p.ackOf），这里只负责取色：
  * 让回应包与它所确认的报文同色，一眼看出「哪条被谁确认了」；
- * 否则 GOOD CRC 只能笼统地取 Control 色，与它确认的报文各成一色。
+ * 否则 GoodCRC 只能笼统地取 Control 色，与它确认的报文各成一色。
  *
- * 坏掉的 GOOD CRC 保持错误色，不参与配对。
+ * 坏掉的 GoodCRC 保持错误色，不参与配对。
  */
 function pairAckTone(packets) {
   for (const p of packets) {
@@ -6038,9 +6046,14 @@ function pairAckTone(packets) {
   }
 }
 
-/** 是否属于「功率协商」/「状态切换」这两类关注点 */
+/**
+ * 是否属于「功率协商」/「状态切换」这两类关注点。
+ *
+ * 这两条正则匹配的是**协议表里的类型名**（`src/js/pd/tables.js`），
+ * 所以类型名一改，这里必须跟着改；名字变更时请一并核对。
+ */
 const POWER_TYPES = /Source_Cap|Request|EPR_Request|EPR_Mode|PPS|BIST|Source_Capabilities_Extended|EPR_Source|EPR_Sink|Sink_Cap/i;
-const ENTER_TYPES = /PS RDY|VDM|Alert|Status|Source_Info|Revision|Enter_USB|Discover|Sink_Cap|Notify/i;
+const ENTER_TYPES = /PS_RDY|VDM|Alert|Status|Source_Info|Revision|Enter_USB|Discover|Sink_Cap|Notify/i;
 
 /* ═══════════════════════ 文档（一份抓包 = 一个标签） ═══════════════════════ */
 /**
@@ -6430,7 +6443,7 @@ async function decodeDoc(doc) {
       p.vbus = v; p.ibus = i;
       p.kind = kindOf(p);
     }
-    pairAckTone(packets);   // GOOD CRC 与它确认的报文同色
+    pairAckTone(packets);   // GoodCRC 与它确认的报文同色
 
     doc.packets = packets;
     doc.stats = stats;
@@ -6795,14 +6808,28 @@ function renderChannels() {
 }
 
 /* ═══════════════════════ 筛选 ═══════════════════════ */
+/**
+ * 报文类型清单（筛选面板的「类型」多选）。
+ *
+ * 配色取自该类型**首条报文自己的语义类别**（`toneOf`，即协议解析出的 `msgKind`），
+ * 而不是拿类型名去猜。名字是给人看的，不该反过来决定颜色：
+ * 早先这里用一条「正则猜类别」的兜底，一旦协议表里改名（`PS RDY` → `PS_RDY`）
+ * 或冒出正则没覆盖的类型，同一语义的报文就会在清单里被涂成两种颜色。
+ * 现在颜色随报文走，改名不会再影响它，`guessKind()` 也随之删掉。
+ */
 function buildTypeList() {
-  const counts = new Map();
-  for (const p of S.packets) counts.set(p.msgType, (counts.get(p.msgType) || 0) + 1);
-  const arr = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  /** msgType → { n, kind }：同一类型名只可能来自同一类别，取首条即可 */
+  const byType = new Map();
+  for (const p of S.packets) {
+    const e = byType.get(p.msgType);
+    if (e) e.n++;
+    else byType.set(p.msgType, { n: 1, kind: toneOf(p) });
+  }
+  const arr = [...byType.entries()].sort((a, b) => b[1].n - a[1].n || a[0].localeCompare(b[0]));
 
   const body = $('#msBody');
   body.innerHTML = '';
-  for (const [t, n] of arr) {
+  for (const [t, { n, kind }] of arr) {
     const lab = el('label', 'ms-item');
     const cb = el('input'); cb.type = 'checkbox'; cb.value = t;
     // 勾选状态跟着「当前文档」走 —— 这份列表在每次切标签时都会重建，
@@ -6814,17 +6841,11 @@ function buildTypeList() {
       applyFilters();
     });
     const dot = el('span', 'dot');
-    dot.style.background = catColor(kindOf({ msgType: t, msgKind: guessKind(t) }));
+    dot.style.background = catColor(kind);
     lab.append(cb, dot, el('span', '', t), el('span', 'cnt', String(n)));
     body.appendChild(lab);
   }
   updateMsHead(arr.length);
-}
-function guessKind(t) {
-  if (t === 'VDM') return 'data';
-  if (/GOOD CRC|ACCEPT|REJECT|PING|PS RDY|GOTO MIN|Swap|Wait|Soft_Reset|Data_Reset|Not_Supported|FR_Swap|Get_/.test(t)) return 'control';
-  if (/Extended|_Info$|Status|Battery|Country|Manufacturer|Security|Firmware|Revision/.test(t)) return 'ext';
-  return 'data';
 }
 function catColor(k) {
   const v = getComputedStyle(document.documentElement).getPropertyValue('--' + ({ Control: 'ctrl', Data: 'data', Extended: 'ext', VDM: 'vdm', Error: 'err' }[k] || 'ctrl'));
@@ -6923,7 +6944,7 @@ function applyFilters(keepScroll) {
     if (!f.sops.has(p.sop)) continue;
     if (!f.cats.has(p.kind)) continue;
     if (f.types.size && !f.types.has(p.msgType)) continue;
-    if (f.hideGoodCrc && p.msgType === 'GOOD CRC') continue;
+    if (f.hideGoodCrc && p.msgType === 'GoodCRC') continue;
     if (f.onlyBad && p.crcOk !== false) continue;
     if (f.onlyPower && !POWER_TYPES.test(p.msgType)) continue;
     if (f.onlyEnter && !ENTER_TYPES.test(p.msgType)) continue;
@@ -7109,7 +7130,7 @@ function rowEl(p, i) {
   const cls = CAT_CLASS[p.tone] || '';
   const hex = p.dataHex || '';
   const note = highlight(p.summary || '');
-  // GOOD CRC 取被确认报文的颜色，悬停提示它确认的是哪一条
+  // GoodCRC 取被确认报文的颜色，悬停提示它确认的是哪一条
   const tip = p.ackOf != null ? ` title="确认 #${p.ackOf} · ${p.ackType || ''}"` : '';
   r.innerHTML =
     `<div class="td num">${p.index}</div>`

@@ -61,7 +61,7 @@ const ppsPdo = ((3 << 30) | (0x6E << 17) | (0x32 << 8) | 0x64) >>> 0;
 const fixedPdo = ((0x0064 << 10) | 300) >>> 0;
 
 const cases = [
-  { name: 'GOOD CRC', sop: 0, header: mkHeader({ type: 1, id: 1 }), data: [], expectType: 'GOOD CRC' },
+  { name: 'GoodCRC', sop: 0, header: mkHeader({ type: 1, id: 1 }), data: [], expectType: 'GoodCRC' },
   { name: 'Source_Cap x2', sop: 0, header: mkHeader({ type: 1, n: 2, id: 3 }), data: [fixedPdo, ppsPdo], expectType: 'Source_Cap' },
   {
     name: 'Sink_Cap x1', sop: 0, header: mkHeader({ type: 4, n: 1, id: 2, powerRole: 0, dataRole: 0 }),

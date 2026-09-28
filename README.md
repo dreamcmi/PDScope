@@ -428,9 +428,9 @@ node tools/serve.mjs        # 默认 http://127.0.0.1:5188，会自动开浏览�
 | **报文表**          | `# / SOP / 报文类型 / ID / 方向 / Obj / 时间 / VBUS-IBUS / 数据hex / 解析详情`，虚拟滚动，几万条也不卡 |
 | **采样率来源标注**  | 顶栏显示实际采用的采样率并标出来源：`文件声明` / `波形实测` / `默认值`。声明与波形不一致时改按实测解码，并弹出提示；鼠标悬停可见 `channel.ini` 原文或原因。分析仪导出只有毫秒时间戳（`1.00 kHz`，标 `分析仪时间戳`），量级不同也能读 |
 | **方向区分**        | `Source`（供电方）/ `Sink`（受电方）/ `Plug`（线缆 e-marker）三色徽章；`SOP / SOP′ / SOP″` 分别标注 |
-| **GOOD CRC 配对同色** | 每条 `GOOD CRC` 自动取「它所确认的那条报文」的颜色，而不是笼统的控制色。配对依据：GoodCRC 是对报文的即时应答（实测恒为紧邻 1 条），并用 PD 规范要求的 *MessageID 相同* 交叉校验；被确认报文本身是坏包时退化为纯邻近匹配。悬停报文类型可见 `确认 #N · 类型`，详情面板「链路概览」里也有「确认的报文」一栏 |
+| **GoodCRC 配对同色** | 每条 `GoodCRC` 自动取「它所确认的那条报文」的颜色，而不是笼统的控制色。配对依据：GoodCRC 是对报文的即时应答（实测恒为紧邻 1 条），并用 PD 规范要求的 *MessageID 相同* 交叉校验；被确认报文本身是坏包时退化为纯邻近匹配。悬停报文类型可见 `确认 #N · 类型`，详情面板「链路概览」里也有「确认的报文」一栏 |
 | **选择性屏蔽**      | 按方向、SOP 类型、报文类别（控制/数据/扩展/VDM/异常）、**具体报文类型**（多选，带计数）、时间窗口、关键字任意组合过滤 |
-| **快捷过滤**        | 一键屏蔽 GOOD CRC 心跳包 / 只看 CRC 错误 / 只看功率协商 / 只看状态切换                        |
+| **快捷过滤**        | 一键屏蔽 GoodCRC 心跳包 / 只看 CRC 错误 / 只看功率协商 / 只看状态切换                        |
 | **CRC 错误标注**    | 校验未通过的报文在表格里整行标红，并在时间轴对应位置画一条贯穿的高亮竖线；配合「只看 CRC 错误」可一键筛出来。分析仪导出不含 CRC，此时统计行写「**CRC 未记录（分析仪不存）**」而不是「全通过」，详情面板也单列一行说明 |
 | **时间窗口**        | 底部 VBUS/IBUS 时间轴可**拖拽刷选**一段区间，表格立即联动                                     |
 | **两档模拟量视图**  | 分析仪导出除了 VBUS / IBUS 还录了第三、第四路模拟量（POWER-Z 的 **CC1 / CC2**，UFCS 的 **DP / DM**）。量程与 VBUS 差一个数量级，叠在一起会糊，所以做成标题旁的 `电压/电流 ↔ CC 线` 两档切换：纵轴刻度、悬停读数、曲线配色全部跟着换。ATK-C 的 `bus.ini` 只有两路，这一档自动隐藏 |
@@ -440,13 +440,13 @@ node tools/serve.mjs        # 默认 http://127.0.0.1:5188，会自动开浏览�
 | **详情宽度可拖 / 可收起** | 详情面板与表格之间的分隔条可**拖拽改宽**（下限 280 / 上限 900，且始终给中间表格留 420px，窄窗口下自动收紧），双击分隔条或按 `Enter` 回到 390 默认；也可聚焦分隔条后用 `← →` 微调（`Shift` 加大步长，`Home/End` 到最窄/最宽）。宽度存 `localStorage`，下次打开还在。按 `Esc` 或点右上 `×` 收起，**收起后窗口右缘出现一条 22px 的「详情」竖栏**，点它就能展开 —— 没有报文可点时（零报文的 UFCS 抓包）也回得来 |
 | **未实现协议如实说明** | 分析仪抓的是本工程未覆盖的协议时（目前是 UFCS），界面不装作解析失败：**常驻提示条**讲清原因、统计行写「已读入 N 条原始帧 · UFCS 语义解析未实现」、表格空态也换成专门话术，而模拟量轨迹照常可用 |
 | **导出**            | CSV（当前筛选结果）或 JSON（全部报文，含原始位域字段与 `ackOf` 配对序号）                     |
-| **其它**            | 明/暗主题、紧凑/舒适行高、上一条/下一条（↑↓）、`/` 聚焦搜索、`Ctrl/⌘+O` 打开、`Alt+1..9` 切标签、`T` 切主题、`G` 切 GOOD CRC 屏蔽、折叠筛选栏 |
+| **其它**            | 明/暗主题、紧凑/舒适行高、上一条/下一条（↑↓）、`/` 聚焦搜索、`Ctrl/⌘+O` 打开、`Alt+1..9` 切标签、`T` 切主题、`G` 切 GoodCRC 屏蔽、折叠筛选栏 |
 
 界面截图见 `artifacts/e2e-screenshot.png`（跑 `npm run e2e` 时自动生成），
 多份抓包时的标签栏见 `artifacts/e2e-multi.png`（`npm run e2e:multi`，一份 `.atkcc` + 一份 `.sqlite`），
 POWER-Z 的 `.sqlite` 拖进来后的样子见 `artifacts/e2e-powerz.png`（`npm run e2e:powerz`），
 UFCS 抓包「只出容器与模拟量」的样子见 `artifacts/e2e-ufcs.png`，
-GOOD CRC 配对同色的效果见 `artifacts/ack-colors.png`，
+GoodCRC 配对同色的效果见 `artifacts/ack-colors.png`，
 分组配色见 `artifacts/group-colors-srcap.png`（Source_Cap 七个 PDO）、
 `artifacts/group-colors-vdm.png`（线缆 e-Marker 的 VDO 链）、
 `artifacts/group-colors-dark.png`（暗色主题），
@@ -682,7 +682,7 @@ PDScope/
    ├─ syntax.mjs          全量语法检查（node --check，几秒）
    ├─ ci-checksum.mjs     给 CI 产物生成 .sha256 校验和（三平台同一套命令）
    ├─ selftest.js         协议层合成用例自检（含手搓最小 SQLite 的 POWER-Z 路径回归）
-   ├─ ackcheck.js         GOOD CRC 配对校验（跨全部真实抓包）
+   ├─ ackcheck.js         GoodCRC 配对校验（跨全部真实抓包）
    ├─ pd-inspect.mjs      PD 解析抽查：线缆链路 plug 信令 + 扩展消息详情 + 全样本体检
    ├─ powerz-inspect.mjs  POWER-Z（.sqlite）全样本体检：拆帧自检 / 连接事件 / 警告 / CRC 口径
    ├─ pd-regress.mjs      与重构前解码器逐包逐字段对比（从 git HEAD 取旧版本）
@@ -725,7 +725,7 @@ PDScope/
 node tools/version-check.mjs              # 版本号五处是否一致（最便宜，先跑它）
 node tools/syntax.mjs                     # 全量语法检查（几秒；界面脚本错一个字符就是白屏）
 node tools/selftest.js                    # 合成用例 44 项：4B5B / PD / CRC + 采样率 + plug 信令 + POWER-Z 路径
-node tools/ackcheck.js                    # GOOD CRC 配对（跨 5 份真实抓包）
+node tools/ackcheck.js                    # GoodCRC 配对（跨 5 份真实抓包）
 node tools/powerz-inspect.mjs             # POWER-Z（.sqlite）全样本体检（需要样本文件，非 0 退出即异常）
 
 # 界面 29 项（ATK-C）/ 35 项（POWER-Z）/ 26 通过 + 12 跳过（UFCS 零报文）/ 38 项（多份抓包）
@@ -766,7 +766,7 @@ npm run check
 
 **`ackcheck.js`** 校验 `linkGoodCrc()`：配对覆盖率、是否自指、方向是否相反、
 **双方 CRC 完好时 MessageID 是否相同**（PD 规范的硬约束）、配对距离。
-当前 5 份抓包共 1141 条有效 GOOD CRC **100% 配对成功**，1100 条可校验的配对
+当前 5 份抓包共 1141 条有效 GoodCRC **100% 配对成功**，1100 条可校验的配对
 **MessageID 全部一致**，最远距离恒为 1 条报文。
 
 **`selftest.js`** 用例共 **44 项**，分五组。第一组先在合成报文的**字段级**校验

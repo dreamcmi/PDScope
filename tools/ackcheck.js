@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
- * GOOD CRC 配对校验 —— 跨全部真实抓包验证 `linkGoodCrc()` 的配对是否正确。
+ * GoodCRC 配对校验 —— 跨全部真实抓包验证 `linkGoodCrc()` 的配对是否正确。
  *
  * 校验项：
- *   ① 被确认对象不能是 GOOD CRC 自己，方向必须相反（linkGoodCrc 的构造约束）；
+ *   ① 被确认对象不能是 GoodCRC 自己，方向必须相反（linkGoodCrc 的构造约束）；
  *   ② 双方 CRC 都通过时，MessageID 必须相同（PD 规范的强约束）——这是真正的正确性判据；
  *   ③ 配对距离必须很近（GoodCRC 是即时应答，实测恒为 1 条）；
- *   ④ 统计「继承配色」后多少条 GOOD CRC 会呈现 Control 以外的新颜色。
+ *   ④ 统计「继承配色」后多少条 GoodCRC 会呈现 Control 以外的新颜色。
  *
  * 用法：node tools/ackcheck.js [文件.atkcc ...]
  *       不带参数则扫描上级目录里的全部 .atkcc
@@ -49,7 +49,7 @@ async function check(file) {
   const ch = await bestChannel(cap);
   const { packets, stats } = await decodeChannel(cap, ch, { inflate, bitOrder: 'lsb' });
 
-  const gc = packets.filter((p) => p.msgType === 'GOOD CRC');
+  const gc = packets.filter((p) => p.msgType === 'GoodCRC');
   const okGc = gc.filter((p) => p.crcOk !== false);
   const paired = okGc.filter((p) => p.ackOf != null);
 
@@ -58,7 +58,7 @@ async function check(file) {
   const samples = [];
   for (const p of paired) {
     const ref = packets[p.ackOf];
-    if (!ref || ref.msgType === 'GOOD CRC') { badSelf++; continue; }
+    if (!ref || ref.msgType === 'GoodCRC') { badSelf++; continue; }
     if (ref.role === p.role) badDir++;
     if (ref.crcOk !== false) { idChecked++; if (ref.msgId !== p.msgId) badId++; }
     const dist = p.index - ref.index;
@@ -66,13 +66,13 @@ async function check(file) {
     if (dist > 4) badDist++;
     const t = toneOf(ref);
     if (t === 'Control') inhControl++; else inhOther++;
-    if (samples.length < 4) samples.push(`#${p.index} GOOD CRC(${p.role}) ⟵ #${ref.index} ${ref.msgType}(${ref.role})` + `${ref.crcOk === false ? ' [坏包]' : ''} → 取 ${t} 色`);
+    if (samples.length < 4) samples.push(`#${p.index} GoodCRC(${p.role}) ⟵ #${ref.index} ${ref.msgType}(${ref.role})` + `${ref.crcOk === false ? ' [坏包]' : ''} → 取 ${t} 色`);
   }
 
   const errs = badSelf + badDir + badId + badDist;
   const name = basename(file).replace(/\.atkcc$/i, '');
   console.log(`\n── ${name}  (通道 ${ch}, ${packets.length} 条报文)`);
-  console.log(`   GOOD CRC ${gc.length} 条 · 有效 ${okGc.length} · 已配对 ${paired.length} · 未配对 ${okGc.length - paired.length}`);
+  console.log(`   GoodCRC ${gc.length} 条 · 有效 ${okGc.length} · 已配对 ${paired.length} · 未配对 ${okGc.length - paired.length}`);
   console.log(`   配对正确性: 自指 ${badSelf} · 同向 ${badDir} · ID 不符 ${badId}/${idChecked} · 距离>4 ${badDist}  → ${errs ? '✗ 存在错误' : '✓ 全部正确'}`);
   console.log(`   最远配对距离: ${maxDist} 条报文`);
   console.log(`   继承配色: 沿用 Control(青) ${inhControl} 条 · 变成其他色 ${inhOther} 条`);
@@ -87,7 +87,7 @@ if (!files.length) {
 }
 files = files.filter((f) => existsSync(f));
 
-console.log('═══ GOOD CRC 配对校验 ═══');
+console.log('═══ GoodCRC 配对校验 ═══');
 let allOk = true;
 for (const f of files) {
   try { if (!(await check(f))) allOk = false; }
