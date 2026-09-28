@@ -45,7 +45,7 @@ const exists = (p) => {
 // ── 决定要哈希哪些文件 ────────────────────────────────────────────────
 // 每个目标产出的都是**归档文件**：Windows 是 .zip，macOS / Linux 是 .tar.gz。
 // 之所以 Windows 也自己压一层而不是散着传：散着传时不同目标会产出同名文件
-// （pdscope.exe、PDScope_0.2.0_x64-setup.exe …），汇总到同一个 Release 时会互相覆盖。
+// （pdscope.exe、PDScope_0.3.0_x64-setup.exe …），汇总到同一个 Release 时会互相覆盖。
 // 一个目标可能出多个归档（例如 Windows 的「安装包版」与「绿色版」），所以这里是复数。
 const ARCHIVE = /\.(zip|tar\.gz)$/;
 

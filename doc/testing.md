@@ -46,7 +46,7 @@ npm run check
 把版本号在五个文件里对一遍：`package.json`、`src-tauri/tauri.conf.json`、
 `src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`、`src/ui/app.js`，外加文档里写着的安装包产物名。
 这几处分别被 npm、打包器、Cargo、锁文件、界面「关于」读走，只改一处不会报错，
-只会悄悄装出一个「文件名 0.3.0、关于里写 0.2.0」的包 —— 所以放在自检链最前面拦。
+只会悄悄装出一个「文件名 0.4.0、关于里写 0.3.0」的包 —— 所以放在自检链最前面拦。
 
 ## ackcheck.js
 

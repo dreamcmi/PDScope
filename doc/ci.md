@@ -11,7 +11,7 @@
 | 推 `v*` 标签 | 发版：除了 Artifacts，再自动建一个**草稿** Release 汇总全部产物 |
 
 ```bash
-git tag v0.2.0 && git push origin v0.2.0     # 走发版那条路
+git tag v0.3.0 && git push origin v0.3.0     # 走发版那条路
 ```
 
 > Artifacts 要登录 GitHub 才能下载。想让任何人都能下，就推个标签，
@@ -105,7 +105,7 @@ GitHub 的 Windows runner 一直是 **Windows Server** 系列，从来没有过 
   上传后所有目录变 755、文件变 644，符号链接也不保留；而 macOS 的 `.app` 内部全是
   符号链接与可执行位、Linux 的 `.AppImage` 必须带 `+x`，散着上传会得到一个
   「解压后打不开」的包。`tar` 能把权限和链接原样保住，所以 macOS / Linux 用 `.tar.gz`。
-  ② 各目标的出包名是按架构走的（`pdscope.exe`、`PDScope_0.2.0_x64-setup.exe` …），
+  ② 各目标的出包名是按架构走的（`pdscope.exe`、`PDScope_0.3.0_x64-setup.exe` …），
   x64 与 arm64 之间、不同打包类型之间都可能撞名；而所有产物在 Release 里是平铺的，
   同名文件会互相覆盖且不报错。必须靠「归档名带目标名」区分开。
   Windows 用 `.zip`（没有可执行位这回事，zip 就够，也更合 Windows 用户的习惯）。

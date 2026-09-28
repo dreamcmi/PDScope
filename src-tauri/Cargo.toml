@@ -1,6 +1,6 @@
 [package]
 name = "pdscope"
-version = "0.2.0"
+version = "0.3.0"
 description = "USB Power Delivery 抓包解析上位机"
 authors = ["PDScope"]
 edition = "2021"
