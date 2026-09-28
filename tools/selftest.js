@@ -9,6 +9,7 @@ import { EdgeExtractor, BmcDecoder, UI_US, collectRunStats, estimateSampleRate }
 import { parseSampleRate, DEFAULT_SAMPLE_RATE } from '../src/js/core/atkcc.js';
 import { SqliteReader, isSqlite } from '../src/js/core/sqlite.js';
 import { PowerzCapture, sniffPowerz, parsePowerzBlob, POWERZ_RATE } from '../src/js/core/powerz.js';
+import { UfcsDecoder, ufcsCrc8, ufcsLocateFrames, ufcsSplitFrames, ufcsHeaderInfo } from '../src/js/ufcs/index.js';
 import { buildBusSeries } from '../src/js/core/pipeline.js';
 import {
   DEC4B5B, SOP_SEQUENCES, EOP_SYM,
@@ -584,8 +585,148 @@ function buildSqlite(specs) {
     `连接 ${stats.connectCount} · badWire ${stats.badWire} · CRC 未知 ${stats.crcUnknown}`);
 }
 
-/* ── ⑤.4 UFCS：只做容器 + 模拟量，不假装解析 ── */
+/* ── ⑤.4 UFCS：报文语义解析（独立库 src/js/ufcs/ + core/powerz.js 的容器层）──
+   UFCS 的物理层就是 UART，规范（T/TAF 083—2024）第 8 章定义了三种消息结构。
+   下面用**照规范自己拼的帧**做回归：CRC-8、消息头四段位域、控制/数据/自定义三类
+   消息、方向还原、ACK 配对，以及容器前缀定位（存不存 CRC、带不带链路字节）。 */
 {
+  /** 按规范拼一条 UFCS 帧：消息头(2B 大端) + 主体 + CRC-8(1B) */
+  const mkFrame = (addr, msgNo, ver, mtype, body) => {
+    const hdr = (addr << 13) | (msgNo << 9) | (ver << 3) | mtype;
+    const b = [(hdr >> 8) & 0xFF, hdr & 0xFF, ...body];
+    b.push(ufcsCrc8(b));
+    return Uint8Array.from(b);
+  };
+  const be16 = (v) => [(v >> 8) & 0xFF, v & 0xFF];
+  /** 8 字节输出模式（表 16） */
+  const mkMode = (no, cs, vs, maxV, minV, maxI, minI) => {
+    const v = (BigInt(no) << 60n) | (BigInt(cs) << 57n) | (BigInt(vs) << 56n)
+      | (BigInt(maxV) << 40n) | (BigInt(minV) << 24n) | (BigInt(maxI) << 8n) | BigInt(minI);
+    const o = [];
+    for (let i = 7; i >= 0; i--) o.push(Number((v >> BigInt(i * 8)) & 0xFFn));
+    return o;
+  };
+
+  /* ① CRC-8：用「表驱动」再实现一遍（写法与库里的逐位版不同），两边必须一致。
+     单靠一个已知向量钉不住整个算法，随机比对才防得住转录错误。 */
+  const CRC8_T = (() => {
+    const t = new Uint8Array(256);
+    for (let i = 0; i < 256; i++) {
+      let c = i;
+      for (let k = 0; k < 8; k++) c = (c & 0x80) ? (((c << 1) ^ 0x29) & 0xFF) : ((c << 1) & 0xFF);
+      t[i] = c;
+    }
+    return t;
+  })();
+  const crc8Ref = (bytes) => { let c = 0; for (const b of bytes) c = CRC8_T[(c ^ b) & 0xFF]; return c; };
+  let same = 0;
+  for (let n = 0; n < 400; n++) {
+    const len = 1 + (n % 24);
+    const buf = Uint8Array.from({ length: len }, (_, i) => (n * 31 + i * 17 + 7) & 0xFF);
+    if (ufcsCrc8(buf) === crc8Ref(buf)) same++;
+  }
+  check('UFCS：CRC-8 与参照实现一致', same === 400, `${same}/400 组相同（多项式 0x29）`);
+
+  /* ② 消息头位域（表 13） */
+  const h = ufcsHeaderInfo((0b010 << 13) | (0b1010 << 9) | (0b010001 << 3) | 0b001);
+  check('UFCS：消息头位域', h.addr === 0b010 && h.msgNo === 0b1010 && h.mtype === 0b001
+    && h.verCode === 0b010001 && h.verText === '1.0.1' && h.addrValid && h.mtypeValid,
+    `addr=${h.addr} no=${h.msgNo} ver=${h.verText} type=${h.mtype}`);
+
+  /* ③ 三类消息的语义 */
+  const dec = new UfcsDecoder({ sampleRate: POWERZ_RATE });
+
+  const ping = mkFrame(0b001, 3, 0b000001, 0, [0x00]);
+  const pPing = dec.decodeFrame(ping, { timeMs: 1, line: 'D-' });
+  check('UFCS：控制消息 Ping', pPing.msgType === 'Ping' && pPing.msgKind === 'control'
+    && pPing.crcOk === true && pPing.role === 'SNK' && pPing.sop === 'D-',
+    `${pPing.msgType} ${pPing.sop} ${pPing.role} crc=${pPing.crcOk}`);
+
+  // Output_Capabilities：模式2 = 5.5~11V / 0.5~5A（表 16 的示例）
+  const ocBody = [0x01, 16, ...mkMode(1, 2, 1, 550, 340, 600, 50), ...mkMode(2, 2, 1, 1100, 550, 500, 50)];
+  const pOc = dec.decodeFrame(mkFrame(0b010, 1, 0b001001, 1, ocBody), { timeMs: 2 });
+  const ocTxt = pOc.details.map((d) => `${d.key}=${d.value}`).join('|');
+  check('UFCS：Output_Capabilities 逐字段', pOc.msgType === 'Output_Capabilities'
+    && pOc.role === 'SRC' && pOc.sop === 'D+'
+    && /最大输出电压 \[B55-40\]=1100 × 10mV = 11 V/.test(ocTxt)
+    && /最小输出电流 \[B7-0\]=50 × 10mA = 0.5 A/.test(ocTxt)
+    && /电流调节步进 \[B59-57\]=2 · 30 mA/.test(ocTxt),
+    pOc.summary);
+
+  // Request：模式 1、5.1V、3A（规范 8.2.4.2 的例子）
+  const reqBody = [0x02, 8, 0x10, 0x00, 0x00, 0x00, ...be16(510), ...be16(300)];
+  const pReq = dec.decodeFrame(mkFrame(0b001, 2, 0b001001, 1, reqBody), { timeMs: 3 });
+  check('UFCS：Request 逐字段', /请求模式 1：5.1 V \/ 3 A/.test(pReq.summary) && pReq.role === 'SNK',
+    pReq.summary);
+
+  // Cable_Information：10 字节，VID/阻抗/承载能力
+  const pCab = dec.decodeFrame(mkFrame(0b001, 4, 0b001001, 1,
+    [0x05, 10, ...be16(0x1234), ...be16(0), ...be16(100), ...be16(2000), ...be16(500)]), { timeMs: 4, line: 'D+' });
+  check('UFCS：Cable_Information 逐字段',
+    /线缆承载 20 V \/ 5 A · 阻抗 100 mΩ · VID 0x1234/.test(pCab.summary) && pCab.role === 'Plug',
+    pCab.summary);
+
+  // 厂家自定义消息：消息头(2) + 厂家识别码(2) + 长度(1) + 数据(N) + CRC
+  const pCus = dec.decodeFrame(mkFrame(0b010, 5, 0b001001, 2, [0x12, 0x34, 3, 0xAA, 0xBB, 0xCC]), { timeMs: 5 });
+  check('UFCS：厂家自定义消息', pCus.msgKind === 'custom' && pCus.msgType === 'Manufacturer_Custom'
+    && /0x1234/.test(pCus.summary) && pCus.crcOk === true, pCus.summary);
+
+  // Sink_Information_Extended：电池电量 0x254E = 95.50%（规范 8.2.4.13 的例子）
+  // 每项 3 字节 = 类型(高 4bit)+保留(低 4bit) │ 状态数据(16bit)；type=0001b 即「电池电量」
+  const pExt = dec.decodeFrame(mkFrame(0b001, 6, 0b001001, 1, [0x0D, 3, 0x10, ...be16(0x254E)]), { timeMs: 6 });
+  check('UFCS：Sink_Info_Extended 类型/数据', /电池电量=95.5 %/.test(pExt.summary), pExt.summary);
+
+  // Refuse：拒绝原因 0x04
+  const pRef = dec.decodeFrame(mkFrame(0b001, 7, 0b001001, 1, [0x09, 4, 0x02, 0x00, 0x00, 0x04]), { timeMs: 7 });
+  check('UFCS：Refuse 拒绝原因', /超出范围/.test(pRef.summary), pRef.summary);
+
+  // 坏 CRC 必须被发现，且不能影响其它字段的解析
+  const badFrame = mkFrame(0b001, 8, 0b001001, 1, reqBody);
+  badFrame[badFrame.length - 1] ^= 0xFF;
+  const pBad = dec.decodeFrame(badFrame, { timeMs: 8 });
+  check('UFCS：CRC 错误被识别', pBad.crcOk === false && pBad.msgType === 'Request'
+    && pBad.warnings.some((w) => w.short === 'CRC') && /请求模式 1/.test(pBad.summary),
+    `crcOk=${pBad.crcOk}`);
+
+  // 长度不符要报出来（Request 声明 8，实际给 5）
+  const pShort = dec.decodeFrame(mkFrame(0b001, 9, 0b001001, 1, [0x02, 5, 1, 2, 3, 4, 5]), { timeMs: 9 });
+  check('UFCS：数据长度校验', pShort.warnings.some((w) => w.short === 'LEN'), pShort.warnings.map((w) => w.short).join(','));
+
+  // 方向与规范不符要报出来（Request 只可能由充电设备发给供电设备）
+  const pWrongDir = dec.decodeFrame(mkFrame(0b010, 10, 0b001001, 1, reqBody), { timeMs: 10 });
+  check('UFCS：方向与规范不符告警', pWrongDir.warnings.some((w) => w.short === 'DIR'),
+    pWrongDir.warnings.map((w) => w.short).join(','));
+
+  /* ④ 容器定位：前缀长度 / 存不存 CRC，都要能落回同一条解析路径 */
+  const ts4 = [0x40, 0xE2, 0x01, 0x00];
+  const locPlain = ufcsLocateFrames(Uint8Array.from([...ts4, ...ping]));
+  check('UFCS：容器 4B 时间戳 + 带 CRC', locPlain && locPlain.prefixBytes === 4 && locPlain.withCrc === true
+    && locPlain.frames.length === 1, locPlain ? `前缀 ${locPlain.prefixBytes}B / CRC ${locPlain.withCrc}` : 'null');
+
+  const locDir = ufcsLocateFrames(Uint8Array.from([...ts4, 0x01, ...ping]));
+  check('UFCS：容器 时间戳 + 链路字节', locDir && locDir.prefixBytes === 5 && locDir.withCrc === true
+    && locDir.frames.length === 1, locDir ? `前缀 ${locDir.prefixBytes}B` : 'null');
+
+  const noCrc = Uint8Array.from([...ts4, ...ping.subarray(0, ping.length - 1)]);
+  const locNoCrc = ufcsLocateFrames(noCrc);
+  const pNoCrc = locNoCrc ? dec.decodeFrame(noCrc.subarray(locNoCrc.prefixBytes), { timeMs: 11 }) : null;
+  check('UFCS：容器不存 CRC', locNoCrc && locNoCrc.withCrc === false && pNoCrc
+    && pNoCrc.crcOk === null && pNoCrc.msgType === 'Ping' && pNoCrc.crcCalc === ping[ping.length - 1],
+    locNoCrc ? `前缀 ${locNoCrc.prefixBytes}B / crcOk=${pNoCrc?.crcOk}` : 'null');
+
+  const multi = Uint8Array.from([0x80 | 0, ...ping, ...mkFrame(0b010, 4, 0b001001, 0, [0x01])]);
+  check('UFCS：一行两帧', ufcsSplitFrames(multi, 1, true)?.length === 2, String(ufcsSplitFrames(multi, 1, true)?.length));
+
+  /* ⑤ 端到端：手搓 SQLite（含真实 UFCS 帧）→ PowerzCapture → 报文列表 */
+  const reqFull = [0x02, 8, 0x10, 0x00, 0x00, 0x00, ...be16(510), ...be16(300)];
+  const lines = [
+    { t: 0, blob: mkFrame(0b010, 1, 0b001001, 1, ocBody) },                 // SRC → SNK
+    { t: 0.01, blob: mkFrame(0b001, 1, 0b001001, 0, [0x01]) },              // SNK 的 ACK
+    { t: 0.02, blob: mkFrame(0b001, 2, 0b001001, 1, reqFull) },             // SNK → SRC
+    { t: 0.03, blob: mkFrame(0b010, 2, 0b001001, 0, [0x05]) },              // SRC 的 Power_Ready
+    { t: 0.04, blob: (() => { const f = mkFrame(0b001, 3, 0b001001, 1, reqFull); f[f.length - 1] ^= 0xFF; return f; })() },
+    { t: 0.05, blob: Uint8Array.from([1, 2, 3]) },                          // 认不出来的残行
+  ];
   const ufcs = buildSqlite([
     {
       name: 'ufcs_chart', cols: ['Time real', 'VBUS real', 'IBUS real', 'DP real', 'DM real'],
@@ -593,8 +734,7 @@ function buildSqlite(specs) {
     },
     {
       name: 'ufcs_table', cols: ['Time real', 'Vbus real', 'Ibus real', 'Raw Blob'],
-      rows: [[0, 5.0, 1.0, Uint8Array.from([1, 2, 3, 4])],
-        [1.0, 9.0, 2.0, Uint8Array.from([5, 6, 7, 8])]],
+      rows: lines.map(({ t, blob }) => [t, 5.0, 1.0, blob]),
     },
   ]);
 
@@ -602,11 +742,21 @@ function buildSqlite(specs) {
 
   const cap = PowerzCapture.open(ufcs);
   const { packets, stats } = await cap.decode();
-  check('UFCS：模拟量可用、语义解析明确标注未实现', packets.length === 0
-    && stats.unsupportedMsgs === 2 && !!stats.unsupported
-    && stats.badWire === 0 && stats.truncatedRows === 0
-    && cap.meta.busLabels.join('/') === 'DP/DM' && cap.meta.bus.length === 2,
-    stats.unsupported);
+  const types = packets.map((p) => p.msgType).join(',');
+  check('UFCS：端到端解出报文', packets.length === 5
+    && types === 'Output_Capabilities,ACK,Request,Power_Ready,Request',
+    types);
+  check('UFCS：方向与链路', packets[0].sop === 'D+' && packets[0].role === 'SRC'
+    && packets[1].sop === 'D-' && packets[1].role === 'SNK'
+    && packets[2].role === 'SNK' && packets[3].role === 'SRC',
+    packets.map((p) => `${p.sop}/${p.role}`).join(' '));
+  check('UFCS：ACK 与被确认报文配对', packets[1].ackOf === 0 && packets[1].ackType === 'Output_Capabilities'
+    && packets[0].ackOf === undefined, `ackOf=${packets[1].ackOf}`);
+  check('UFCS：CRC 统计口径', stats.badCrc === 1 && stats.crcUnknown === 0
+    && stats.unsupportedMsgs === 0 && stats.ufcsUnlocatedRows === 1 && stats.ufcsFrames === 5,
+    `bad=${stats.badCrc} unknown=${stats.crcUnknown} 残行=${stats.ufcsUnlocatedRows}`);
+  check('UFCS：模拟量可用且不再标注未实现', cap.meta.busLabels.join('/') === 'DP/DM'
+    && cap.meta.bus.length === 2 && cap.meta.unsupported === null && stats.unsupported === null);
 
   // 不是分析仪导出的库（魔数对但没有我们认识的表）必须判为不支持，而不是勉强当 PD 解
   const alien = buildSqlite([{ name: 'logs', cols: ['ts integer'], rows: [[1]] }]);

@@ -87,8 +87,8 @@ const check = (name, ok, extra = '') => {
 /**
  * 明确「跳过」而不是静默不跑，也不是判失败。
  *
- * 用在「该断言对这份样本不成立」的场合 —— 典型是 UFCS 样本：文件载入成功、
- * 模拟量照画，但本工程没实现它的语义解析，所以一条报文都没有，
+ * 用在「该断言对这份样本不成立」的场合 —— 典型是某个 UFCS 导出：文件载入成功、
+ * 模拟量照画，但容器格式对不上、**一行报文都没定位出来**（`ufcsUnlocatedRows`），
  * 凡是依赖「列表里有行」的断言都无从谈起。跳过要计入汇总，好让人看得出
  * 这次跑的不是完整覆盖，避免「全绿」被误读成「所有断言都过了」。
  */
@@ -294,7 +294,7 @@ try {
   if (willLoad) {
     if (!DROP) await cdp.eval(`document.querySelector('#btnDemo').click()`);
     // 解码结束有两个合法终态：解出了报文（「显示 N / M 条」），
-    // 或文件载入成功但一条都没解出来（「已读入 N 条原始帧 … 语义解析未实现」）。
+    // 或文件载入成功但一条都没定位出来（「已读入 N 行 / N 条原始帧…」）。
     const DONE = /显示|已读入/;
     let stat = '';
     for (let i = 0; i < 120; i++) {
@@ -315,12 +315,23 @@ try {
     const noticeText = await cdp.eval(`(()=>{const n=document.querySelector('#notice');return n && !n.hidden ? n.innerText.replace(/\\s+/g,' ').trim() : '';})()`);
 
     // ── 「零报文」是一条正经路径，不是失败 ──
-    // 分析仪抓到了本工程未实现语义解析的协议（UFCS）：原始帧照收、模拟量照画、
-    // 只是没有报文可列。此时「列表里有行」类断言无从谈起，必须显式跳过：
+    // 文件载入成功、模拟量照画，但容器格式对不上（或本来就没有报文）：
+    // 一行报文都没定位出来。此时「列表里有行」类断言无从谈起，必须显式跳过：
     // 早先这里直接 `document.querySelector('#vrows .tr').click()`，
     // 在 0 行时报 `Cannot read properties of null`，把「本来就该是空的列表」
     // 伪装成脚本崩溃，看不出根因。
     const rowless = Number(shown || 0) === 0 && !!noticeText;
+
+    // 这一份样本是 PD 还是 UFCS —— 后面几处断言的措辞与字段名要跟着换。
+    // 判据取顶栏「来源」chip（`POWER-Z · USB PD` / `POWER-Z · UFCS`），拿不到时退回文件名。
+    const sampleSource = await cdp.eval(`(()=>{const c=[...document.querySelectorAll('#metaChips .mchip')].find(x=>/来源/.test(x.textContent));return c?c.textContent.replace(/\\s+/g,' ').trim():'';})()`);
+    const isUfcsSample = /UFCS/i.test(sampleSource) || /ufcs/i.test(DROP || '');
+
+    // UFCS 的报文类型名跟 PD 完全是两套词表，首行校验不能共用一条正则：
+    // PD 是 Source_Capabilities / VDM / PS_RDY，UFCS 是 Output_Capabilities /
+    // Sink_Information / Refuse …。行内文本只有类型名，`(UFCS)` 前缀在 title 属性里、
+    // innerText 取不到，所以这里认「链路是 D± + 类型名是 UFCS 命令表中之一」。
+    const UFCS_TYPE = /Output_Capabilities|Source_Information|Sink_Information|Cable_Information|Device_Information|Error_Information|Config_Watchdog|Refuse|Verify_Request|Verify_Response|Power_Change|Test_Request|Get_[A-Za-z_]+|Ping|Request/;
 
     // 采样率不是写死的：界面要显示「数值 + 来源」（文件声明 / 波形实测 / 默认值 / 手动指定）。
     // 分析仪导出（POWER-Z）只有毫秒时间戳，量级是 kHz，来源标「分析仪时间戳」。
@@ -332,20 +343,23 @@ try {
       && /文件声明|波形实测|默认值|手动指定|分析仪时间戳/.test(rateChip.tag), rateChip ? rateChip.text : '未找到采样率 chip');
 
     if (rowless) {
-      check('零报文已如实说明原因', /尚未实现|未实现/.test(noticeText), noticeText.slice(0, 90));
+      // 一行都没定位出报文：界面必须说清「为什么空」，且不能说成「筛选后为空」
+      // （那会让人以为是自己把报文筛掉了）。措辞两种协议各一套：
+      // PD 是「未实现」（理论到不了，因为 PD 那条路一定解得出东西），
+      // UFCS 是「没有一行能认出 UFCS 报文」。
+      const why = /没有一行|没能认出|认不出|未实现/.test(noticeText);
+      check('零报文已如实说明原因', why, noticeText.slice(0, 90));
 
-      const rawChip = await cdp.eval(`(()=>{const c=[...document.querySelectorAll('#metaChips .mchip')].find(x=>/原始帧/.test(x.textContent));return c?c.textContent.replace(/\\s+/g,' ').trim():'';})()`);
-      const rawN = Number(((rawChip.match(/原始帧\s*(\d+)/) || [])[1]) || 0);
-      check('原始帧计数已显示', rawN > 0, rawChip);
+      // 条数不能凭空消失：PD 统计行写「已读入 N 条原始帧」，
+      // UFCS 写「已读入 N 行，但没有一行能认出」—— 都带 N。
+      check('统计行给出了原始字节数', /已读入\s*\d+\s*(条原始帧|行)/.test(stat.replace(/\s+/g, ' ')), stat.replace(/\s+/g, ' ').slice(0, 90));
 
-      // 空列表也要说清「为什么空」，且必须是「协议未实现」这一种说法，
-      // 不能退化成「筛选后为空」——两者话术混用会让人以为是自己筛掉了报文
       const emptyText = await cdp.eval(`(()=>{const e=document.querySelector('#emptyState');return e && e.style.display!=='none' ? e.innerText.replace(/\\s+/g,' ').trim() : '';})()`);
-      check('空列表给出解释', /未实现/.test(emptyText) && !/当前筛选条件下没有报文/.test(emptyText), emptyText.slice(0, 90));
+      check('空列表给出解释', emptyText.length > 0 && !/当前筛选条件下没有报文/.test(emptyText), emptyText.slice(0, 90));
 
-      for (const nm of ['解析出报文', '虚拟滚动渲染出行', 'GOOD CRC 被默认屏蔽', '首行内容合理',
-        '方向标识已渲染', '点击一行 → 详情面板', '位域表已渲染', '方向过滤生效',
-        '重置筛选恢复全部', '关键字搜索生效']) skip(nm, '该样本无报文（协议语义未实现）');
+      for (const nm of ['解析出报文', '虚拟滚动渲染出行', '自动应答包默认被屏蔽', '首行内容合理',
+        '方向标识已渲染', '详情面板已填充', '位域表已渲染', '头位域块与协议匹配（二者只出现其一）',
+        '方向过滤生效', '重置筛选恢复全部', '关键字搜索生效']) skip(nm, '该样本一行报文都没定位出来');
     } else {
       check('解析出报文', Number(shown) > 0, `显示 ${shown} 条`);
 
@@ -353,10 +367,23 @@ try {
       check('虚拟滚动渲染出行', rows > 0, `${rows} 行可见`);
 
       const total = await cdp.eval(`(document.querySelector('#statLine').textContent.match(/\\/\\s*(\\d+)\\s*条/)||[])[1]`);
-      check('GOOD CRC 被默认屏蔽', Number(shown) < Number(total), `显示 ${shown} / 全部 ${total}`);
+      // 「心跳包」两种协议各叫各的：PD 是 GOOD CRC，UFCS 是 ACK / NCK —— 默认都该被屏蔽。
+      // UFCS 不强求「一定少于总数」（万一这份样本一条 ACK 都没有），但必须看到
+      // 开关文案已换成 UFCS 那一套，证明协议自适应真的生效了。
+      if (isUfcsSample) {
+        const ackSwitch = await cdp.eval(`document.querySelector('#lbHideGoodCrc').textContent.trim()`);
+        check('默认屏蔽 ACK / NCK 应答包', Number(shown) <= Number(total) && /ACK\s*\/\s*NCK/.test(ackSwitch),
+          `显示 ${shown} / 全部 ${total}（开关：${ackSwitch}）`);
+      } else {
+        check('自动应答包默认被屏蔽', Number(shown) < Number(total), `显示 ${shown} / 全部 ${total}`);
+      }
 
       const firstRow = await cdp.eval(`(()=>{const r=document.querySelector('#vrows .tr');return r?r.innerText.replace(/\\s+/g,' ').trim():'';})()`);
-      check('首行内容合理', /Source_Cap|VDM|Request|PS RDY|SOP/.test(firstRow), firstRow.slice(0, 90));
+      check('首行内容合理',
+        isUfcsSample
+          ? (/D[+±-]/.test(firstRow) && UFCS_TYPE.test(firstRow))
+          : /Source_Cap|VDM|Request|PS RDY|SOP/.test(firstRow),
+        firstRow.slice(0, 90));
 
       const dirPills = await cdp.eval(`document.querySelectorAll('#vrows .pill').length`);
       check('方向标识已渲染', dirPills > 0, `${dirPills} 个标签`);
@@ -365,9 +392,17 @@ try {
       await cdp.eval(`document.querySelector('#vrows .tr').click()`);
       await sleep(400);
       const detail = await cdp.eval(`document.querySelector('#detailBody').innerText.replace(/\\s+/g,' ').trim().slice(0,160)`);
-      check('详情面板已填充', /报文头|链路概览|字段解析/.test(detail), detail.slice(0, 80));
+      check('详情面板已填充', /消息头|报文头|链路概览|字段解析/.test(detail), detail.slice(0, 80));
       const bitRows = await cdp.eval(`document.querySelectorAll('#detailBody .dbit').length`);
       check('位域表已渲染', bitRows > 3, `${bitRows} 个位域行`);
+
+      // 头位域块是 if/else 二选一：UFCS 只该有「消息头 (16 bit)」，PD 只该有「报文头 (16 bit)」。
+      // 两条同时出现 = 协议分叉写崩了（例如 ufcs 判定失效却把原分支又输出了一遍），
+      // 这种重复在截图里很不起眼，但对读报文的人是实打实的干扰。
+      const heads = await cdp.eval(`(()=>{const t=[...document.querySelectorAll('#detailBody .dsec > h5')].map(x=>x.textContent.trim());return {msg:t.filter(x=>x==='消息头 (16 bit)').length,rep:t.filter(x=>x==='报文头 (16 bit)').length,all:t};})()`);
+      check('头位域块与协议匹配（二者只出现其一）',
+        isUfcsSample ? (heads.msg === 1 && heads.rep === 0) : (heads.rep === 1 && heads.msg === 0),
+        `消息头 ×${heads.msg} · 报文头 ×${heads.rep}`);
 
       /* 4. 过滤：只留 Sink */
       await cdp.eval(`document.querySelector('#fRole .chip[data-v="SRC"]').click()`);
@@ -408,21 +443,32 @@ try {
       const srcChip = await cdp.eval(`(()=>{const c=[...document.querySelectorAll('#metaChips .mchip')].find(x=>/来源/.test(x.textContent));return c?c.textContent.replace(/\\s+/g,' ').trim():'';})()`);
       check('标注数据来源为 POWER-Z', /POWER-Z/.test(srcChip), srcChip);
 
+      const connChip = await cdp.eval(`(()=>{const c=[...document.querySelectorAll('#metaChips .mchip')].find(x=>/插拔/.test(x.textContent));return c?c.textContent.replace(/\\s+/g,' ').trim():'';})()`);
       if (rowless) {
-        skip('CRC 口径如实（未记录而非全通过）', '该样本无报文，状态栏不涉及 CRC');
+        skip('CRC 口径与容器一致', '该样本无报文，状态栏不涉及 CRC');
         skip('显示插入/拔出事件', '该样本无连接/断开事件');
+      } else if (isUfcsSample) {
+        // UFCS 存不存 CRC 由容器决定（见 frame.js 的三级定位），界面必须与之一致：
+        // 没存 → 「CRC 未记录」；存了 → 「全通过」或「错误 N」。绝不能无条件报「全通过」。
+        const crcText = await cdp.eval(`document.querySelector('#statLine').textContent.replace(/\\s+/g,' ').trim()`);
+        check('CRC 口径与容器一致（未记录 / 全通过 / 错误 N）',
+          /CRC (未记录|全通过|错误 \d+)/.test(crcText), crcText.slice(0, 100));
       } else {
-        // 分析仪不存 CRC：界面必须说「未记录」，绝不能报「全通过」
+        // PD 的 pd_table 一律不存 CRC：界面必须说「未记录」，绝不能报「全通过」
         const crcText = await cdp.eval(`document.querySelector('#statLine').textContent.replace(/\\s+/g,' ').trim()`);
         check('CRC 口径如实（未记录而非全通过）', /CRC 未记录/.test(crcText) && !/CRC 全通过/.test(crcText), crcText.slice(0, 100));
-
-        const connChip = await cdp.eval(`(()=>{const c=[...document.querySelectorAll('#metaChips .mchip')].find(x=>/插拔/.test(x.textContent));return c?c.textContent.replace(/\\s+/g,' ').trim():'';})()`);
-        check('显示插入/拔出事件', /插拔/.test(connChip), connChip);
+      }
+      // 插拔事件是分析仪导出的「可选项」：PD 一定带，UFCS 容器一般不带。
+      // 有就必须如实显示；没有就不该硬造一个 chip（那就成了无中生有）。
+      if (!rowless) {
+        if (/插拔/.test(connChip)) check('显示插入/拔出事件', true, connChip);
+        else if (isUfcsSample) skip('显示插入/拔出事件', '该 UFCS 容器不含连接/断开标记');
+        else check('显示插入/拔出事件', false, '未找到「插拔」chip');
       }
 
       // 「差分线」那一档：只有分析仪导出才有这两路额外模拟量。
       // 档名跟着文件走 —— USB PD 是 CC1/CC2（取 CC 线），UFCS 是 DP/DM，不能写死。
-      const isUfcs = /UFCS/.test(srcChip);
+      const isUfcs = isUfcsSample;
       const wantAux = isUfcs ? /DP \/ DM/ : /CC1 \/ CC2/;
       const segVisible = await cdp.eval(`(()=>{const s=document.querySelector('#tlSeg');return !!s && !s.hidden && s.querySelectorAll('.seg-item').length===2;})()`);
       check('差分线视图可切换', segVisible === true, `档名「${await cdp.eval(`document.querySelector('#tlSegAux').textContent.trim()`)}」`);
@@ -481,11 +527,15 @@ try {
     await cdp.eval(`document.querySelector('#btnDetailClose').click()`);
     await sleep(340);
     const wCol = await detailWidth();
-    // 收起后右缘必须出现展开把手 —— 零报文样本（UFCS）里「点一行重开」这条路是断的，
-    // 没有把手面板就永久丢失了，所以这条断言对两种样本都成立、都必须过。
+    // 收起后右缘必须出现展开把手 —— 零报文样本里「点一行重开」这条路是断的，
+    // 没有把手面板就永久丢失了，所以这条断言对所有样本都成立、都必须过。
     const railVisible = await cdp.eval(`(()=>{const r=document.querySelector('#btnDetailOpen');return !!r && getComputedStyle(r).display!=='none' && r.getBoundingClientRect().width>0;})()`);
     check('收起后右缘出现展开把手', railVisible === true);
-    await cdp.eval(rowless ? `document.querySelector('#btnDetailOpen').click()` : `document.querySelector('#vrows .tr').click()`);
+    await cdp.eval(rowless
+      ? `document.querySelector('#btnDetailOpen').click()`
+      // 有行时优先「点一行重开」（顺带验证行点击这条路），
+      // 但行若因故为空就退回把手 —— 免得 null.click() 把断言失败伪装成脚本崩溃。
+      : `((document.querySelector('#vrows .tr')||document.querySelector('#btnDetailOpen'))).click()`);
     await sleep(340);
     const wBack = await detailWidth();
     check('收起后可还原宽度', wCol === 0 && wBack === w1, `收起 ${wCol} → 还原 ${wBack} px`);

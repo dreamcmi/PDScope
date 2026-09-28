@@ -49,6 +49,7 @@ html[data-theme="light"]{
   --plug: #7a3cd8;  --plug-bg: #f1e9ff;
 
   --ctrl: #0e8ba1;  --data: #159c53;  --ext: #b98600;  --vdm: #7a3cd8;  --err: #d93838;
+  --custom: #4f46e5;
 
   --row-hover: #f2f6fd;
   --row-sel:   #dbeafe;
@@ -81,6 +82,7 @@ html[data-theme="dark"]{
   --plug: #b28bfa;  --plug-bg: #251a3c;
 
   --ctrl: #45c7dd;  --data: #4ed08a;  --ext: #e6bf4a;  --vdm: #b28bfa;  --err: #ff6b6b;
+  --custom: #a5b4fc;
 
   --row-hover: #1c2430;
   --row-sel:   #1e3352;
@@ -298,6 +300,7 @@ body.side-collapsed .sidebar{ width:0; opacity:0; overflow:hidden; border-right:
 .chip.cat-ext.is-on { color:var(--ext);  border-color:color-mix(in srgb,var(--ext) 45%,transparent); }
 .chip.cat-vdm.is-on { color:var(--vdm);  border-color:color-mix(in srgb,var(--vdm) 45%,transparent); }
 .chip.cat-err.is-on { color:var(--err);  border-color:color-mix(in srgb,var(--err) 45%,transparent); }
+.chip.cat-custom.is-on{ color:var(--custom); border-color:color-mix(in srgb,var(--custom) 45%,transparent); }
 
 .switch{
   display:flex; align-items:center; gap:8px; padding:4px 0;
@@ -317,6 +320,7 @@ body.side-collapsed .sidebar{ width:0; opacity:0; overflow:hidden; border-right:
 .switch input:checked + span::after{ transform:translateX(12px); }
 .switch input:checked ~ *{ color:var(--tx); }
 .switch.sm{ font-size:11px; }
+.switch .swlb{ font-style:normal; }   /* 开关文案：不用 <span>，免得被滑块样式命中 */
 
 .text{
   width:100%; height:28px; padding:0 9px; border-radius:7px;
@@ -483,6 +487,7 @@ body.side-collapsed .sidebar{ width:0; opacity:0; overflow:hidden; border-right:
 .cat-Extended { color:var(--ext);  }
 .cat-VDM      { color:var(--vdm);  }
 .cat-Error    { color:var(--err);  }
+.cat-Custom   { color:var(--custom); }
 .cat-Plug     { color:var(--plug); }
 .td.type.cat-Data{ font-weight:700; }
 
@@ -794,7 +799,7 @@ body.detail-collapsed .detail-rail span{
         </section>
 
         <section class="fgroup">
-          <h4>SOP 类型</h4>
+          <h4 id="sopTitle">SOP 类型</h4>
           <div class="chips" id="fSop">
             <button class="chip is-on" data-v="SOP">SOP</button>
             <button class="chip is-on" data-v="SOP'">SOP&prime;</button>
@@ -805,7 +810,7 @@ body.detail-collapsed .detail-rail span{
         </section>
 
         <section class="fgroup">
-          <h4>报文类别</h4>
+          <h4 id="catTitle">报文类别</h4>
           <div class="chips" id="fCat">
             <button class="chip cat-ctrl is-on" data-v="Control">控制</button>
             <button class="chip cat-data is-on" data-v="Data">数据</button>
@@ -817,10 +822,13 @@ body.detail-collapsed .detail-rail span{
 
         <section class="fgroup">
           <h4>快速过滤</h4>
-          <label class="switch"><input type="checkbox" id="fHideGoodCrc" checked /><span></span>屏蔽 GOOD CRC 心跳包</label>
-          <label class="switch"><input type="checkbox" id="fOnlyBad" /><span></span>只看 CRC 错误</label>
-          <label class="switch"><input type="checkbox" id="fOnlyPower" /><span></span>只看功率协商（Source_Cap / Request / PPS）</label>
-          <label class="switch"><input type="checkbox" id="fOnlyEnter" /><span></span>只看状态切换（PS_RDY / VDM / Alert）</label>
+          <!-- 文案用 <em class="swlb"> 而不是裸文本：切到 UFCS 抓包时这几条要换名字
+               （「GOOD CRC 心跳」→「ACK/NCK 心跳」等），得有个能寻址的元素；
+               不能用 <span>，那会被 .switch span 当成滑块去画。 -->
+          <label class="switch"><input type="checkbox" id="fHideGoodCrc" checked /><span></span><em class="swlb" id="lbHideGoodCrc">屏蔽 GOOD CRC 心跳包</em></label>
+          <label class="switch"><input type="checkbox" id="fOnlyBad" /><span></span><em class="swlb" id="lbOnlyBad">只看 CRC 错误</em></label>
+          <label class="switch"><input type="checkbox" id="fOnlyPower" /><span></span><em class="swlb" id="lbOnlyPower">只看功率协商（Source_Cap / Request / PPS）</em></label>
+          <label class="switch"><input type="checkbox" id="fOnlyEnter" /><span></span><em class="swlb" id="lbOnlyEnter">只看状态切换（PS_RDY / VDM / Alert）</em></label>
         </section>
 
         <section class="fgroup">
@@ -846,7 +854,7 @@ body.detail-collapsed .detail-rail span{
         <section class="fgroup">
           <h4>关键字</h4>
           <input class="text" id="fSearch" placeholder="消息名 / 数据hex / 备注…" />
-          <div class="row gap wrap mt6">
+          <div class="row gap wrap mt6" id="kwRow">
             <button class="btn tiny" data-kw="PPS">PPS</button>
             <button class="btn tiny" data-kw="AVS">AVS</button>
             <button class="btn tiny" data-kw="VID">VID</button>
@@ -892,11 +900,11 @@ body.detail-collapsed .detail-rail span{
       <div class="table-wrap" id="tableWrap">
         <div class="thead" id="thead">
           <div class="th c-idx"    data-k="index">#</div>
-          <div class="th c-sop"    data-k="sop">SOP</div>
+          <div class="th c-sop"    data-k="sop" id="thSop">SOP</div>
           <div class="th c-type"   data-k="msgType">报文类型</div>
           <div class="th c-id"     data-k="msgId">ID</div>
           <div class="th c-role"   data-k="role">方向</div>
-          <div class="th c-obj"    data-k="nObj">Obj</div>
+          <div class="th c-obj"    data-k="nObj" id="thObj">Obj</div>
           <div class="th c-time"   data-k="timeMs">时间</div>
           <div class="th c-bus"    data-k="vbus">VBUS / IBUS</div>
           <div class="th c-data"   data-k="dataHex">数据 (hex)</div>
@@ -955,7 +963,7 @@ body.detail-collapsed .detail-rail span{
 
     <!-- 详情面板收起后的展开把手。
          必需而非装饰：重开详情面板原本只有「点列表里的报文」一条路（select() 里
-         去掉 detail-collapsed），而零报文的抓包（如 UFCS，语义解析未实现）列表本就是空的 ——
+         去掉 detail-collapsed），而一行报文都没定位出来的抓包（容器格式对不上）列表本就是空的 ——
          那种文件一旦按 Esc / 点 × 收起，面板就再也打不开了。 -->
     <button class="detail-rail" id="btnDetailOpen" title="展开报文详情" aria-controls="detail">
       <svg viewBox="0 0 16 16" class="i" aria-hidden="true"><path d="M9.5 3.5 5 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -5526,6 +5534,1312 @@ function isSqlite(u8) {
   return true;
 }
 
+/* ══════ src/js/ufcs/tables.js ══════ */
+/**
+ * tables.js — UFCS 协议常量表
+ *
+ * 全部取自 T/CCSA 393—2024 / T/TAF 083—2024《移动终端融合快速充电技术要求》
+ * （以下简称「规范」）第 7 章物理层、第 8 章协议层。每张表都在注释里写明出处，
+ * 便于日后核对版本（本工程参考的是 2024-04-01 发布、2024-04-08 实施的那一版）。
+ *
+ * 命名统一带 `UFCS_` 前缀：单文件打包器会把整个库拍平进同一个作用域，
+ * 不带前缀会和 pd/ 库里的同名表互相覆盖。
+ */
+
+/* ══════════════ 消息头（规范 8.2.2 表 13）══════════════ */
+
+/**
+ * 设备地址（Header bit15…13）—— 注意这是**接收方**的地址，
+ * 不是发送方；方向要结合物理链路（D+/D- 谁在发）才能还原，见 decoder.js。
+ */
+const UFCS_DEV_ADDR = {
+  0b001: '供电设备（Source）',
+  0b010: '充电设备（Sink）',
+  0b011: '线缆电子标签（Cable）',
+};
+
+/** 设备地址 → 短名（与 PD 侧的 SRC / SNK / Plug 口径对齐，界面配色直接复用） */
+const UFCS_ADDR_ROLE = { 0b001: 'SRC', 0b010: 'SNK', 0b011: 'Plug' };
+const UFCS_ROLE_ADDR = { SRC: 0b001, SNK: 0b010, Plug: 0b011 };
+
+/** 消息类型（Header bit2…0） */
+const UFCS_MSG_TYPE = {
+  0b000: '控制消息',
+  0b001: '数据消息',
+  0b010: '自定义消息',
+};
+
+/** 协议版本编号（Header bit8…3）→ 文本 */
+const UFCS_VERSION = {
+  0b000001: '1.0.0',
+  0b010001: '1.0.1',
+  0b001001: '1.2.0',
+};
+
+/**
+ * 消息头里的版本号是 6 bit，按规范 8.2.2 注 c 拆成三段：
+ * **低 2bit 大版本、中 2bit 中版本、高 2bit 小版本**。
+ * 即 V1.0.1 的编号是 010001b（高 2bit=01 小版本 1，中 2bit=00 中版本 0，低 2bit=01 大版本 1）。
+ */
+function ufcsVersionText(code) {
+  const major = code & 0b11;
+  const minor = (code >> 2) & 0b11;
+  const patch = (code >> 4) & 0b11;
+  return `${major}.${minor}.${patch}`;
+}
+
+/* ══════════════ 控制命令（规范 8.2.3 表 14）══════════════ */
+
+/**
+ * `dir` 按规范表 14 的「发送者 → 接收者」记，`req` 是规范给的强制等级。
+ * `sum` 是一句话说明，界面表格的「解析详情」列直接用它。
+ */
+const UFCS_CTRL_CMD = {
+  0x00: { name: 'Ping', dir: 'SRC/SNK → 任意', req: '必选', sum: '探测目标设备是否存在，或测试传输是否正常' },
+  0x01: { name: 'ACK', dir: '任意 → 任意', req: '必选', sum: '消息已被正确接收（CRC 校验通过）' },
+  0x02: { name: 'NCK', dir: '任意 → 任意', req: '必选', sum: '消息已被接收，但 CRC 校验失败' },
+  0x03: { name: 'Accept', dir: 'SRC/SNK → SRC/SNK', req: '必选', sum: '同意对方的请求，随后按请求调整输出' },
+  0x04: { name: 'Soft_Reset', dir: 'SRC/SNK → 任意', req: '必选', sum: '软复位：不退出 UFCS，收发状态机与缓存清零' },
+  0x05: { name: 'Power_Ready', dir: 'SRC → SNK', req: '必选', sum: '输出已调整到请求的电压/电流值' },
+  0x06: { name: 'Get_Output_Capabilities', dir: 'SNK → SRC', req: '必选', sum: '请求供电设备的电压/电流输出能力' },
+  0x07: { name: 'Get_Source_Info', dir: 'SNK → SRC', req: '必选', sum: '请求供电设备当前工作状态（输出、温度等）' },
+  0x08: { name: 'Get_Sink_Info', dir: 'SRC → SNK', req: '必选', sum: '请求充电设备当前工作状态（电池、温度等）' },
+  0x09: { name: 'Get_Cable_Info', dir: 'SRC/SNK → Cable', req: '必选', sum: '请求线缆电子标签信息（阻抗、承载能力）' },
+  0x0A: { name: 'Get_Device_Info', dir: 'SRC/SNK → SRC/SNK', req: '必选', sum: '请求对端的硬件与软件信息' },
+  0x0B: { name: 'Get_Error_Info', dir: 'SRC/SNK → SRC/SNK', req: '必选', sum: '请求对端的异常状态信息' },
+  0x0C: { name: 'Detect_Cable_Info', dir: 'SRC/SNK → SRC/SNK', req: '可选', sum: '命令对端去读线缆信息并把结果回报过来' },
+  0x0D: { name: 'Start_Cable_Detect', dir: 'SRC/SNK → SRC/SNK', req: '可选', sum: '请对方停止发送并释放 TX 总线，以便与线缆通信' },
+  0x0E: { name: 'End_Cable_Detect', dir: 'SRC/SNK → SRC/SNK', req: '可选', sum: '通知对方可重新使用 D+/D- 总线通信' },
+  0x0F: { name: 'Exit_UFCS_Mode', dir: 'SRC/SNK → SRC/SNK', req: '必选', sum: '退出 UFCS 快充模式，回到初始状态' },
+  0x10: { name: 'Get_Sink_Info_Extended', dir: 'SRC → SNK', req: '可选', sum: '请求充电设备更多状态（最大充电功率、电池电量）' },
+};
+
+/* ══════════════ 数据命令（规范 8.2.4 表 15）══════════════ */
+
+/**
+ * `len` 是规范规定的「数据长度」字段取值：
+ *   • 定长 → 数字；
+ *   • 变长 → `{ unit, min, max }`，即「每项 unit 字节、1…max 项」。
+ */
+const UFCS_DATA_CMD = {
+  0x01: { name: 'Output_Capabilities', dir: 'SRC → SNK', req: '必选', len: { unit: 8, min: 1, max: 7 }, sum: '供电设备的能力清单（每种输出模式 8 字节，最多 7 种）' },
+  0x02: { name: 'Request', dir: 'SNK → SRC', req: '必选', len: 8, sum: '充电设备请求某个输出模式下的具体电压与电流' },
+  0x03: { name: 'Source_Information', dir: 'SRC → SNK', req: '必选', len: 8, sum: '供电设备当前状态：输出电压/电流、内部与接口温度' },
+  0x04: { name: 'Sink_Information', dir: 'SNK → SRC', req: '必选', len: 8, sum: '充电设备当前状态：充电电压/电流、电池与接口温度' },
+  0x05: { name: 'Cable_Information', dir: 'Cable/SRC/SNK → SRC/SNK', req: '必选', len: 10, sum: '线缆信息：厂家识别码、阻抗、最大承载电压与电流' },
+  0x06: { name: 'Device_Information', dir: 'SRC/SNK → SRC/SNK', req: '必选', len: 8, sum: '设备信息：厂家识别码、硬/软件版本号' },
+  0x07: { name: 'Error_Information', dir: 'SRC/SNK → SRC/SNK', req: '必选', len: 4, sum: '异常状态：D+ / D- / CC 过压标志' },
+  0x08: { name: 'Config_Watchdog', dir: 'SNK → SRC', req: '必选', len: 2, sum: '配置供电设备的看门狗溢出时间（0 = 关闭看门狗）' },
+  0x09: { name: 'Refuse', dir: '任意 → SRC/SNK', req: '必选', len: 4, sum: '拒绝某条消息，并给出被拒消息的编号/类型/命令与原因' },
+  0x0A: { name: 'Verify_Request', dir: 'SRC/SNK → 任意', req: '可选', len: 17, sum: '索要鉴权：指定密钥编号并给出 16 字节随机数' },
+  0x0B: { name: 'Verify_Response', dir: '任意 → SRC/SNK', req: '可选', len: 48, sum: '鉴权应答：32 字节加密数据 + 回送 16 字节随机数' },
+  0x0C: { name: 'Power_Change', dir: 'SRC → SNK', req: '可选', len: { unit: 3, min: 1, max: 7 }, sum: '供电设备主动通知最大输出电流能力发生了变化' },
+  0x0D: { name: 'Sink_Information_Extended', dir: 'SNK → SRC', req: '可选', len: { unit: 3, min: 1, max: 15 }, sum: '充电设备扩展状态：电池电量、最大充电功率（每项 3 字节）' },
+  0xFF: { name: 'Test_Request', dir: '测试设备 → 任意', req: '必选', len: 2, sum: '测试用：命令被测设备按指定设备地址/消息类型/命令发一条消息' },
+};
+
+/* ══════════════ 输出模式（规范 8.2.4.1 表 16 / 8.2.4.12 表 25）══════════════ */
+
+/** 电流调节步进（表 16 bit59…57） */
+const UFCS_CURRENT_STEP = { 0: '10 mA', 1: '20 mA', 2: '30 mA', 3: '40 mA', 4: '50 mA' };
+
+/** 电压调节步进（表 16 bit56） */
+const UFCS_VOLTAGE_STEP = { 0: '10 mV', 1: '20 mV' };
+
+/* ══════════════ Refuse 拒绝原因（规范 8.2.4.9 表 24）══════════════ */
+
+const UFCS_REFUSE_REASON = {
+  0x01: '无法识别的命令或数据',
+  0x02: '不支持的命令或数据',
+  0x03: '设备忙，暂无法响应',
+  0x04: '请求的输出电压、电流或功率超出范围',
+  0x05: '其它原因',
+};
+
+/* ══════════════ Sink_Information_Extended 状态类型（规范 8.2.4.13 表 26）══════════════ */
+
+const UFCS_EXT_STATUS_TYPE = {
+  0b0001: '电池电量',
+  0b0010: '最大充电功率',
+};
+
+/* ══════════════ 异常信息位（规范 8.2.4.7 表 22）══════════════ */
+
+const UFCS_ERROR_BITS = [
+  { bit: 8, name: 'D+ OVP', text: '数据线 D+ 过压' },
+  { bit: 7, name: 'D- OVP', text: '数据线 D- 过压' },
+  { bit: 6, name: 'CC OVP', text: '配置通道 CC 过压' },
+];
+
+/* ══════════════ 物理链路（规范 7.4 / 7.2）══════════════ */
+
+/**
+ * 链路标签：UFCS 走 D+/D- 两条线，**供电设备的 D+ 是发送方向、充电设备的 D- 是发送方向**，
+ * 所以「消息跑在哪条线上」= 「谁在发」：
+ *   D+ → 供电设备或线缆在发；D- → 充电设备或线缆在发。
+ * 与 PD 的 SOP/SOP'/SOP'' 同处一栏展示（界面按协议自适应换名字）。
+ */
+const UFCS_LINE = { SRC: 'D+', SNK: 'D-', Plug: 'D±' };
+
+/** 波特率基准档位（规范 7.4.6）：115200 为缺省支持档位 */
+const UFCS_BAUD = [115200, 57600, 38400];
+
+/** 一个数据帧 = 1 起始位 + 8 数据位 + 1 结束位（规范 7.4.1） */
+const UFCS_BITS_PER_BYTE = 10;
+
+/* ══════════════ 单向命令表（方向还原的硬依据）══════════════ */
+
+/**
+ * 规范表 14 / 表 15 里**只有唯一发送方**的命令。有了它，「谁发给谁」就不必猜：
+ * 接收方地址（消息头）必须与下表推出的接收方一致，发送方也随之唯一确定，
+ * 物理链路（D+/D-）转而变成一道**交叉校验**而不是前提。
+ *
+ * 键 = `${消息类型}:${命令编号}`，值 = 发送方角色。
+ * 双向命令（Ping / ACK / NCK / Accept / Soft_Reset / Refuse / Get_Device_Info /
+ * Get_Error_Info / Exit_UFCS_Mode / Cable_Information / Verify_* …）不在表内。
+ */
+const UFCS_FIXED_DIR = {
+  '0:0x05': 'SRC',   // Power_Ready                供电设备 → 充电设备
+  '0:0x06': 'SNK',   // Get_Output_Capabilities    充电设备 → 供电设备
+  '0:0x07': 'SNK',   // Get_Source_Info            充电设备 → 供电设备
+  '0:0x08': 'SRC',   // Get_Sink_Info              供电设备 → 充电设备
+  '0:0x10': 'SRC',   // Get_Sink_Info_Extended     供电设备 → 充电设备
+  '1:0x01': 'SRC',   // Output_Capabilities        供电设备 → 充电设备
+  '1:0x02': 'SNK',   // Request                    充电设备 → 供电设备
+  '1:0x03': 'SRC',   // Source_Information         供电设备 → 充电设备
+  '1:0x04': 'SNK',   // Sink_Information           充电设备 → 供电设备
+  '1:0x08': 'SNK',   // Config_Watchdog            充电设备 → 供电设备
+  '1:0x0C': 'SRC',   // Power_Change               供电设备 → 充电设备
+  '1:0x0D': 'SNK',   // Sink_Information_Extended  充电设备 → 供电设备
+};
+
+/** 查单向命令的发送方；双向命令返回 null */
+const ufcsFixedSender = (mtype, cmd) => UFCS_FIXED_DIR[`${mtype}:0x${(cmd ?? 0).toString(16).toUpperCase().padStart(2, '0')}`] ?? null;
+
+/** 某角色发送时，消息头里的接收方应当是谁（用于交叉校验） */
+const ufcsPeerOf = (role) => (role === 'SRC' ? 'SNK' : role === 'SNK' ? 'SRC' : null);
+const ufcsOpposite = (role) => (role === 'SRC' ? 'SNK' : role === 'SNK' ? 'SRC' : 'SRC');
+
+/* ══════ src/js/ufcs/crc.js ══════ */
+/**
+ * crc.js — UFCS 协议层 CRC-8
+ *
+ * 依据 T/CCSA 393—2024 / T/TAF 083—2024 附录 A（规范性）：
+ *   多项式 X^8 + X^5 + X^3 + 1 → 0x29，初值 0x00，
+ *   逐字节异或后左移 8 次（MSB 优先，不反射，结果不取反）。
+ *
+ * 覆盖范围：**消息头 + 消息主体**（不含 CRC 自身，也不含物理层的 Training / 起止位）。
+ *
+ * 参考代码（规范附录 A，C 版）逐行等价：
+ *     rCRC ^= *pData++;
+ *     for (i = 8; i > 0; --i)
+ *         rCRC = (rCRC & 0x80) ? (rCRC << 1) ^ 0x29 : (rCRC << 1);
+ */
+
+/** CRC-8 多项式（X^8 + X^5 + X^3 + 1） */
+const UFCS_CRC8_POLY = 0x29;
+
+/**
+ * @param {ArrayLike<number>} bytes 消息头 + 消息主体
+ * @param {number} [len] 只算前 len 字节（默认整段）
+ * @returns {number} 0…255
+ */
+function ufcsCrc8(bytes, len = bytes.length) {
+  let c = 0;
+  for (let i = 0; i < len; i++) {
+    c ^= bytes[i] & 0xFF;
+    for (let b = 0; b < 8; b++) {
+      c = (c & 0x80) ? (((c << 1) ^ UFCS_CRC8_POLY) & 0xFF) : ((c << 1) & 0xFF);
+    }
+  }
+  return c;
+}
+
+/* ══════ src/js/ufcs/frame.js ══════ */
+/**
+ * frame.js — UFCS 数据包的「切帧」：从一段逻辑字节里认出报文边界
+ *
+ * 规范第 7 章物理层 / 第 8 章协议层给了三种包结构，**都是由高字节到低字节依次发送**
+ * （即下列字节顺序就是线上顺序）：
+ *
+ *   控制消息（图 13）  消息头(2B) │ 控制命令(1B) │ CRC(1B)
+ *   数据消息（图 14/25） 消息头(2B) │ 命令(1B) │ 数据长度(1B) │ 数据(N B) │ CRC(1B)
+ *   自定义消息（图 15/40）消息头(2B) │ 厂家识别码(2B) │ 数据长度(1B) │ 数据(N B) │ CRC(1B)
+ *
+ * 消息头（2 字节，表 13）：
+ *   bit15…13 设备地址（001b 供电 / 010b 充电 / 011b 线缆 / 其它保留）
+ *   bit12…9  消息编号
+ *   bit8…3   协议版本编号
+ *   bit2…0   消息类型（000b 控制 / 001b 数据 / 010b 自定义）
+ *
+ * 「数据长度」只数**数据区**，不含命令/长度/厂家识别码本身，也不含 CRC。
+ * 控制消息没有长度字段（恒为 1 字节命令）。
+ *
+ * ── 为什么需要 withCrc 两种读法 ────────────────────────────────────
+ * POWER-Z 这类分析仪导出时，有的实现把 CRC 一起存下来，有的只存到消息主体为止
+ * （PD 那条路径就是后者，见 core/powerz.js）。两种情况下「整帧字节数」差 1，
+ * 靠「哪一种读法刚好把 blob 消费完 / CRC 是否吻合」就能判定，不必猜。
+ */
+
+
+
+
+/** 解析 16 bit 消息头 */
+function ufcsHeaderInfo(hdr) {
+  const addr = (hdr >> 13) & 0b111;
+  const msgNo = (hdr >> 9) & 0b1111;
+  const verCode = (hdr >> 3) & 0b111111;
+  const mtype = hdr & 0b111;
+  return {
+    hdr: hdr & 0xFFFF,
+    addr, msgNo, verCode, mtype,
+    verText: UFCS_VERSION[verCode] ?? ufcsVersionText(verCode),
+    verKnown: UFCS_VERSION[verCode] !== undefined,
+    mtypeText: ['控制消息', '数据消息', '自定义消息'][mtype] ?? null,
+    addrValid: addr >= 1 && addr <= 3,
+    mtypeValid: mtype <= 2,
+  };
+}
+
+/**
+ * 一个包从消息头开始、到 CRC（不含）为止的字节数。
+ * @returns {number} bodyEnd 相对 off 的偏移；-1 = 结构不成立（截断 / 长度域越界）
+ */
+function ufcsFrameBodySize(bytes, off) {
+  const n = bytes.length;
+  if (off + 2 > n) return -1;
+  const mtype = bytes[off + 1] & 0b111;
+  if (mtype === 0) return 3;                                  // 头 2 + 命令 1
+  if (mtype === 1) {
+    if (off + 4 > n) return -1;
+    const len = bytes[off + 3];
+    if (len < 1 || len > 59) return -1;                       // 规范：数据 1…59 字节
+    return 4 + len;                                           // 头 2 + 命令 1 + 长度 1 + 数据
+  }
+  if (mtype === 2) {
+    if (off + 5 > n) return -1;
+    const len = bytes[off + 4];
+    if (len < 1 || len > 58) return -1;                       // 规范：数据 1…58 字节
+    return 5 + len;                                           // 头 2 + 厂家识别码 2 + 长度 1 + 数据
+  }
+  return -1;                                                  // bit2…0 = 011b 及以上保留
+}
+
+/**
+ * 「这一段结构上像不像一条报文」的**结构分**（只看消息头字段与命令编号是否合法，
+ * **不看 CRC**）。CRC 的结论单独用 `crcOk` 表达、在定位时按等级处理 —— 不能把
+ * 「CRC 对不上」压成负分，否则一条真·坏包会输给某个恰好能凑整的误读。
+ *
+ * @returns {number} <0 = 结构不成立；越大越可信
+ */
+function ufcsFrameScore(bytes, off, withCrc) {
+  const bodySize = ufcsFrameBodySize(bytes, off);
+  if (bodySize < 0) return -1;
+  const total = bodySize + (withCrc ? 1 : 0);
+  if (off + total > bytes.length) return -1;
+
+  const h = ufcsHeaderInfo((bytes[off] << 8) | bytes[off + 1]);
+  if (!h.addrValid || !h.mtypeValid) return -1;
+
+  let score = 1;
+  if (h.verKnown) score += 1;                                 // 版本编号命中已知值
+  if (h.mtype === 0) {
+    if (UFCS_CTRL_CMD[bytes[off + 2]]) score += 2;
+  } else if (h.mtype === 1) {
+    if (UFCS_DATA_CMD[bytes[off + 2]]) score += 2;
+  } else {
+    score += 1;                                               // 自定义消息的厂家域不校验
+  }
+  return score;
+}
+
+/**
+ * 从 off 起连续切帧，必须**正好消费到字节末尾**，否则视为「这套读法不成立」。
+ *
+ * @param {Uint8Array} bytes
+ * @param {number} off
+ * @param {boolean} withCrc
+ * @param {number} [maxFrames]
+ * @returns {null | Array<{off:number,total:number,bodyEnd:number,hdr:number,crc:number|null,
+ *                         calc:number,crcOk:boolean|null,structScore:number}>}
+ */
+function ufcsSplitFrames(bytes, off, withCrc, maxFrames = 64) {
+  const out = [];
+  let i = off;
+  while (i < bytes.length) {
+    if (out.length >= maxFrames) return null;
+    const bodySize = ufcsFrameBodySize(bytes, i);
+    if (bodySize < 0) return null;
+    const bodyEnd = i + bodySize;
+    const total = bodySize + (withCrc ? 1 : 0);
+    if (i + total > bytes.length) return null;
+
+    const hdr = (bytes[i] << 8) | bytes[i + 1];
+    const h = ufcsHeaderInfo(hdr);
+    if (!h.addrValid || !h.mtypeValid) return null;
+
+    const calc = ufcsCrc8(bytes.subarray(i, bodyEnd));
+    const crc = withCrc ? bytes[bodyEnd] : null;
+    out.push({
+      off: i, total, bodyEnd, hdr, calc,
+      crc,
+      crcOk: withCrc ? crc === calc : null,
+      structScore: ufcsFrameScore(bytes, i, withCrc),
+    });
+    i = bodyEnd + (withCrc ? 1 : 0);
+  }
+  return i === bytes.length ? out : null;
+}
+
+/**
+ * 在「前面可能带容器前缀（时间戳 / 链路字节 / Training 0xAA）」的一段 blob 里
+ * 定位 UFCS 报文起点，并逐帧切分。
+ *
+ * 做法是**穷举起始偏移 × 两种 CRC 读法**（前缀最长 16 字节），按三级择优：
+ *
+ *   A 级  带 CRC 且**每一帧的 CRC-8 都对得上**   —— 最可信，正常抓包的绝大多数行是这个
+ *   B 级  带 CRC 但**有帧对不上**               —— 真·坏包仍要解出来（不能当成「没存 CRC」）
+ *   C 级  不带 CRC（分析仪只存到消息主体为止）   —— CRC 由本工具补算，`crcOk` 记 null
+ *
+ * 同级内比结构分（消息头字段 + 命令编号是否合法），再比前缀长短（越短越可能是真的容器头）。
+ * 这样无论容器前缀是 0 / 4 字节时间戳 / 时间戳+链路字节，都落回同一条解析路径。
+ *
+ * @param {Uint8Array} blob
+ * @param {{maxPrefix?:number}} [opts]
+ * @returns {null | {prefixBytes:number, withCrc:boolean, tier:number, structScore:number,
+ *                  frames:Array, prefix:Uint8Array}}
+ */
+function ufcsLocateFrames(blob, { maxPrefix = 16 } = {}) {
+  const n = blob.length;
+  if (n < 3) return null;                 // 最小的一帧是「控制消息 + 无 CRC」= 3 字节
+  let best = null;
+
+  const better = (a, b) => {
+    if (!b) return true;
+    if (a.tier !== b.tier) return a.tier < b.tier;
+    if (a.structScore !== b.structScore) return a.structScore > b.structScore;
+    return a.prefixBytes < b.prefixBytes;
+  };
+
+  // 前缀最多占到「只剩 3 字节」为止 —— 那是「控制消息 + 无 CRC」这一最小可行帧的长度。
+  // （早先写成 n-4 会把「4 字节前缀 + 无 CRC 控制帧」这种组合整个漏掉。）
+  const limit = Math.min(maxPrefix, n - 3);
+  for (let p = 0; p <= limit; p++) {
+    for (const withCrc of [true, false]) {
+      const frames = ufcsSplitFrames(blob, p, withCrc);
+      if (!frames || !frames.length) continue;
+      const allOk = withCrc && frames.every((f) => f.crcOk === true);
+      const cand = {
+        prefixBytes: p,
+        withCrc,
+        tier: allOk ? 0 : (withCrc ? 1 : 2),
+        structScore: frames.reduce((s, f) => s + f.structScore, 0),
+        frames,
+        prefix: blob.subarray(0, p),
+      };
+      if (better(cand, best)) best = cand;
+    }
+  }
+  return best;
+}
+
+/* ══════ src/js/ufcs/format.js ══════ */
+/**
+ * format.js — UFCS 载荷的位域取值与文本格式化
+ *
+ * 与 PD 侧最大的不同：UFCS 的**多字节字段是高字节在前**（规范反复强调
+ * 「发送的时候，先发送高字节」，见 8.2.2 / 8.2.4.1 / 8.2.4.2 …）。
+ * 也就是载荷字节数组本身就是一份「大端位串」，payload[0] 是最高字节。
+ *
+ * 于是「取 bit msb…lsb」的定位是：
+ *     字节下标 = n - 1 - (bit >> 3)      （n = 载荷字节数）
+ *     位  下标 = bit & 7
+ * 例如 8 字节的 Request：bit63…60 落在 payload[0] 的高 4 位，
+ * bit15…0 落在 payload[6..7]。下面 ufcsBits() 就按这个做，逐位累加，
+ * 只处理 ≤32 bit 的字段（本规范最大的单字段是 16 bit），不触碰 JS 的 32 位整数边界。
+ *
+ * 所有顶层名字都带 `ufcs` / `UFCS` 前缀 —— 单文件打包器会把整个库拍平进一个作用域，
+ * 重名会互相覆盖（详见 tools/build-standalone.mjs 的跨模块重名检测）。
+ */
+
+/** 位域：[msb..lsb] → 无符号整数（载荷按大端位串解读） */
+function ufcsBits(bytes, msb, lsb) {
+  const n = bytes.length;
+  let v = 0;
+  for (let b = lsb; b <= msb; b++) {
+    const byteIdx = n - 1 - (b >> 3);
+    if (byteIdx < 0 || byteIdx >= n) continue;
+    if ((bytes[byteIdx] >> (b & 7)) & 1) v += 2 ** (b - lsb);
+  }
+  return v;
+}
+
+/** 单个比特 */
+const ufcsBit = (bytes, i) => ufcsBits(bytes, i, i);
+
+/** 位域名：`B31-16` / `B8`（详情页字段标题） */
+const ufcsRange = (msb, lsb) => (msb === lsb ? `B${msb}` : `B${msb}-${lsb}`);
+
+/** 整个载荷 → 十六进制串（按线上顺序，高字节在前） */
+function ufcsHex(bytes) {
+  let s = '';
+  for (const b of bytes) s += b.toString(16).padStart(2, '0').toUpperCase();
+  return s;
+}
+
+/** 大端读 16 位（越界返回 0） */
+const ufcsU16BE = (bytes, off = 0) => ((bytes[off] ?? 0) << 8) | (bytes[off + 1] ?? 0);
+
+/** 数字 → 文本（整数不带小数点，浮点最多 3 位） */
+function ufcsNum(v) {
+  if (!Number.isFinite(v)) return String(v);
+  if (Number.isInteger(v)) return String(v);
+  return String(Math.round(v * 1000) / 1000);
+}
+
+/** 布尔位 → `1 (…)/0 (…)` */
+const ufcsFlag = (on, t = '是', f = '否') => (on ? `1 (${t})` : `0 (${f})`);
+
+/** 保留域：非 0 时提示（规范要求接收端忽略，但非 0 常意味着版本差异） */
+function ufcsReserved(bytes, msb, lsb) {
+  const raw = ufcsBits(bytes, msb, lsb);
+  return raw === 0 ? '0（未使用）' : `0x${raw.toString(16).toUpperCase()} ⚠ 规范要求此域为 0`;
+}
+
+/** 电压：单位 10 mV */
+const ufcsVolt = (v10mv) => `${ufcsNum(v10mv / 100)} V`;
+/** 电流：单位 10 mA */
+const ufcsAmp = (v10ma) => `${ufcsNum(v10ma / 100)} A`;
+/** 温度：值 - 50（0 表示无数据） */
+const ufcsTemp = (raw) => (raw === 0 ? '无数据（00h）' : `${raw - 50} °C`);
+/** 十六进制定长 */
+const ufcsHexNum = (v, digits = 4) => '0x' + v.toString(16).toUpperCase().padStart(digits, '0');
+
+/** 字节数组 → 可打印 ASCII（不可打印位用 `·`，遇 0 截断） */
+function ufcsAscii(bytes) {
+  let s = '';
+  for (const b of bytes) {
+    if (b === 0) break;
+    s += (b >= 0x20 && b <= 0x7E) ? String.fromCharCode(b) : '·';
+  }
+  return s;
+}
+
+/** 字节数组 → 空格分隔的 hex（界面「数据」列用） */
+function ufcsHexSpaced(bytes) {
+  const out = [];
+  for (const b of bytes) out.push(b.toString(16).padStart(2, '0').toUpperCase());
+  return out.join(' ');
+}
+
+/* ══════ src/js/ufcs/payload.js ══════ */
+/**
+ * payload.js — UFCS 各类消息的载荷逐字段解析
+ *
+ * 规范第 8 章把消息分成三类，本文件负责其中「消息主体」那一层的语义：
+ *   • 控制消息（8.2.3）   主体只有 1 字节命令，无载荷 —— 由 decoder 直接判定，不进来；
+ *   • 数据消息（8.2.4）   命令(1) + 数据长度(1) + 数据(N)
+ *   • 自定义消息（8.2.5） 厂家识别码(2) + 数据长度(1) + 数据(N)
+ *
+ * 所有多字节字段按规范「先发送高字节」的约定解读，位域定位见 format.js#ufcsBits。
+ *
+ * 每个解析器都往 `em` 里发两种东西：
+ *   em.object(标题)   开一个新的详情分组（界面按它切块、上色）
+ *   em.detail(k, v)   一行字段
+ *   em.note(text)     追加到表格「解析详情」列的一句话摘要
+ * 返回值为本条消息的摘要文本（decoder 会再补一句）。
+ */
+
+
+
+
+/* ────────────────────────── 小工具 ────────────────────────── */
+
+/** 一段数据按固定长度切成若干项；长度不整除时只解析整项并报出余数 */
+function chunk(bytes, unit) {
+  const items = [];
+  const n = Math.floor(bytes.length / unit);
+  for (let i = 0; i < n; i++) items.push(bytes.subarray(i * unit, (i + 1) * unit));
+  return { items, rest: bytes.length % unit };
+}
+
+/** 长度校验：不符就记一条告警，但照样按实际长度尽力解析（不丢信息） */
+function checkLen(em, warns, actual, expect) {
+  if (actual === expect) return true;
+  warns.push({ long: `数据长度不符：规范要求 ${expect} 字节，实际 ${actual} 字节`, short: 'LEN' });
+  em.detail('⚠ 长度异常', `规范要求 ${expect} 字节，实际 ${actual} 字节`);
+  return false;
+}
+
+/* ────────────────────────── 输出模式（表 16）────────────────────────── */
+
+/** 一种输出模式 = 8 字节（bit63…0），见规范表 16 */
+function outputMode(em, m, i) {
+  const modeNo = ufcsBits(m, 63, 60);
+  const curStep = ufcsBits(m, 59, 57);
+  const voltStep = ufcsBit(m, 56);
+  const maxV = ufcsBits(m, 55, 40);
+  const minV = ufcsBits(m, 39, 24);
+  const maxI = ufcsBits(m, 23, 8);
+  const minI = ufcsBits(m, 7, 0);
+
+  em.object(`输出模式 #${i + 1}`);
+  em.detail(`输出模式编号 [${ufcsRange(63, 60)}]`, `${modeNo}（规范要求 1…7，且与顺序一致）`);
+  em.detail(`电流调节步进 [${ufcsRange(59, 57)}]`, `${curStep} · ${UFCS_CURRENT_STEP[curStep] ?? '保留值'}`);
+  em.detail('电压调节步进 [B56]', `${voltStep} · ${UFCS_VOLTAGE_STEP[voltStep]}`);
+  em.detail(`最大输出电压 [${ufcsRange(55, 40)}]`, `${maxV} × 10mV = ${ufcsVolt(maxV)}`);
+  em.detail(`最小输出电压 [${ufcsRange(39, 24)}]`, `${minV} × 10mV = ${ufcsVolt(minV)}`);
+  em.detail(`最大输出电流 [${ufcsRange(23, 8)}]`, `${maxI} × 10mA = ${ufcsAmp(maxI)}`);
+  em.detail(`最小输出电流 [${ufcsRange(7, 0)}]`, `${minI} × 10mA = ${ufcsAmp(minI)}`);
+  return `模式${modeNo}: ${ufcsVolt(minV)}–${ufcsVolt(maxV)} / ${ufcsAmp(minI)}–${ufcsAmp(maxI)}`
+    + `（步进 ${UFCS_VOLTAGE_STEP[voltStep] ?? '?'}/${UFCS_CURRENT_STEP[curStep] ?? '?'}）`;
+}
+
+/* ────────────────────────── 各命令解析器 ────────────────────────── */
+
+/**
+ * 数据消息载荷解析。
+ * @param {object} em 详情发射器
+ * @param {number} cmd 命令编号
+ * @param {Uint8Array} data 数据区
+ * @param {Array} warns 告警收集器
+ * @param {object} ctx { name, h, dataLen }
+ * @returns {string} 摘要
+ */
+function ufcsDataPayload(em, cmd, data, warns, ctx) {
+  switch (cmd) {
+    case 0x01: return payloadOutputCapabilities(em, data, warns);
+    case 0x02: return payloadRequest(em, data, warns);
+    case 0x03: return payloadSourceInfo(em, data, warns);
+    case 0x04: return payloadSinkInfo(em, data, warns);
+    case 0x05: return payloadCableInfo(em, data, warns);
+    case 0x06: return payloadDeviceInfo(em, data, warns);
+    case 0x07: return payloadErrorInfo(em, data, warns);
+    case 0x08: return payloadConfigWatchdog(em, data, warns);
+    case 0x09: return payloadRefuse(em, data, warns);
+    case 0x0A: return payloadVerifyRequest(em, data, warns);
+    case 0x0B: return payloadVerifyResponse(em, data, warns);
+    case 0x0C: return payloadPowerChange(em, data, warns);
+    case 0x0D: return payloadSinkInfoExtended(em, data, warns);
+    case 0xFF: return payloadTestRequest(em, data, warns);
+    default: return payloadUnknown(em, data, ctx);
+  }
+}
+
+/** 8.2.4.1 Output_Capabilities */
+function payloadOutputCapabilities(em, d, warns) {
+  const { items, rest } = chunk(d, 8);
+  if (!items.length) { em.detail('数据', `0x${ufcsHex(d)}`); return '数据长度为 0，无法解析输出模式'; }
+  if (rest) checkLen(em, warns, d.length, items.length * 8);
+  if (items.length > 7) warns.push({ long: `输出模式最多 7 种，实际 ${items.length} 种`, short: 'MODE' });
+  const parts = items.map((m, i) => outputMode(em, m, i));
+  const s = `${items.length} 种输出模式 · ${parts[0]}${items.length > 1 ? ' …' : ''}`;
+  em.note(s);
+  return s;
+}
+
+/** 8.2.4.2 Request */
+function payloadRequest(em, d, warns) {
+  checkLen(em, warns, d.length, 8);
+  const modeNo = ufcsBits(d, 63, 60);
+  const volt = ufcsBits(d, 31, 16);
+  const cur = ufcsBits(d, 15, 0);
+  em.object('请求数据（Request）');
+  em.detail(`输出模式编号 [${ufcsRange(63, 60)}]`, `${modeNo}（引用 Output_Capabilities 中的第几个输出模式）`);
+  em.detail(`保留 [${ufcsRange(59, 32)}]`, ufcsReserved(d, 59, 32));
+  em.detail(`请求输出电压 [${ufcsRange(31, 16)}]`, `${volt} × 10mV = ${ufcsVolt(volt)}`);
+  em.detail(`请求输出电流 [${ufcsRange(15, 0)}]`, `${cur} × 10mA = ${ufcsAmp(cur)}`);
+  const s = `请求模式 ${modeNo}：${ufcsVolt(volt)} / ${ufcsAmp(cur)}`;
+  em.note(s);
+  return s;
+}
+
+/** 8.2.4.3 Source_Information */
+function payloadSourceInfo(em, d, warns) {
+  checkLen(em, warns, d.length, 8);
+  const period = ufcsBits(d, 51, 48);
+  const tIn = ufcsBits(d, 47, 40);
+  const tOut = ufcsBits(d, 39, 32);
+  const volt = ufcsBits(d, 31, 16);
+  const cur = ufcsBits(d, 15, 0);
+  em.object('状态信息（Source_Information）');
+  em.detail(`保留 [${ufcsRange(63, 52)}]`, ufcsReserved(d, 63, 52));
+  em.detail(`Sink_Info_Extended 最小周期 [${ufcsRange(51, 48)}]`,
+    period === 0 ? '0000b：不支持充电设备主动上报 Sink_Information_Extended' : `${period} × 100ms = ${period * 100} ms`);
+  em.detail(`内部温度 [${ufcsRange(47, 40)}]`, `${tIn} → ${ufcsTemp(tIn)}`);
+  em.detail(`输出口温度 [${ufcsRange(39, 32)}]`, `${tOut} → ${ufcsTemp(tOut)}`);
+  em.detail(`当前输出电压 [${ufcsRange(31, 16)}]`, `${volt} × 10mV = ${ufcsVolt(volt)}`);
+  em.detail(`当前输出电流 [${ufcsRange(15, 0)}]`, `${cur} × 10mA = ${ufcsAmp(cur)}`);
+  const s = `输出 ${ufcsVolt(volt)} / ${ufcsAmp(cur)} · 内部 ${ufcsTemp(tIn)} · 接口 ${ufcsTemp(tOut)}`;
+  em.note(s);
+  return s;
+}
+
+/** 8.2.4.4 Sink_Information */
+function payloadSinkInfo(em, d, warns) {
+  checkLen(em, warns, d.length, 8);
+  const tBat = ufcsBits(d, 47, 40);
+  const tIn = ufcsBits(d, 39, 32);
+  const volt = ufcsBits(d, 31, 16);
+  const cur = ufcsBits(d, 15, 0);
+  em.object('状态信息（Sink_Information）');
+  em.detail(`保留 [${ufcsRange(63, 48)}]`, ufcsReserved(d, 63, 48));
+  em.detail(`电池温度 [${ufcsRange(47, 40)}]`, `${tBat} → ${ufcsTemp(tBat)}`);
+  em.detail(`输入接口温度 [${ufcsRange(39, 32)}]`, `${tIn} → ${ufcsTemp(tIn)}`);
+  em.detail(`当前充电电压 [${ufcsRange(31, 16)}]`, `${volt} × 10mV = ${ufcsVolt(volt)}（进入充电 IC 之前）`);
+  em.detail(`当前充电电流 [${ufcsRange(15, 0)}]`, `${cur} × 10mA = ${ufcsAmp(cur)}（进入充电 IC 之前）`);
+  const s = `充电 ${ufcsVolt(volt)} / ${ufcsAmp(cur)} · 电池 ${ufcsTemp(tBat)} · 接口 ${ufcsTemp(tIn)}`;
+  em.note(s);
+  return s;
+}
+
+/** 8.2.4.5 Cable_Information */
+function payloadCableInfo(em, d, warns) {
+  checkLen(em, warns, d.length, 10);
+  const vid = ufcsBits(d, 79, 64);
+  const custom = ufcsBits(d, 63, 48);
+  const imp = ufcsBits(d, 47, 32);
+  const maxV = ufcsBits(d, 31, 16);
+  const maxI = ufcsBits(d, 15, 0);
+  em.object('线缆信息（Cable_Information）');
+  em.detail(`厂家识别码 [${ufcsRange(79, 64)}]`, `${ufcsHexNum(vid)}`);
+  em.detail(`厂家自定义识别码 [${ufcsRange(63, 48)}]`, `${ufcsHexNum(custom)}`);
+  em.detail(`线缆阻抗 [${ufcsRange(47, 32)}]`, `${imp} mΩ`);
+  em.detail(`最大承载电压 [${ufcsRange(31, 16)}]`, `${maxV} × 10mV = ${ufcsVolt(maxV)}`);
+  em.detail(`最大承载电流 [${ufcsRange(15, 0)}]`, `${maxI} × 10mA = ${ufcsAmp(maxI)}`);
+  const s = `线缆承载 ${ufcsVolt(maxV)} / ${ufcsAmp(maxI)} · 阻抗 ${imp} mΩ · VID ${ufcsHexNum(vid)}`;
+  em.note(s);
+  return s;
+}
+
+/** 8.2.4.6 Device_Information */
+function payloadDeviceInfo(em, d, warns) {
+  checkLen(em, warns, d.length, 8);
+  const vid = ufcsBits(d, 63, 48);
+  const custom = ufcsBits(d, 47, 32);
+  const hw = ufcsBits(d, 31, 16);
+  const sw = ufcsBits(d, 15, 0);
+  em.object('设备信息（Device_Information）');
+  em.detail(`厂家识别码 [${ufcsRange(63, 48)}]`, ufcsHexNum(vid));
+  em.detail(`厂家自定义识别码 [${ufcsRange(47, 32)}]`, ufcsHexNum(custom));
+  em.detail(`设备硬件版本号 [${ufcsRange(31, 16)}]`, `0x${hw.toString(16).toUpperCase().padStart(4, '0')}（厂家自定义格式，0 = 未填写）`);
+  em.detail(`设备软件版本号 [${ufcsRange(15, 0)}]`, `0x${sw.toString(16).toUpperCase().padStart(4, '0')}（厂家自定义格式，0 = 未填写）`);
+  const s = `VID ${ufcsHexNum(vid)} · HW 0x${hw.toString(16).toUpperCase().padStart(4, '0')} / SW 0x${sw.toString(16).toUpperCase().padStart(4, '0')}`;
+  em.note(s);
+  return s;
+}
+
+/** 8.2.4.7 Error_Information */
+function payloadErrorInfo(em, d, warns) {
+  checkLen(em, warns, d.length, 4);
+  em.object('异常信息（Error_Information）');
+  const fired = [];
+  for (const e of UFCS_ERROR_BITS) {
+    const on = ufcsBit(d, e.bit);
+    em.detail(`${e.name} [B${e.bit}]`, ufcsFlag(on, e.text, '正常'));
+    if (on) fired.push(e.name);
+  }
+  em.detail(`保留 [${ufcsRange(31, 9)}]`, ufcsReserved(d, 31, 9));
+  em.detail(`保留 [${ufcsRange(5, 0)}]`, ufcsReserved(d, 5, 0));
+  const s = fired.length ? `异常：${fired.join('、')}` : '无异常（D+/D-/CC 均正常）';
+  em.note(s);
+  return s;
+}
+
+/** 8.2.4.8 Config_Watchdog */
+function payloadConfigWatchdog(em, d, warns) {
+  checkLen(em, warns, d.length, 2);
+  const ms = ufcsBits(d, 15, 0);
+  em.object('配置信息（Config_Watchdog）');
+  em.detail(`看门狗溢出时间 [${ufcsRange(15, 0)}]`, ms === 0 ? '0 → 关闭看门狗功能' : `${ms} ms`);
+  const s = ms === 0 ? '关闭看门狗' : `看门狗 ${ms} ms`;
+  em.note(s);
+  return s;
+}
+
+/** 8.2.4.9 Refuse */
+function payloadRefuse(em, d, warns) {
+  checkLen(em, warns, d.length, 4);
+  const msgNo = ufcsBits(d, 27, 24);
+  const mtype = ufcsBits(d, 18, 16);
+  const cmd = ufcsBits(d, 15, 8);
+  const reason = ufcsBits(d, 7, 0);
+  em.object('反馈信息（Refuse）');
+  em.detail(`保留 [${ufcsRange(31, 28)}]`, ufcsReserved(d, 31, 28));
+  em.detail(`被拒消息的消息编号 [${ufcsRange(27, 24)}]`, String(msgNo));
+  em.detail(`保留 [${ufcsRange(23, 19)}]`, ufcsReserved(d, 23, 19));
+  em.detail(`被拒消息的消息类型 [${ufcsRange(18, 16)}]`, `${mtype} · ${UFCS_MSG_TYPE[mtype] ?? '保留值'}`);
+  em.detail(`被拒消息的命令编号 [${ufcsRange(15, 8)}]`, `0x${cmd.toString(16).toUpperCase().padStart(2, '0')}`);
+  em.detail(`拒绝原因 [${ufcsRange(7, 0)}]`, `0x${reason.toString(16).toUpperCase().padStart(2, '0')} · ${UFCS_REFUSE_REASON[reason] ?? '保留值'}`);
+  const s = `拒绝 0x${cmd.toString(16).toUpperCase().padStart(2, '0')}（消息类型 ${mtype}）：${UFCS_REFUSE_REASON[reason] ?? `原因码 0x${reason.toString(16).toUpperCase()}`}`;
+  em.note(s);
+  return s;
+}
+
+/** 8.2.4.10 Verify_Request */
+function payloadVerifyRequest(em, d, warns) {
+  checkLen(em, warns, d.length, 17);
+  const key = d[0];
+  const rand = d.subarray(1, 17);
+  em.object('鉴权请求（Verify_Request）');
+  em.detail('密钥编号 [B0]', `0x${(key ?? 0).toString(16).toUpperCase().padStart(2, '0')}`);
+  em.detail(`随机数据 [16 字节]`, `0x${ufcsHex(rand)}`);
+  const s = `密钥编号 0x${(key ?? 0).toString(16).toUpperCase().padStart(2, '0')} · 随机数 0x${ufcsHex(rand).slice(0, 8)}…`;
+  em.note(s);
+  return s;
+}
+
+/** 8.2.4.11 Verify_Response */
+function payloadVerifyResponse(em, d, warns) {
+  checkLen(em, warns, d.length, 48);
+  const enc = d.subarray(0, 32);
+  const rand = d.subarray(32, 48);
+  em.object('鉴权应答（Verify_Response）');
+  em.detail(`加密数据 [32 字节]`, `0x${ufcsHex(enc)}`);
+  em.detail(`随机数据 [16 字节]`, `0x${ufcsHex(rand)}`);
+  const s = `加密数据 0x${ufcsHex(enc).slice(0, 8)}… · 随机数 0x${ufcsHex(rand).slice(0, 8)}…`;
+  em.note(s);
+  return s;
+}
+
+/** 8.2.4.12 Power_Change */
+function payloadPowerChange(em, d, warns) {
+  const { items, rest } = chunk(d, 3);
+  if (!items.length) { em.detail('数据', `0x${ufcsHex(d)}`); return '数据长度为 0'; }
+  if (rest) checkLen(em, warns, d.length, items.length * 3);
+  if (items.length > 7) warns.push({ long: `Power_Change 最多 7 种输出模式，实际 ${items.length}`, short: 'MODE' });
+  const parts = [];
+  items.forEach((m, i) => {
+    const modeNo = ufcsBits(m, 23, 20);
+    const fast = ufcsBit(m, 19);
+    const maxI = ufcsBits(m, 15, 0);
+    em.object(`输出模式 #${i + 1}`);
+    em.detail(`输出模式编号 [${ufcsRange(23, 20)}]`, String(modeNo));
+    em.detail('快速调整输出功率 [B19]', ufcsFlag(fast, '要求立即一次性降到该电流', '可在 1 秒内逐步调整'));
+    em.detail(`保留 [${ufcsRange(18, 16)}]`, ufcsReserved(m, 18, 16));
+    em.detail(`最大输出电流 [${ufcsRange(15, 0)}]`, `${maxI} × 10mA = ${ufcsAmp(maxI)}`);
+    parts.push(`模式${modeNo}→${ufcsAmp(maxI)}`);
+  });
+  const s = `最大输出电流变更：${parts.join('、')}`;
+  em.note(s);
+  return s;
+}
+
+/** 8.2.4.13 Sink_Information_Extended */
+function payloadSinkInfoExtended(em, d, warns) {
+  const { items, rest } = chunk(d, 3);
+  if (!items.length) { em.detail('数据', `0x${ufcsHex(d)}`); return '数据长度为 0'; }
+  if (rest) checkLen(em, warns, d.length, items.length * 3);
+  if (items.length > 15) warns.push({ long: `状态信息最多 15 项，实际 ${items.length}`, short: 'ITEM' });
+  const parts = [];
+  const seen = new Set();
+  items.forEach((m, i) => {
+    const type = ufcsBits(m, 23, 20);
+    const val = ufcsBits(m, 15, 0);
+    em.object(`状态信息 #${i + 1}`);
+    em.detail(`状态信息类型 [${ufcsRange(23, 20)}]`, `${type.toString(2).padStart(4, '0')}b · ${UFCS_EXT_STATUS_TYPE[type] ?? '保留值'}`);
+    em.detail(`保留 [${ufcsRange(19, 16)}]`, ufcsReserved(m, 19, 16));
+    let text;
+    if (type === 0b0001) text = `${ufcsNum(val / 100)} %（${val} × 0.01%）`;
+    else if (type === 0b0010) text = `${val} W`;
+    else text = `原始值 ${val}`;
+    em.detail(`状态数据 [${ufcsRange(15, 0)}]`, text);
+    if (seen.has(type) && (type === 1 || type === 2)) {
+      warns.push({ long: '同一条消息里出现两个及以上同类型状态信息（规范不允许）', short: 'DUP' });
+    }
+    seen.add(type);
+    parts.push(`${UFCS_EXT_STATUS_TYPE[type] ?? `类型${type}`}=${text}`);
+  });
+  const s = parts.join('、');
+  em.note(s);
+  return s;
+}
+
+/** 8.2.4.14 Test_Request */
+function payloadTestRequest(em, d, warns) {
+  checkLen(em, warns, d.length, 2);
+  const en = ufcsBit(d, 15);
+  const vacc = ufcsBit(d, 14);
+  const addr = ufcsBits(d, 13, 11);
+  const mtype = ufcsBits(d, 10, 8);
+  const cmd = ufcsBits(d, 7, 0);
+  em.object('测试内容（Test_Request）');
+  em.detail('使能测试模式 [B15]', ufcsFlag(en, '被测设备工作在测试模式', '正常模式'));
+  em.detail('电压精度测试模式 [B14]', ufcsFlag(vacc, '输出电流可比设置值偏大 10%', '关闭'));
+  em.detail(`设备地址 [${ufcsRange(13, 11)}]`, `${addr.toString(2).padStart(3, '0')}b · ${UFCS_DEV_ADDR[addr] ?? (addr === 0 ? '未指定' : '保留')}`);
+  em.detail(`消息类型 [${ufcsRange(10, 8)}]`, `${mtype} · ${UFCS_MSG_TYPE[mtype] ?? '保留值'}`);
+  em.detail(`命令编号 [${ufcsRange(7, 0)}]`, `0x${cmd.toString(16).toUpperCase().padStart(2, '0')}`);
+  const onlyEnable = (addr === 0b111 && mtype === 0b111 && cmd === 0xFF);
+  const s = onlyEnable
+    ? `仅${en ? '使能' : '关闭'}测试模式${vacc ? ' + 电压精度测试' : ''}（未命令发送具体消息）`
+    : `命令 ${UFCS_DEV_ADDR[addr] ?? '地址' + addr} 发送 类型${mtype}/命令0x${cmd.toString(16).toUpperCase()}`;
+  em.note(s);
+  return s;
+}
+
+/** 规范未定义的命令编号：如实列出原始数据，不硬套结构 */
+function payloadUnknown(em, d, ctx) {
+  em.object(`未知命令 0x${ctx.cmd.toString(16).toUpperCase()} 的数据`);
+  em.detail('原始数据', `0x${ufcsHex(d)}`);
+  const s = `未定义的数据命令 0x${ctx.cmd.toString(16).toUpperCase()}（${d.length} 字节，按原始字节列出）`;
+  em.note(s);
+  return s;
+}
+
+/* ────────────────────────── 自定义消息 ────────────────────────── */
+
+/** 8.2.5 厂家自定义消息：厂家识别码(2) + 数据长度(1) + 数据(N)，内容由厂家定义 */
+function ufcsCustomPayload(em, vid, data) {
+  em.object('厂家自定义消息');
+  em.detail('厂家识别码 [2 字节]', ufcsHexNum(vid));
+  em.detail('数据长度', `${data.length} 字节`);
+  em.detail('数据', data.length ? `0x${ufcsHex(data)}` : '（空）');
+  const s = `厂家自定义（识别码 ${ufcsHexNum(vid)}，${data.length} 字节数据）`;
+  em.note(s);
+  return s;
+}
+
+/** 逐字节列出（自定义消息 / 未知命令的诊断用，最多 48 项以免详情页被淹没） */
+function ufcsDumpBytes(em, data) {
+  if (!data.length) return;
+  em.object('数据字节');
+  const n = Math.min(data.length, 48);
+  for (let i = 0; i < n; i++) {
+    em.detail(`byte[${i}]`, `0x${data[i].toString(16).toUpperCase().padStart(2, '0')} · ${data[i]}`);
+  }
+  if (data.length > n) em.detail('…', `另有 ${data.length - n} 字节（见上方整段 hex）`);
+}
+
+/* ══════ src/js/ufcs/decoder.js ══════ */
+/**
+ * decoder.js — UFCS 报文解码器（`src/js/ufcs/` 独立库的主入口）
+ *
+ * 流水线：
+ *   逻辑字节（消息头 2B + 消息主体 + CRC 1B）
+ *     → 消息头四段位域（设备地址 / 消息编号 / 协议版本 / 消息类型）
+ *     → 按类型取主体（控制 1B 命令 / 数据 命令+长度+数据 / 自定义 厂家码+长度+数据）
+ *     → CRC-8 校验
+ *     → 结合物理链路（D+/D-）还原「谁发给谁」
+ *     → 逐字段语义解析（payload.js）
+ *
+ * 依据：T/CCSA 393—2024 / T/TAF 083—2024《移动终端融合快速充电技术要求》。
+ *
+ * ── 关于「方向」──────────────────────────────────────────────────
+ * UFCS 的消息头里只有**接收方**的设备地址（表 13），没有发送方。但物理层是
+ * D+/D- 全双工（规范 7.2）：**供电设备 D+ 是 TX、充电设备 D- 是 TX**。
+ * 所以「跑在哪条线上」+「接收方是谁」就能唯一确定发送方：
+ *
+ *   T× \ 收  供电设备(SRC)   充电设备(SNK)   线缆(Plug)
+ *   D+        线缆            供电设备        供电设备
+ *   D-        充电设备        线缆            充电设备
+ *
+ * 分析仪导出若带了「链路字节」（见 core/powerz.js）就用它；没带时只能按接收方推断，
+ * 并在详情里如实标注「按接收方推断」而不是假装确定。
+ *
+ * 本文件只依赖同目录模块，浏览器 / Node 双栈通用，且不引入任何 Node 专有 API。
+ */
+
+
+
+
+
+
+
+/** 缺省波特率（规范 7.4.6：115200 为缺省支持档位）。容器不给速率时按它折算「线上时长」。 */
+const UFCS_DEFAULT_BAUD = UFCS_BAUD[0];
+
+/** 角色 → 中文名 */
+const ufcsRoleText = (r) => (r === 'SRC' ? '供电设备' : r === 'SNK' ? '充电设备' : r === 'Plug' ? '线缆电子标签' : '未知');
+
+/** 控制消息里「自动应答类」命令：它们本身不携带业务含义，配对显示才有价值 */
+const UFCS_AUTO_ACK = new Set(['ACK', 'NCK']);
+
+/**
+ * 把「设备地址 + 命令 + 链路」还原成「发送方 / 接收方」。
+ *
+ * 三级判据，越靠前越硬：
+ *   ① **规范单向定义**（tables.js#UFCS_FIXED_DIR）—— 例如 Output_Capabilities 只可能
+ *      是供电设备发给充电设备，那么接收方地址必然是 010b，发送方唯一确定，链路也随之确定。
+ *      此时若消息头里的接收方对不上，说明报文被解错或设备实现有偏差，如实报出来。
+ *   ② **物理链路**（分析仪容器给出的链路字节）—— 供电设备 D+ 是 TX、充电设备 D- 是 TX，
+ *      配合接收方地址即可唯一确定发送方（线缆也在内）。
+ *   ③ **按接收方推断** —— 两条都没有时只能推断，标记 inferred，界面会写明「推断」。
+ *
+ * @param {number} addr 接收方设备地址（消息头 bit15…13）
+ * @param {string|null} line 'D+' | 'D-' | null
+ * @param {string|null} fixedSender 规范单向定义给出的发送方角色，或 null
+ */
+function ufcsResolveDirection(addr, line, fixedSender = null) {
+  const receiver = UFCS_ADDR_ROLE[addr] ?? null;
+
+  if (fixedSender) {
+    const expect = ufcsPeerOf(fixedSender);
+    return {
+      sender: fixedSender, receiver, inferred: false, ambiguous: false, source: 'spec',
+      line: UFCS_LINE[fixedSender] ?? null,
+      mismatch: expect != null && receiver !== expect,
+      expect,
+    };
+  }
+
+  if (line === 'D+' || line === 'D-') {
+    let sender;
+    if (line === 'D+') sender = addr === 0b001 ? 'Plug' : 'SRC';
+    else sender = addr === 0b010 ? 'Plug' : 'SNK';
+    return { sender, receiver, inferred: false, ambiguous: false, source: 'line', line, mismatch: false, expect: null };
+  }
+
+  // 没有单向定义、也没有链路信息：只能按接收方推断
+  let sender;
+  if (addr === 0b010) sender = 'SRC';        // 发给充电设备的，只能是供电设备
+  else if (addr === 0b001) sender = 'SNK';   // 发给供电设备的，规范 7.8「缺省由充电设备发起线缆识别」→ 取充电设备
+  else sender = 'SNK';
+  return {
+    sender, receiver, inferred: true,
+    ambiguous: addr === 0b011 || addr === 0b001,
+    source: 'addr', line: UFCS_LINE[sender] ?? null, mismatch: false, expect: null,
+  };
+}
+
+/**
+ * 给一批 UFCS 报文建立 ACK/NCK → 被确认报文的对应关系。
+ *
+ * 判据（规范 8.2.3.2 / 8.2.3.3）：**ACK/NCK 的消息编号与其响应的消息相同**，
+ * 且是即时应答，必然紧跟在被确认报文的后面。所以按「向前找最近一条同编号、
+ * 不同类型」的报文配对即可 —— 比 PD 那套「方向相反」的判据更稳（UFCS 的方向本就是推断出来的）。
+ *
+ * @param {Array<object>} packets 已按时间排序、已分配 index 的报文
+ */
+function ufcsLinkAck(packets) {
+  const WINDOW = 16;
+  for (const p of packets) {
+    if (!UFCS_AUTO_ACK.has(p.msgType) || p.crcOk === false) continue;
+    for (let j = p.index - 1; j >= 0 && j > p.index - WINDOW; j--) {
+      const q = packets[j];
+      if (UFCS_AUTO_ACK.has(q.msgType)) continue;
+      if (q.msgId !== p.msgId) continue;
+      p.ackOf = q.index;
+      p.ackType = q.msgType;
+      // ACK/NCK 本身是双向命令，方向无法从报文断定 —— 但它必然是**被确认报文的反方向**。
+      // 只在两处都成立时才回填：① 原本就是推断出来的；② 消息头里的接收方正是被确认报文的发送方
+      // （ACK 的地址栏必须指向原发送方，规范 8.2.3.2）。任一条不成立就保持推断结果不动。
+      const want = ufcsOpposite(q.role);
+      if (p.roleInferred && !q.roleInferred && p.ufcs.receiver === q.role) {
+        p.role = want;
+        p.sop = UFCS_LINE[want] ?? 'D±';
+        p.roleInferred = false;
+        p.roleFromAck = true;
+        p.ufcs.sender = want;
+      }
+      break;
+    }
+  }
+}
+
+class UfcsDecoder {
+  /**
+   * @param {{sampleRate?:number}} [opts] sampleRate 只用于把毫秒时间戳映射成采样点坐标（默认 1000 = 1ms/点）
+   */
+  constructor({ sampleRate = 1000 } = {}) {
+    this.sampleRate = sampleRate;
+    this.reset();
+  }
+
+  reset() {
+    this.packetSeq = 0;
+  }
+
+  /** 详情发射器（与 pd 库同形，界面共用一套渲染） */
+  _emitter() {
+    const self = this;
+    return {
+      object(title) { self.details.push({ key: 'Object', value: String(title) }); },
+      detail(k, v) { self.details.push({ key: String(k), value: String(v) }); },
+      note(t) { if (t != null && t !== '') self.summaryParts.push(String(t)); },
+    };
+  }
+
+  /**
+   * 解一条报文。
+   *
+   * @param {Uint8Array} body 消息头 + 消息主体（**不含 CRC**）
+   * @param {object} [o]
+   *   crc        读到的 CRC 字节；容器没存 CRC 时传 null（此时 crcOk = null，窗口显示「未记录」）
+   *   crcCalc    已知的计算值；不传则这里自己算
+   *   timeMs     报文时间戳（毫秒）
+   *   line       物理链路：'D+' | 'D-' | null（未知）
+   *   dirByte    容器里紧邻报文的那个字节（诊断用，可能是链路编码）
+   *   prefixBytes 报文前容器前缀的字节数（0 = 没有前缀）
+   *   channel    通道号（固定 0）
+   *   baud       波特率；不给按 115200 折算线上时长
+   * @returns {object|null}
+   */
+  decode(body, {
+    crc = null, crcCalc = null, timeMs = 0, line = null, dirByte = null,
+    prefixBytes = 0, channel = 0, baud = UFCS_DEFAULT_BAUD, withCrc = crc != null,
+  } = {}) {
+    if (!body || body.length < 3) return null;
+
+    this.details = [];
+    this.summaryParts = [];
+    this.warnings = [];
+    const em = this._emitter();
+
+    const hdr = (body[0] << 8) | body[1];
+    const h = ufcsHeaderInfo(hdr);
+
+    if (!h.addrValid) this.warnings.push({ long: `设备地址 ${h.addr.toString(2).padStart(3, '0')}b 是保留值（规范只定义 001b/010b/011b）`, short: 'ADDR' });
+    if (!h.mtypeValid) this.warnings.push({ long: `消息类型 ${h.mtype.toString(2).padStart(3, '0')}b 是保留值（规范只定义 000b/001b/010b）`, short: 'MTYPE' });
+    if (!h.verKnown) this.warnings.push({ long: `协议版本编号 ${h.verCode.toString(2).padStart(6, '0')}b 不在规范已知取值内（000001b=1.0.0 / 010001b=1.0.1 / 001001b=1.2.0）`, short: 'VER' });
+
+    const calc = crcCalc ?? ufcsCrc8(body);
+    const crcOk = withCrc ? crc === calc : null;
+    if (crcOk === false) {
+      this.warnings.push({ long: `CRC-8 校验失败：读到的 0x${crc.toString(16).toUpperCase().padStart(2, '0')} ≠ 计算的 0x${calc.toString(16).toUpperCase().padStart(2, '0')}`, short: 'CRC' });
+    }
+
+    /* ── 消息头位域 ── */
+    em.object('消息头（16 bit）');
+    em.detail(`设备地址 [${ufcsRange(15, 13)}]`, `${h.addr.toString(2).padStart(3, '0')}b · ${UFCS_DEV_ADDR[h.addr] ?? '保留值（接收端应忽略本条）'}`);
+    em.detail(`消息编号 [${ufcsRange(12, 9)}]`, `${h.msgNo}（接收方不判断其是否变化，回复须跟随）`);
+    em.detail(`协议版本编号 [${ufcsRange(8, 3)}]`, `${h.verCode.toString(2).padStart(6, '0')}b · UFCS ${h.verText}${h.verKnown ? '' : '（保留值）'}`);
+    em.detail(`消息类型 [${ufcsRange(2, 0)}]`, `${h.mtype.toString(2).padStart(3, '0')}b · ${UFCS_MSG_TYPE[h.mtype] ?? '保留值'}`);
+
+    /* ── 方向 ── */
+    // cmd 在主体解析阶段才拿到，这里先用消息头里的类型定位「已知命令编号」的情况：
+    // 控制消息的命令在 body[2]，数据消息的命令在 body[2]，两种都在同一个位置。
+    const probCmd = (h.mtype === 0 || h.mtype === 1) ? body[2] : null;
+    const fixed = h.mtype <= 1 ? ufcsFixedSender(h.mtype, probCmd) : null;
+    const dir = ufcsResolveDirection(h.addr, line, fixed);
+    // 「链路」一栏展示的是**消息跑在哪条线上**：容器给了就用它，没给就按发送方折算
+    // （供电设备发 → D+，充电设备发 → D-；线缆发送时两条线都可能，标 D±）。
+    const lineLabel = dir.line ?? (UFCS_LINE[dir.sender] ?? 'D±');
+    if (dir.mismatch) {
+      this.warnings.push({
+        long: `方向与规范不符：该命令按规范表定义为 ${ufcsRoleText(dir.sender)} → ${ufcsRoleText(ufcsPeerOf(dir.sender))}，`
+          + `但消息头里的接收方是「${UFCS_DEV_ADDR[h.addr] ?? '保留值'}」`,
+        short: 'DIR',
+      });
+    }
+
+    /* ── 主体 ── */
+    let cmd = null;
+    let dataLen = 0;
+    let data = body.subarray(0, 0);
+    let msgType = '未知';
+    let msgKind = 'control';
+
+    if (h.mtype === 0) {
+      msgKind = 'control';
+      cmd = body[2];
+      const info = UFCS_CTRL_CMD[cmd];
+      msgType = info?.name ?? `CTRL?0x${cmd.toString(16).toUpperCase().padStart(2, '0')}`;
+      em.object(`控制命令 0x${cmd.toString(16).toUpperCase().padStart(2, '0')}`);
+      em.detail('控制命令', info ? `${info.name}（${info.req}）` : '规范表 14 未定义该命令编号');
+      if (info) {
+        em.detail('发送者 → 接收者（规范表 14）', info.dir);
+        em.detail('规范要求', info.req);
+        em.note(info.sum);
+        if (body.length !== 3) this.warnings.push({ long: `控制消息主体应为 1 字节命令，实际 ${body.length - 2} 字节`, short: 'LEN' });
+      } else {
+        em.detail('原始主体', `0x${ufcsHex(body.subarray(2))}`);
+        this.warnings.push({ long: `控制命令 0x${cmd.toString(16).toUpperCase()} 未在规范表 14 中定义`, short: 'CMD' });
+      }
+    } else if (h.mtype === 1) {
+      msgKind = 'data';
+      if (body.length < 4) return null;
+      cmd = body[2];
+      dataLen = body[3];
+      data = body.subarray(4, 4 + dataLen);
+      const info = UFCS_DATA_CMD[cmd];
+      msgType = info?.name ?? `DATA?0x${cmd.toString(16).toUpperCase().padStart(2, '0')}`;
+      em.object(`数据命令 0x${cmd.toString(16).toUpperCase().padStart(2, '0')}`);
+      em.detail('命令', info ? `${info.name}（${info.req}）` : '规范表 15 未定义该命令编号');
+      em.detail(`数据长度 [${ufcsRange(7, 0)}]`, `${dataLen} 字节`);
+      if (info) {
+        em.detail('发送者 → 接收者（规范表 15）', info.dir);
+        const exp = info.len;
+        if (typeof exp === 'number' && dataLen !== exp) {
+          this.warnings.push({ long: `${info.name} 的数据长度应为 ${exp} 字节，实际 ${dataLen} 字节`, short: 'LEN' });
+        } else if (typeof exp === 'object' && (dataLen % exp.unit !== 0 || dataLen / exp.unit < exp.min || dataLen / exp.unit > exp.max)) {
+          this.warnings.push({ long: `${info.name} 的数据长度应为 ${exp.unit}×n 字节（1≤n≤${exp.max}），实际 ${dataLen} 字节`, short: 'LEN' });
+        }
+      } else {
+        this.warnings.push({ long: `数据命令 0x${cmd.toString(16).toUpperCase()} 未在规范表 15 中定义`, short: 'CMD' });
+      }
+      if (data.length < dataLen) this.warnings.push({ long: `数据域被截断：声明 ${dataLen} 字节，实际只有 ${data.length} 字节`, short: 'TRUNC' });
+
+      const s = ufcsDataPayload(em, cmd, data, this.warnings, { cmd, h, dataLen, name: msgType });
+      if (!info) ufcsDumpBytes(em, data);
+      if (!s) this.warnings.push({ long: `${msgType} 未能解出字段`, short: 'PARSE' });
+    } else {
+      msgKind = 'custom';
+      if (body.length < 5) return null;
+      const vid = (body[2] << 8) | body[3];
+      dataLen = body[4];
+      data = body.subarray(5, 5 + dataLen);
+      msgType = 'Manufacturer_Custom';
+      ufcsCustomPayload(em, vid, data);
+      if (data.length < dataLen) this.warnings.push({ long: `数据域被截断：声明 ${dataLen} 字节，实际只有 ${data.length} 字节`, short: 'TRUNC' });
+    }
+
+    /* ── CRC ── */
+    em.object('CRC 校验');
+    em.detail('算法', 'CRC-8，多项式 X⁸+X⁵+X³+1（0x29），初值 0x00，覆盖消息头与消息主体');
+    em.detail('计算值', `0x${calc.toString(16).toUpperCase().padStart(2, '0')}`);
+    em.detail('报文值', withCrc ? `0x${crc.toString(16).toUpperCase().padStart(2, '0')}` : '未记录（分析仪容器未存 CRC）');
+    em.detail('结论', crcOk === null ? '无法判定' : (crcOk ? '通过' : '失败'));
+    if (crcOk === null) {
+      em.note('CRC 由本工具按规范补算（容器未存），不据此宣布校验通过');
+    }
+
+    /* ── 容器诊断 ── */
+    if (prefixBytes > 0 || dirByte != null) {
+      em.object('容器信息（POWER-Z 导出）');
+      em.detail('报文前缀', prefixBytes > 0 ? `${prefixBytes} 字节（应为时间戳 / 链路标记）` : '无');
+      if (dirByte != null) em.detail('链路字节候选', `0x${dirByte.toString(16).toUpperCase().padStart(2, '0')}${dirByte <= 2 ? `（按 0=D+/1=D−/2=线缆 解读为 ${['D+', 'D-', 'D±'][dirByte]}）` : ''}`);
+      em.detail('本帧长度', `${body.length} 字节（消息头+主体）+ ${withCrc ? 1 : 0} 字节 CRC`);
+    }
+
+    /* ── 方向补充说明 ── */
+    em.object('链路与方向');
+    const how = dir.source === 'spec' ? '规范表单向定义（该命令只有唯一发送方）'
+      : dir.source === 'line' ? '分析仪容器给出的链路字节 + 接收方地址'
+        : '按接收方地址推断';
+    em.detail('方向判据', how);
+    em.detail('物理链路', `${lineLabel}${dir.source === 'line' ? '（容器给出）' : '（由方向折算）'}`);
+    em.detail('接收方', UFCS_DEV_ADDR[h.addr] ?? '保留值');
+    em.detail('发送方', `${ufcsRoleText(dir.sender)}${dir.source === 'addr' ? '（推断）' : ''}`);
+    if (dir.ambiguous) em.detail('⚠ 方向不确定', '此类命令供电设备与充电设备都会发送，单看报文无法区分，此处按规范 7.8「缺省由充电设备发起」处理');
+    em.detail('线序依据', '规范 7.2：供电设备 D+ 为发送（TX）、充电设备 D- 为发送（TX）');
+
+    /* ── 组装 ── */
+    const seq = ++this.packetSeq;
+    const totalBytes = body.length + (withCrc ? 1 : 0);
+    const durUs = totalBytes * UFCS_BITS_PER_BYTE / baud * 1e6;
+    const endMs = timeMs + durUs / 1000;
+
+    const summary = this.summaryParts.filter(Boolean).join(' ; ');
+    const text = `#${seq} (${timeMs.toFixed(4)}ms): (UFCS) ${dir.sender ?? '?'}[${h.addr}] ${msgType}`
+      + (summary ? ` - ${summary}` : '');
+
+    const frameBytes = [];
+    for (const b of body) frameBytes.push(b);
+    if (withCrc) frameBytes.push(crc);
+
+    return {
+      seq,
+      channel,
+      protocol: 'UFCS',
+      source: 'powerz',
+      ufcs: {
+        addr: h.addr, addrText: UFCS_DEV_ADDR[h.addr] ?? '保留',
+        msgNo: h.msgNo, verCode: h.verCode, mtype: h.mtype,
+        cmd, dataLen, line: dir.line, sender: dir.sender, receiver: dir.receiver,
+        dirInferred: dir.inferred, dirAmbiguous: dir.ambiguous,
+        dirByte, prefixBytes, withCrc, baud,
+      },
+
+      sop: lineLabel,
+      msgType,
+      msgTypeRaw: cmd,
+      msgKind,
+      role: dir.sender ?? 'SNK',
+      roleInferred: dir.inferred,
+      roleAmbiguous: dir.ambiguous,
+      link: dir.receiver === 'Plug' || dir.sender === 'Plug' ? 'cable' : 'port',
+
+      header: hdr,
+      extHeader: null,
+      msgId: h.msgNo,
+      rev: (h.verCode & 0b11),
+      revText: h.verText,
+      powerRole: dir.sender === 'SRC' ? 1 : 0,
+      dataRole: null,
+
+      nObjects: dataLen,
+      dataLen,
+      objects: null,
+
+      crc: withCrc ? crc : null,
+      crcCalc: calc,
+      crcOk,
+      eop: null,
+
+      summary,
+      details: this.details,
+      warnings: this.warnings.slice(),
+      text,
+
+      startSample: timeMs,
+      endSample: endMs,
+      timeMs,
+      endTimeMs: endMs,
+      durationUs: durUs,
+      bitrate: baud,
+      bitrateNominal: true,        // 波特率取自规范缺省档位，不是从线路上量出来的
+      synthetic: true,
+      category: msgKind,
+      dataWords: [],
+      dataBytes: frameBytes,
+      dataHex: ufcsHexSpaced(frameBytes),
+      frameLen: totalBytes,
+    };
+  }
+
+  /**
+   * 便捷入口：从一段「完整帧字节（含 CRC）」解一条。
+   * 容器已经切好帧时用它；不确定容器前缀时用 frame.js#ufcsLocateFrames 先定位。
+   */
+  decodeFrame(frameBytes, opts = {}) {
+    const bodySize = ufcsFrameBodySize(frameBytes, 0);
+    if (bodySize < 0) return null;
+    const body = frameBytes.subarray(0, bodySize);
+    const crc = frameBytes.length > bodySize ? frameBytes[bodySize] : null;
+    return this.decode(body, { ...opts, crc, withCrc: crc != null });
+  }
+}
+
+/* ══════ src/js/ufcs/index.js ══════ */
+/**
+ * index.js — `src/js/ufcs/` 独立 UFCS 解析库的聚合入口
+ *
+ * 用法（浏览器 / Node 通用）：
+ *   import { UfcsDecoder, ufcsLocateFrames } from './js/ufcs/index.js';
+ *   const ufcs = new UfcsDecoder({ sampleRate: 1000 });
+ *   const located = ufcsLocateFrames(blob);            // 在未知容器里定位报文
+ *   const pkt = ufcs.decodeFrame(located.frames[0]....);// 逐条解
+ *
+ * 设计约定与 `src/js/pd/` 完全一致：
+ *   • 只依赖本目录内的模块，零外部依赖，不引入 Node 专有 API；
+ *   • 为便于「单文件打包」（把 ES Module 拍平进一个 IIFE 作用域），
+ *     所有本库的顶层名字统一带 `ufcs` / `UFCS_` 前缀，避免与宿主工程或 pd/ 库重名。
+ *
+ * 目录结构（对应规范章节）：
+ *   crc.js       CRC-8（附录 A）
+ *   tables.js    消息头 / 控制命令 / 数据命令 / 输出模式 / 拒绝原因等常量表
+ *   format.js    大端位域取值与格式化（ufcs* 前缀）
+ *   frame.js     数据包切帧：消息头 + 主体 + CRC（7.6 / 8.2）
+ *   payload.js   各类消息的载荷逐字段解析（8.2.4 / 8.2.5）
+ *   decoder.js   主解码器 UfcsDecoder（8.2 / 7.2 方向还原）
+ */
+
+
+
+/* CRC */
+
+
+/* 切帧 */
+
+
+/* 常量表 */
+
+
+/* 位域 / 格式化工具 */
+
+
+/* 载荷解析器（可单独复用） */
+
 /* ══════ src/js/core/powerz.js ══════ */
 /**
  * powerz.js — POWER-Z（ChargerLAB KM003C 等）SQLite 抓包解析
@@ -5538,11 +6852,12 @@ function isSqlite(u8) {
  *     pd_table(Time real, Vbus real, Ibus real, Raw Blob)             事件流（二进制）
  *     pd_table_key(key integer)                                        会话密钥（导出文件里为空）
  *
- * UFCS 抓包（国产快充协议）同理，只是表名换成 `ufcs_chart` / `ufcs_table`，
- * 模拟量换 `DP` / `DM`。
+ * UFCS 抓包（国产融合快充协议）同理，只是表名换成 `ufcs_chart` / `ufcs_table`，
+ * 模拟量换 `DP` / `DM`，报文换 `src/js/ufcs/` 那套独立解析库（UART 起止位 →
+ * 消息头 / 三种消息结构 / CRC-8，见 T/TAF 083—2024）。
  *
  * ── Raw blob 的内部结构（实测归纳，与 powerz-rs 的结论一致）───────────
- * 一行的 Raw 是**若干事件首尾相接**（本工程遇到的样本里恰好每行一个）：
+ * 一行的 Raw 是**若干事件首尾相接**（本工程遇到的 PD 样本里恰好每行一个）：
  *
  *   ┌ 连接/状态事件：6 字节，固定 ────────────────────────────────┐
  *   │ 45 │ ts(3B 小端, 毫秒) │ 00 │ code  （0x11=连接, 0x12=断开）  │
@@ -5555,15 +6870,22 @@ function isSqlite(u8) {
  *   wire = [Header 2B 小端][Data Object ×N，各 4B 小端]，**不含 CRC、不含 SOP/EOP**
  *          （CRC 由 pd 库按规范重算，仅用于走通解析，见 PdDecoder#decodeWire）。
  *
+ *   UFCS 的 Raw 则是**另一套帧结构**：4 字节毫秒时间戳打头、后面直接跟 UFCS 报文、
+ *   没有 marker 字节；存不存 CRC 各家实现不一。因此这里不假设结构，
+ *   改用「穷举前缀长度 × 两种 CRC 读法 + 消息头合法性 + CRC-8 反证」定位，
+ *   见 `parseUfcsBlob()` 与 `src/js/ufcs/frame.js`。
+ *
  * ── 与 ATK 路径的关系 ────────────────────────────────────────────────
- * 这里**不碰 BMC**：报文交给 `PdDecoder#decodeWire()`，与 .atkcc 共用同一套
- * 头部/VDM/PDO/扩展消息语义解析，所以两条路径解出来的报文对象字段完全同形，
- * 界面、筛选、导出、详情面板一行都不用改。
+ * 这里**不碰 BMC**：PD 报文交给 `PdDecoder#decodeWire()`，与 .atkcc 共用同一套
+ * 头部/VDM/PDO/扩展消息语义解析；UFCS 报文交给 `UfcsDecoder#decode()`。
+ * 两条路径解出来的报文对象字段完全同形（sop / msgType / role / details / crcOk /
+ * startSample …），所以界面、筛选、导出、详情面板只有「协议相关的那几处」分叉。
  *
  * 时间基准：POWER-Z 只记录毫秒时间戳，没有「采样点」概念。本工程统一按
  * **1 采样点 = 1 ms**（`POWERZ_RATE`）映射，于是 `totalSamples / sampleRate`
  * 仍是秒、`startSample` 仍是时间轴坐标，所有既有换算不必为新格式开分支。
  */
+
 
 
 
@@ -5576,7 +6898,15 @@ const POWERZ_RATE = 1000;
 /** SOP 字节 → 有序集名 */
 const SOP_BY_BYTE = { 0: 'SOP', 1: "SOP'", 2: "SOP''" };
 
-/** 两种导出的表名与展示信息 */
+/**
+ * 两种导出的表名与展示信息。
+ *
+ * 可选的 `unsupported` 字段是「认得容器、但还没写语义解析」的**扩展点**：
+ * 设了它，界面就会走「原始帧照收、模拟量照画、报文列表留空并说明原因」那条路
+ * （app.js 的 `stats.unsupported` 分支）。**目前两种导出都已实现解析**（PD 走
+ * `src/js/pd/`、UFCS 走 `src/js/ufcs/`），所以这个字段暂时没人设置 —— 留着是为了
+ * 下次给 POWER-Z 加第三种导出时不用回头改界面。
+ */
 const POWERZ_KINDS = {
   pd: {
     table: 'pd_table', chart: 'pd_chart',
@@ -5589,8 +6919,10 @@ const POWERZ_KINDS = {
     table: 'ufcs_table', chart: 'ufcs_chart',
     protocol: 'UFCS', busLabels: ['DP', 'DM'],
     title: 'POWER-Z · UFCS',
-    /** UFCS 是另一份独立规范，本工程目前只做「容器 + 模拟量」 */
-    unsupported: 'UFCS 报文的语义解析尚未实现（该协议不在本工程参考的 USB PD 规范内）',
+    /**
+     * UFCS 的报文格式与 PD 完全不同（UART 起止位 + 8.2 的三种消息结构 + CRC-8），
+     * 走 `src/js/ufcs/` 那套独立解析库，不再共用 4B5B / 报文头 / PDO 那一套表。
+     */
   },
 };
 
@@ -5665,6 +6997,67 @@ function parsePowerzBlob(blob) {
   }
 
   return { events, truncated };
+}
+
+/* ────────────────────────── UFCS 的 Raw blob ────────────────────────── */
+
+/**
+ * **连接 / 断开事件**（只在 PD 导出里见过，UFCS 导出若也沿用同一 marker 就一并认下）。
+ * 结构：`45 │ ts(3B 小端, 毫秒) │ 00 │ code`，code 0x11=连接 0x12=断开。
+ */
+function isPowerzConnectBlob(blob) {
+  return blob.length === 6 && blob[0] === 0x45 && blob[3] === 0x00
+    && (blob[5] === 0x11 || blob[5] === 0x12);
+}
+function parsePowerzConnectBlob(blob) {
+  const ts = blob[1] | (blob[2] << 8) | (blob[3] << 16);
+  return { kind: blob[5] === 0x12 ? 'disconnect' : 'connect', tsMs: ts };
+}
+
+/**
+ * 把一个 UFCS 的 Raw blob 拆成「一至多条 UFCS 报文」。
+ *
+ * ── 为什么不像 PD 那样按固定 marker 拆 ──────────────────────────────
+ * PD 那套 marker（0x80…0xBF 低 6 位 = 总长-1）是分析仪私有约定；UFCS 的 blob 是
+ * **另一套帧结构**（4 字节毫秒时间戳打头、后面直接跟 UFCS 报文、没有 marker 字节），
+ * 硬按 PD 去拆只会把每一行都判成「拼不通」。
+ *
+ * 因此这里不做结构假设，而是**穷举起始偏移 × 两种 CRC 读法**，用
+ * 「能否正好消费完整行 + CRC-8 是否吻合 + 消息头字段是否合法」三项一起判定，
+ * 取分最高的一种（见 `src/js/ufcs/frame.js#ufcsLocateFrames`）。这样无论前缀是
+ * 0 / 4 字节时间戳 / 时间戳+链路字节，都落回同一条解析路径；分析仪存不存 CRC 也都能认。
+ *
+ * @param {Uint8Array} blob
+ * @returns {{frames:Array<{bytes:Uint8Array,crc:number|null,calc:number,crcOk:boolean|null,withCrc:boolean}>,
+ *            truncated:boolean, prefixBytes:number, withCrc:boolean,
+ *            dirByte:number|null, lineHint:'D+'|'D-'|null}}
+ */
+function parseUfcsBlob(blob) {
+  const loc = ufcsLocateFrames(blob);
+  if (!loc) {
+    return {
+      frames: [], truncated: true, prefixBytes: 0, withCrc: false, dirByte: null, lineHint: null,
+    };
+  }
+  // 前缀 ≥5 字节时，紧邻报文的那一个字节很可能是「链路标记」（PD 侧对应 sop 字节）。
+  // 0/1 按「供电设备侧(D+) / 充电设备侧(D−)」解读，其余取值不作解释、只当诊断信息留着。
+  const dirByte = loc.prefixBytes >= 5 ? blob[loc.prefixBytes - 1] : null;
+  const lineHint = dirByte === 0 ? 'D+' : dirByte === 1 ? 'D-' : null;
+
+  return {
+    frames: loc.frames.map((f) => ({
+      bytes: blob.subarray(f.off, f.bodyEnd),
+      crc: loc.withCrc ? f.crc : null,
+      calc: f.calc,
+      crcOk: loc.withCrc ? f.crcOk : null,
+      withCrc: loc.withCrc,
+    })),
+    truncated: false,
+    prefixBytes: loc.prefixBytes,
+    withCrc: loc.withCrc,
+    dirByte,
+    lineHint,
+  };
 }
 
 /* ────────────────────────── 抓包对象 ────────────────────────── */
@@ -5782,12 +7175,14 @@ class PowerzCapture {
     }
     rows.sort((a, b) => a.t - b.t);
 
-    // ── 2. 拆事件 ──
-    // 只对 PD 拆。UFCS 的 Raw 是另一套帧格式（4B 毫秒时间戳 + 自己的帧结构，无 marker 字节），
-    // 硬按 PD 的 marker 去拆只会把每一行都判成「拼不通」—— 那是误导，不如老实不拆。
+    // ── 2. 拆事件 / 拆报文 ──
+    // 两条协议各拆各的：PD 按分析仪私有的 marker 拆「包裹报文」，
+    // UFCS 按规范的消息头结构定位（见 parseUfcsBlob）。
     const events = [];
     let truncated = 0;
     let frameCount = 0;
+    let unlocated = 0;          // UFCS：既拆不出报文、也不像连接事件的残行
+    const ufcsBlobs = [];       // UFCS：{ blob, t } —— 第 3 步再解
     if (kind === 'pd') {
       for (const row of rows) {
         if (!(row.raw instanceof Uint8Array) && !(row.raw instanceof ArrayBuffer)) continue;
@@ -5797,7 +7192,19 @@ class PowerzCapture {
         if (r.truncated) truncated++;
       }
     } else {
-      frameCount = rows.length;     // 本工程样本里每行一帧，仅作计数
+      for (const row of rows) {
+        const blob = toU8(row.raw);
+        if (!blob) continue;
+        const r = parseUfcsBlob(blob);
+        if (!r.frames.length) {
+          // 拆不出 UFCS 报文 —— 先看它是不是沿用了 PD 的连接/断开事件格式
+          if (isPowerzConnectBlob(blob)) events.push({ ...parsePowerzConnectBlob(blob), rowT: row.t });
+          else unlocated++;
+          continue;
+        }
+        frameCount += r.frames.length;
+        ufcsBlobs.push({ ...r, t: row.t, vbus: row.vbus, ibus: row.ibus });
+      }
     }
 
     const connects = events.filter((e) => e.kind === 'connect');
@@ -5837,13 +7244,40 @@ class PowerzCapture {
         }
       }
     } else {
-      unsupportedMsgs = frameCount;
+      // UFCS：每条报文交给独立库的 UfcsDecoder。时间基准取 SQLite 的 `Time` 列
+      // （与 `ufcs_chart` 的 ADC 采样同一套时基，×1000 得毫秒），保证时间轴对得上；
+      // 容器前缀里那 4 字节时间戳只作诊断信息，不拿它定时间。
+      const ufcs = new UfcsDecoder({ sampleRate: POWERZ_RATE });
+      let k = 0;
+      const totalFrames = frameCount || 1;
+      for (const b of ufcsBlobs) {
+        for (const f of b.frames) {
+          const pkt = ufcs.decode(f.bytes, {
+            crc: f.crc,
+            crcCalc: f.calc,
+            withCrc: f.withCrc,
+            timeMs: Math.round(b.t * 1000),
+            line: b.lineHint,
+            dirByte: b.dirByte,
+            prefixBytes: b.prefixBytes,
+            channel: 0,
+          });
+          if (pkt) packets.push(pkt);
+          if ((++k & 255) === 0) {
+            onProgress?.({ phase: 'decode', ratio: k / totalFrames, packets: packets.length });
+            await yieldToMain();
+            if (shouldStop?.()) break;
+          }
+        }
+        if (shouldStop?.()) break;
+      }
     }
 
     // 序号 + 时间排序（时间戳可能并列，保持解析顺序）
     packets.sort((a, b) => a.startSample - b.startSample || a.seq - b.seq);
     packets.forEach((p, idx) => { p.index = idx; });
-    linkGoodCrc(packets);
+    if (kind === 'ufcs') ufcsLinkAck(packets);      // ACK/NCK 与被确认报文配对
+    else linkGoodCrc(packets);
 
     const totalSamples = Math.max(this.meta.totalSamples, packets.length ? packets[packets.length - 1].endSample : 0);
 
@@ -5861,14 +7295,18 @@ class PowerzCapture {
       edges: 0,
       trimmedBytes: 0,
       packetCount: packets.length,
-      badCrc: 0,                          // 分析仪不存 CRC，无从判定 —— 不是「零错误」
-      crcUnknown: packets.length,
+      badCrc: kind === 'ufcs' ? packets.filter((p) => p.crcOk === false).length : 0,
+      crcUnknown: kind === 'ufcs'
+        ? packets.filter((p) => p.crcOk === null).length
+        : packets.length,                // PD：分析仪不存 CRC，无从判定 —— 不是「零错误」
       warnings: packets.reduce((s, p) => s + (p.warnings?.length ?? 0), 0),
       badWire,
       truncatedRows: truncated,
       connectCount: connects.length,
       disconnectCount: disconnects.length,
       unsupportedMsgs,
+      ufcsFrames: kind === 'ufcs' ? frameCount : 0,
+      ufcsUnlocatedRows: unlocated,
       events: events.map((e) => ({ kind: e.kind, tsMs: e.tsMs })),
       tableRows: rows.length,
       chartRows: this.meta.chartRows,
@@ -5876,6 +7314,13 @@ class PowerzCapture {
 
     return { packets, stats };
   }
+}
+
+/** Uint8Array / ArrayBuffer / 其它 → Uint8Array（不是字节就返回 null） */
+function toU8(raw) {
+  if (raw instanceof Uint8Array) return raw;
+  if (raw instanceof ArrayBuffer) return new Uint8Array(raw);
+  return null;
 }
 
 /* ══════ src/js/core/inflate.js ══════ */
@@ -6007,6 +7452,7 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
  */
 function toneOf(p) {
   if (p.msgType === 'VDM') return 'VDM';
+  if (p.msgKind === 'custom') return 'Custom';     // UFCS 厂家自定义消息
   if (p.msgKind === 'ext') return 'Extended';
   if (p.msgKind === 'data') return 'Data';
   if (p.msgKind === 'special') return 'Error';
@@ -6017,7 +7463,30 @@ function kindOf(p) {
   if (p.crcOk === false) return 'Error';
   return toneOf(p);
 }
-const CAT_CLASS = { Control: 'cat-Control', Data: 'cat-Data', Extended: 'cat-Extended', VDM: 'cat-VDM', Error: 'cat-Error' };
+const CAT_CLASS = {
+  Control: 'cat-Control', Data: 'cat-Data', Extended: 'cat-Extended',
+  VDM: 'cat-VDM', Custom: 'cat-Custom', Error: 'cat-Error',
+};
+
+/* ── 协议相关的形状差异 ────────────────────────────────
+   同一份界面要同时服务两种协议，差异集中在三处：链路叫法（SOP 序列 / D+D-）、
+   报文类别（Extended/VDM / Custom）、以及「心跳包」「功率协商」这类语义分组。
+   下面几个帮助函数是唯一的分叉点，别在别处再写 `=== 'UFCS'` 的判断。 */
+const isUfcs = () => S?.meta?.protocol === 'UFCS';
+/** 自动应答心跳包：PD 是 GOOD CRC，UFCS 是 ACK / NCK */
+const isAutoAck = (p) => (isUfcs()
+  ? (p.msgType === 'ACK' || p.msgType === 'NCK')
+  : p.msgType === 'GOOD CRC');
+/** 链路一栏的名字与候选取值 */
+const linkTitle = () => (isUfcs() ? '物理链路' : 'SOP 类型');
+const linkValues = () => (isUfcs()
+  ? [['D+', 'D+'], ['D-', 'D−'], ['D±', 'D±']]
+  : [['SOP', 'SOP'], ["SOP'", 'SOP&prime;'], ["SOP''", 'SOP&Prime;'],
+    ['Hard Reset', 'Hard Reset'], ['Cable Reset', 'Cable Reset']]);
+/** 报文类别一栏的候选 */
+const catValues = () => (isUfcs()
+  ? [['Control', '控制'], ['Data', '数据'], ['Custom', '自定义'], ['Error', '异常']]
+  : [['Control', '控制'], ['Data', '数据'], ['Extended', '扩展'], ['VDM', 'VDM'], ['Error', '异常']]);
 
 /**
  * GOOD CRC 配色配对（界面侧）。
@@ -6038,9 +7507,14 @@ function pairAckTone(packets) {
   }
 }
 
-/** 是否属于「功率协商」/「状态切换」这两类关注点 */
+/** 是否属于「功率协商」/「状态切换」这两类关注点（两种协议各一套判据） */
 const POWER_TYPES = /Source_Cap|Request|EPR_Request|EPR_Mode|PPS|BIST|Source_Capabilities_Extended|EPR_Source|EPR_Sink|Sink_Cap/i;
 const ENTER_TYPES = /PS RDY|VDM|Alert|Status|Source_Info|Revision|Enter_USB|Discover|Sink_Cap|Notify/i;
+/** UFCS：协商 = 能力/请求/输出调整；状态 = 各类信息上报与查询 */
+const UFCS_POWER_TYPES = /Output_Capabilities|Request|Power_Change|Power_Ready|Accept|Config_Watchdog/i;
+const UFCS_ENTER_TYPES = /_Information|Source_Info|Sink_Info|Cable_Info|Device_Info|Error_Info|Get_/i;
+const isPowerType = (t) => (isUfcs() ? UFCS_POWER_TYPES : POWER_TYPES).test(t);
+const isEnterType = (t) => (isUfcs() ? UFCS_ENTER_TYPES : ENTER_TYPES).test(t);
 
 /* ═══════════════════════ 文档（一份抓包 = 一个标签） ═══════════════════════ */
 /**
@@ -6053,11 +7527,22 @@ const ENTER_TYPES = /PS RDY|VDM|Alert|Status|Source_Info|Revision|Enter_USB|Disc
  * `filters / sort / viewMode / tlMode / channel / selected` 刻意也放在这里 ——
  * 它们是「对这份抓包的看法」，不是全局偏好，切回来必须原样还在。
  */
-function newFilters() {
+/**
+ * 一份抓包的筛选条件。**默认值跟着协议走**：UFCS 的链路是 D+/D-、类别里没有
+ * Extended/VDM 而有自定义消息 —— 用 PD 的默认集合去筛 UFCS，会把所有报文都筛没。
+ *
+ * @param {'pd'|'UFCS'} [protocol]
+ */
+function newFilters(protocol = 'pd') {
+  const ufcs = protocol === 'UFCS';
   return {
     roles: new Set(['SRC', 'SNK', 'Plug']),
-    sops: new Set(['SOP', "SOP'", "SOP''", 'Hard Reset', 'Cable Reset']),
-    cats: new Set(['Control', 'Data', 'Extended', 'VDM', 'Error']),
+    sops: new Set(ufcs
+      ? ['D+', 'D-', 'D±']
+      : ['SOP', "SOP'", "SOP''", 'Hard Reset', 'Cable Reset']),
+    cats: new Set(ufcs
+      ? ['Control', 'Data', 'Custom', 'Error']
+      : ['Control', 'Data', 'Extended', 'VDM', 'Error']),
     types: new Set(),          // 空 = 全部
     hideGoodCrc: true,
     onlyBad: false,
@@ -6285,6 +7770,9 @@ async function loadContainer(file) {
     doc.rate = cap.meta.sampleRate;      // 先用文件声明的值，解码时再由波形自检核一遍
     doc.tlMode = 'power';
     doc.decodedMs = 0;
+    // 协议在容器层才认出来，而筛选的默认值跟协议绑定（见 newFilters）——
+    // 这里补一次，免得 UFCS 抓包一打开就被 PD 的默认筛选条件滤成空表。
+    doc.filters = newFilters(cap.meta.protocol);
 
     // 多通道时扫描活动度，自动挑一个「有报文」的通道（分析仪导出只有 1 个逻辑通道）
     const chs = cap.meta.channels;
@@ -6444,12 +7932,17 @@ async function decodeDoc(doc) {
     doc.busSeries = buildBusSeries(bus, total, doc.rate, 2400);
     doc.totalSamples = total;
 
-    // 该协议只有容器、没有语义解析（目前是 UFCS）→ 明确说清，别让人以为解析失败。
+    // 该协议只有容器、没有语义解析 → 明确说清，别让人以为解析失败。
     // 加载期记下的 loadNotice（比如「所有通道都像噪声线」）只在一条报文都没解出来时才顶上来，
     // 免得正常抓包上挂个多余提示。
     doc.notice = stats.unsupported
       ? { text: stats.unsupported, sub: `${stats.unsupportedMsgs} 条原始帧已读入，模拟量轨迹正常可用` }
-      : (doc.loadNotice && !packets.length ? doc.loadNotice : null);
+      : (stats.ufcsUnlocatedRows
+        ? {
+          text: `${stats.ufcsUnlocatedRows} 行没能认出 UFCS 报文`,
+          sub: `已解出 ${stats.packetCount} 条报文；这些行既不是 UFCS 报文、也不像插拔事件，已跳过（不影响其余报文）`,
+        }
+        : (doc.loadNotice && !packets.length ? doc.loadNotice : null));
     doc.noticeOff = false;
     doc.selected = -1;
     doc.filters.tFrom = 0; doc.filters.tTo = 1;      // 换了文件/通道 → 时间窗口回到全时段
@@ -6632,6 +8125,7 @@ function renderAll() {
   renderMeta();
   renderChannels();
   renderNotice();
+  renderFilterSections();
   buildTypeList();
   syncFilterUI();
   applyFilters(true);
@@ -6641,8 +8135,46 @@ function renderAll() {
   refitDetailW();
 }
 
+/* ── 筛选面板的协议自适应 ──────────────────────────────
+   面板只有一副、协议有两套：链路一栏从「SOP 序列」换成「D+/D-」，类别去掉
+   Extended/VDM、加上自定义，快速过滤与关键字按钮也换一批文案。
+   每次整片重画都调一次 —— 重画本来就是「这份文件的一切都重来」的意思。 */
+const UFCS_KEYWORDS = ['Request', 'Output_Capabilities', 'Power_Ready', 'Cable', 'Refuse', 'Verify'];
+const PD_KEYWORDS = ['PPS', 'AVS', 'VID', 'Alert', 'CRC'];
+
+function renderFilterSections() {
+  const ufcs = isUfcs();
+
+  $('#sopTitle').textContent = linkTitle();
+  $('#catTitle').textContent = '报文类别';
+  $('#thSop').textContent = ufcs ? '链路' : 'SOP';
+  $('#thObj').textContent = ufcs ? '字节' : 'Obj';
+
+  $('#fSop').innerHTML = linkValues()
+    .map(([v, t]) => `<button class="chip is-on" data-v="${esc(v)}">${t}</button>`).join('');
+  $('#fCat').innerHTML = catValues()
+    .map(([v, t]) => `<button class="chip cat-${v.toLowerCase()} is-on" data-v="${v}">${t}</button>`).join('');
+
+  $('#lbHideGoodCrc').textContent = ufcs ? '屏蔽 ACK / NCK 应答包' : '屏蔽 GOOD CRC 心跳包';
+  $('#lbOnlyPower').textContent = ufcs
+    ? '只看功率协商（Output_Capabilities / Request）'
+    : '只看功率协商（Source_Cap / Request / PPS）';
+  $('#lbOnlyEnter').textContent = ufcs
+    ? '只看信息上报（Source/Sink/Cable_Information）'
+    : '只看状态切换（PS_RDY / VDM / Alert）';
+
+  const kws = ufcs ? UFCS_KEYWORDS : PD_KEYWORDS;
+  $('#kwRow').innerHTML = kws.map((k) => `<button class="btn tiny" data-kw="${esc(k)}">${esc(k)}</button>`).join('');
+  $$('#kwRow [data-kw]').forEach((b) => b.addEventListener('click', () => {
+    $('#fSearch').value = b.dataset.kw; S.filters.q = b.dataset.kw; applyFilters();
+  }));
+
+  $('#fSearch').placeholder = ufcs ? '消息名 / 命令编号 / 数据hex…' : '消息名 / 数据hex / 备注…';
+}
+
 /* ── 常驻提示条：讲清「这份文件为什么只解出一部分」这类事 ──
-   目前只有一种情况用它：分析仪抓到的是本工程未实现语义解析的协议（UFCS）。
+   目前 UFCS 抓到「既不是报文、也不像插拔」的行会走这里（定位不出容器前缀或残行）。
+   另有 `stats.unsupported` 这条扩展路径留给将来「认得容器但还没写语义解析」的新协议。
    与 toast 的分工：toast 是「刚刚发生了什么」，会自己消失；
    提示条是「这份文件是什么情况」，在整个浏览过程中都成立，必须一直看得见。
    内容按文档存（`doc.notice`），所以切回来还在；点过「知道了」的记在 `noticeOff` 上。 */
@@ -6797,7 +8329,11 @@ function renderChannels() {
 /* ═══════════════════════ 筛选 ═══════════════════════ */
 function buildTypeList() {
   const counts = new Map();
-  for (const p of S.packets) counts.set(p.msgType, (counts.get(p.msgType) || 0) + 1);
+  const kinds = new Map();          // 类型 → 语义类别（直接取真实报文，别去猜名字）
+  for (const p of S.packets) {
+    counts.set(p.msgType, (counts.get(p.msgType) || 0) + 1);
+    if (!kinds.has(p.msgType)) kinds.set(p.msgType, p.kind);
+  }
   const arr = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 
   const body = $('#msBody');
@@ -6814,20 +8350,22 @@ function buildTypeList() {
       applyFilters();
     });
     const dot = el('span', 'dot');
-    dot.style.background = catColor(kindOf({ msgType: t, msgKind: guessKind(t) }));
+    dot.style.background = catColor(kinds.get(t) ?? guessKind(t, t));
     lab.append(cb, dot, el('span', '', t), el('span', 'cnt', String(n)));
     body.appendChild(lab);
   }
   updateMsHead(arr.length);
 }
-function guessKind(t) {
-  if (t === 'VDM') return 'data';
-  if (/GOOD CRC|ACCEPT|REJECT|PING|PS RDY|GOTO MIN|Swap|Wait|Soft_Reset|Data_Reset|Not_Supported|FR_Swap|Get_/.test(t)) return 'control';
-  if (/Extended|_Info$|Status|Battery|Country|Manufacturer|Security|Firmware|Revision/.test(t)) return 'ext';
+/** 兜底猜类别（真实报文里没这个类型时才用；UFCS 的类型名带下划线，按名字判更准） */
+function guessKind(t, name = t) {
+  if (name === 'VDM') return 'data';
+  if (/GOOD CRC|ACCEPT|REJECT|PING|PS RDY|GOTO MIN|Swap|Wait|Soft_Reset|Data_Reset|Not_Supported|FR_Swap|Get_/.test(name)) return 'control';
+  if (/Extended|_Info$|Status|Battery|Country|Manufacturer|Security|Firmware|Revision/.test(name)) return 'ext';
   return 'data';
 }
 function catColor(k) {
-  const v = getComputedStyle(document.documentElement).getPropertyValue('--' + ({ Control: 'ctrl', Data: 'data', Extended: 'ext', VDM: 'vdm', Error: 'err' }[k] || 'ctrl'));
+  const map = { Control: 'ctrl', Data: 'data', Extended: 'ext', VDM: 'vdm', Custom: 'custom', Error: 'err' };
+  const v = getComputedStyle(document.documentElement).getPropertyValue('--' + (map[k] || 'ctrl'));
   return v.trim() || '#888';
 }
 function updateMsHead(total) {
@@ -6839,19 +8377,24 @@ addEventListener('click', (e) => {
   if (!e.target.closest('#fType')) $('#msBody').classList.remove('open');
 });
 
-// 角色 / SOP / 类别 chips
+// 角色 / 链路 / 类别 chips
 /**
- * 注意传的是**键名**而不是 Set 本身：`S.filters` 每切一次标签就换一份，
- * 初始化时抓一个 Set 引用下来，之后点 chip 改的就会一直是第一份文档的筛选集。
+ * 用**事件委托**绑在容器上，而不是逐个 chip 绑 —— 这几个容器会随协议整片重建
+ * （见 renderFilterSections），逐个绑的话每次重建都要重绑，漏一次就点不动了。
+ *
+ * 注意改的是 `S.filters[key]` 这个**键**而不是 Set 本身：`S.filters` 每切一次标签
+ * 就换一份，把 Set 引用抓下来，之后点 chip 改的就会一直是第一份文档的筛选集。
  */
 function wireChips(sel, key) {
-  $$(sel + ' .chip').forEach((c) => c.addEventListener('click', () => {
+  $(sel).addEventListener('click', (e) => {
+    const c = e.target.closest('.chip');
+    if (!c || !c.dataset.v) return;
     const set = S.filters[key];
     const v = c.dataset.v;
     if (set.has(v)) { set.delete(v); c.classList.remove('is-on'); }
     else { set.add(v); c.classList.add('is-on'); }
     applyFilters();
-  }));
+  });
 }
 wireChips('#fRole', 'roles');
 wireChips('#fSop', 'sops');
@@ -6906,7 +8449,10 @@ $('#btnCurView').addEventListener('click', applyTimeRangeFromView);
 
 /** 重置当前文档的全部筛选（只影响这一份，其它标签各自的筛选原样保留） */
 $('#btnReset').addEventListener('click', () => {
-  S.filters = newFilters();
+  // 默认值必须跟着**当前文件的协议**走。写死 newFilters() 就等于拿 PD 的
+  // SOP / 类别白名单去筛 UFCS —— D+ / D- / Data 一个都不在里面，
+  // 一按重置整张列表会连同搜索框一起被清空。
+  S.filters = newFilters(S.meta?.protocol);
   S.viewMode = 'all';
   syncFilterUI();
   applyFilters();
@@ -6923,17 +8469,17 @@ function applyFilters(keepScroll) {
     if (!f.sops.has(p.sop)) continue;
     if (!f.cats.has(p.kind)) continue;
     if (f.types.size && !f.types.has(p.msgType)) continue;
-    if (f.hideGoodCrc && p.msgType === 'GOOD CRC') continue;
+    if (f.hideGoodCrc && isAutoAck(p)) continue;
     if (f.onlyBad && p.crcOk !== false) continue;
-    if (f.onlyPower && !POWER_TYPES.test(p.msgType)) continue;
-    if (f.onlyEnter && !ENTER_TYPES.test(p.msgType)) continue;
+    if (f.onlyPower && !isPowerType(p.msgType)) continue;
+    if (f.onlyEnter && !isEnterType(p.msgType)) continue;
     const t = p.startSample / tb;
     if (t < f.tFrom - 1e-9 || t > f.tTo + 1e-9) continue;
     if (q) {
       const hay = (p.msgType + ' ' + (p.summary || '') + ' ' + (p.dataHex || '') + ' ' + p.sop + ' ' + p.role).toLowerCase();
       if (!hay.includes(q)) continue;
     }
-    if (S.viewMode === 'neg' && !(POWER_TYPES.test(p.msgType) || ENTER_TYPES.test(p.msgType))) continue;
+    if (S.viewMode === 'neg' && !(isPowerType(p.msgType) || isEnterType(p.msgType))) continue;
     if (S.viewMode === 'err' && p.crcOk !== false) continue;
     out.push(p);
   }
@@ -6983,10 +8529,14 @@ function updateCounters() {
   } else if (S.state === 'ready') {
     line = '这份抓包还没解析，点一下上方标签即可开始';
   } else if (S.meta?.source === 'powerz') {
-    // 载入了文件但一条报文都没有：只有「协议未实现语义解析」这一种合理解释
-    line = S.stats?.unsupported
-      ? `已读入 <b>${S.stats.unsupportedMsgs ?? 0}</b> 条原始帧 · <span style="color:var(--warn)">${esc(S.meta.protocol)} 语义解析未实现</span>`
-      : `已读入分析仪导出，但其中没有可解析的报文`;
+    // 载入了文件但一条报文都没有：两种情况，话术不一样
+    if (S.stats?.unsupported) {
+      line = `已读入 <b>${S.stats.unsupportedMsgs ?? 0}</b> 条原始帧 · <span style="color:var(--warn)">${esc(S.meta.protocol)} 语义解析未实现</span>`;
+    } else if (S.stats?.ufcsUnlocatedRows) {
+      line = `已读入 <b>${S.stats.ufcsUnlocatedRows}</b> 行，但没有一行能认出 ${esc(S.meta.protocol)} 报文`;
+    } else {
+      line = `已读入分析仪导出，但其中没有可解析的报文`;
+    }
   } else {
     line = '等待打开抓包文件…';
   }
@@ -7040,7 +8590,7 @@ function setEmptyState(kind, extra) {
   }
   if (kind === 'pending') {
     t.textContent = '正在解析这份抓包';
-    p.textContent = '解析完成后这里会列出解出的 PD 报文。';
+    p.textContent = '解析完成后这里会列出解出的报文。';
     n.textContent = '';
     n.hidden = true;
     return;
@@ -7048,7 +8598,14 @@ function setEmptyState(kind, extra) {
   if (kind === 'unsupported') {
     t.textContent = `${extra || '该协议'} 抓包已载入，但语义解析未实现`;
     p.textContent = '报文容器与 VBUS / IBUS / 差分线模拟量轨迹已正常读出，可以直接在下方时间轴上看电压电流曲线。';
-    n.textContent = '报文列表需要该协议的规范才能逐字段还原，本工程目前只覆盖 USB PD。';
+    n.textContent = '报文列表需要该协议的规范才能逐字段还原，本工程目前只覆盖 USB PD 与 UFCS。';
+    n.hidden = false;
+    return;
+  }
+  if (kind === 'noframe') {
+    t.textContent = `${extra || '该抓包'} 里没有认出报文`;
+    p.textContent = '文件里的每一行都读过了，但既不像 UFCS 报文（消息头 + CRC-8 对不上）、也不像插拔事件。';
+    n.textContent = '模拟量轨迹仍然可用；如果这条线路上确实跑着 UFCS，请把样本发来核对容器格式。';
     n.hidden = false;
     return;
   }
@@ -7077,7 +8634,9 @@ function renderTable() {
     else if (!S.meta) setEmptyState('none');
     else if (!S.packets.length) {
       if (S.state === 'ready' || S.pending) setEmptyState('pending');
-      else setEmptyState(S.stats?.unsupported ? 'unsupported' : 'nomsg', S.meta.protocol);
+      else if (S.stats?.unsupported) setEmptyState('unsupported', S.meta.protocol);
+      else if (S.stats?.kind === 'ufcs' && S.stats?.ufcsUnlocatedRows) setEmptyState('noframe', S.meta.protocol);
+      else setEmptyState('nomsg');
     } else setEmptyState('filtered');
     vph.style.height = '0px'; vrows.innerHTML = ''; vrows.style.transform = 'translateY(0)';
     return;
@@ -7117,7 +8676,7 @@ function rowEl(p, i) {
   + `<div class="td type ${cls}"${tip}>${esc(p.msgType)}</div>`
   + `<div class="td num">${p.msgId ?? ''}</div>`
   + `<div class="td"><span class="pill ${p.role}">${esc(p.role)}</span></div>`
-  + `<div class="td num">${p.nObjects ?? ''}</div>`
+  + `<div class="td num">${p.protocol === 'UFCS' ? (p.dataLen ?? '') : (p.nObjects ?? '')}</div>`
   + `<div class="td time">${fmtTime(p.timeMs)}</div>`
   + `<div class="td bus">${p.vbus.toFixed(3)} V <em>/</em> ${p.ibus.toFixed(3)} A</div>`
   + `<div class="td mono">${highlightHex(hex)}</div>`
@@ -7194,10 +8753,12 @@ function renderDetail(p) {
   const box = $('#detailBody');
   const cls = CAT_CLASS[p.tone] || '';
   const h = [];
+  const ufcs = p.protocol === 'UFCS';
+  const revLabel = ufcs ? `UFCS ${p.revText || ''}`.trim() : `r${p.rev}`;
 
   h.push(`<div class="dhero ${p.crcOk === false ? 'dhero-bad' : ''}">
     <div class="t1 ${cls}">${esc(p.msgType)}</div>
-    <div class="t2">#${p.index} · ${esc(p.sop)} · ${esc(p.role)} · ID ${p.msgId ?? '-'} · r${p.rev} · ${fmtTime(p.timeMs)}`
+    <div class="t2">#${p.index} · ${esc(p.sop)} · ${esc(p.role)} · ID ${p.msgId ?? '-'} · ${esc(revLabel)} · ${fmtTime(p.timeMs)}`
     + (p.synthetic ? '<span class="srcbadge">分析仪逻辑字节</span>' : '') + `</div>
   </div>`);
 
@@ -7211,22 +8772,32 @@ function renderDetail(p) {
     ${cell('IBUS', p.ibus.toFixed(3) + ' A')}
     ${cell('起始时间', fmtTime(p.timeMs))}
     ${cell(p.bitrateNominal ? '线上时长' : '报文时长', p.durationUs.toFixed(1) + ' µs')}
-    ${cell('数据对象', String(p.nObjects ?? 0))}
-    ${cell(p.bitrateNominal ? 'BMC 码率' : '实测码率', (p.bitrate / 1000).toFixed(1) + ' kbps')}
+    ${cell(ufcs ? '数据长度' : '数据对象', ufcs ? `${p.dataLen ?? 0} B` : String(p.nObjects ?? 0))}
+    ${cell(p.bitrateNominal ? (ufcs ? '标称波特率' : 'BMC 码率') : '实测码率', (p.bitrate / 1000).toFixed(1) + ' kbps')}
     ${cell('CRC', p.crcOk === null ? '未记录（分析仪不存）' : p.crcOk ? '通过' : '校验失败')}
-    ${p.ackOf != null ? cell('确认的报文', `#${p.ackOf} · ${p.ackType || ''}`) : ''}
+    ${p.ackOf != null ? cell(ufcs ? '应答的报文' : '确认的报文', `#${p.ackOf} · ${p.ackType || ''}`) : ''}
   </div></div>`);
 
-  // 报文头位域
-  h.push(`<div class="dsec"><h5>报文头 (16 bit)</h5><div class="dbits">
-    ${bit('B15', 'Extended', bid(p.header, 15, 15), p.msgKind === 'ext' ? '扩展消息' : '标准消息')}
-    ${bit('B14-12', 'Object 数', bid(p.header, 12, 14), String(p.nObjects ?? 0))}
-    ${bit('B11-9', 'Message ID', bid(p.header, 9, 11), String(p.msgId ?? 0))}
-    ${bit('B8', 'Power Role', bid(p.header, 8, 8), p.powerRole ? '1 · Source' : '0 · Sink')}
-    ${bit('B7-6', 'Spec Revision', bid(p.header, 6, 7), `${bid(p.header, 6, 7)} · PD ${p.rev === 3 ? '3.x' : '2.0'}`)}
-    ${bit('B5', 'Data Role', bid(p.header, 5, 5), p.dataRole ? '1 · DFP' : '0 · UFP')}
-    ${bit('B4-0', 'Message Type', bid(p.header, 0, 4), `${p.msgTypeRaw ?? 0} · ${p.msgType}`)}
-  </div></div>`);
+  // 报文头位域：两种协议的 16 bit 头结构完全不同，各画各的
+  if (ufcs) {
+    const u = p.ufcs || {};
+    h.push(`<div class="dsec"><h5>消息头 (16 bit)</h5><div class="dbits">
+      ${bit('B15-13', '设备地址', bid(p.header, 13, 15), `${u.addrText || ''}（接收方）`)}
+      ${bit('B12-9', '消息编号', bid(p.header, 9, 12), String(p.msgId ?? 0))}
+      ${bit('B8-3', '协议版本编号', bid(p.header, 3, 8), `UFCS ${p.revText || ''}`)}
+      ${bit('B2-0', '消息类型', bid(p.header, 0, 2), `${p.msgKind === 'custom' ? '自定义消息' : p.msgKind === 'data' ? '数据消息' : '控制消息'} · 命令 0x${(p.msgTypeRaw ?? 0).toString(16).toUpperCase().padStart(2, '0')}`)}
+    </div></div>`);
+  } else {
+    h.push(`<div class="dsec"><h5>报文头 (16 bit)</h5><div class="dbits">
+      ${bit('B15', 'Extended', bid(p.header, 15, 15), p.msgKind === 'ext' ? '扩展消息' : '标准消息')}
+      ${bit('B14-12', 'Object 数', bid(p.header, 12, 14), String(p.nObjects ?? 0))}
+      ${bit('B11-9', 'Message ID', bid(p.header, 9, 11), String(p.msgId ?? 0))}
+      ${bit('B8', 'Power Role', bid(p.header, 8, 8), p.powerRole ? '1 · Source' : '0 · Sink')}
+      ${bit('B7-6', 'Spec Revision', bid(p.header, 6, 7), `${bid(p.header, 6, 7)} · PD ${p.rev === 3 ? '3.x' : '2.0'}`)}
+      ${bit('B5', 'Data Role', bid(p.header, 5, 5), p.dataRole ? '1 · DFP' : '0 · UFP')}
+      ${bit('B4-0', 'Message Type', bid(p.header, 0, 4), `${p.msgTypeRaw ?? 0} · ${p.msgType}`)}
+    </div></div>`);
+  }
 
   if (p.extHeader != null) {
     h.push(`<div class="dsec"><h5>扩展报文头 (16 bit)</h5><div class="dbits">
@@ -7239,7 +8810,7 @@ function renderDetail(p) {
 
   // 原始数据
   if (p.dataHex) {
-    h.push(`<div class="dsec"><h5>数据对象 (hex)</h5><div class="dobj"><div class="dobj-b hx">${esc(p.dataHex)}</div></div></div>`);
+    h.push(`<div class="dsec"><h5>${ufcs ? '整帧字节 (hex)' : '数据对象 (hex)'}</h5><div class="dobj"><div class="dobj-b hx">${esc(p.dataHex)}</div></div></div>`);
   }
 
   // 逐字段解析（按 Object 分组，每组一个配色，便于区分相邻的 VDO / PDO / 数据对象）
@@ -7656,9 +9227,11 @@ function exportAs(fmt) {
   const base = (S.fileName || 'pdscope').replace(/\.(atkcc|sqlite|db)$/i, '');
   let blob, name;
   if (fmt === 'csv') {
-    const head = ['#', 'SOP', 'MsgType', 'ID', 'Direction', 'Objects', 'Elapsed', 'Time(ms)', 'VBUS(V)', 'IBUS(A)', 'Data', 'CRC', 'Note'];
+    // UFCS 那一列是「数据字节数」（借 nObjects 存），PD 是「数据对象个数」——表头跟着换
+    const ufcsCsv = S.meta?.protocol === 'UFCS';
+    const head = ['#', 'SOP', 'MsgType', 'ID', 'Direction', ufcsCsv ? 'Bytes' : 'Objects', 'Elapsed', 'Time(ms)', 'VBUS(V)', 'IBUS(A)', 'Data', 'CRC', 'Note'];
     const rows = S.view.map((p) => [
-      p.index, p.sop, p.msgType, p.msgId ?? '', p.role, p.nObjects ?? '', fmtTime(p.timeMs), p.timeMs.toFixed(4),
+      p.index, p.sop, p.msgType, p.msgId ?? '', p.role, (ufcsCsv ? p.dataLen : p.nObjects) ?? '', fmtTime(p.timeMs), p.timeMs.toFixed(4),
       p.vbus.toFixed(4), p.ibus.toFixed(4), p.dataHex || '',
       p.crcOk === null ? '' : p.crcOk ? 'OK' : 'BAD', (p.summary || '').replace(/"/g, '""'),
     ]);

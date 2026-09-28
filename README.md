@@ -8,8 +8,11 @@
 | ---- | ---- | ---------- | -------- |
 | 正点原子 **ATK-C** | `.atkcc` | CC 线的原始电平采样（ZIP + 1bit/采样） | 分块 → 边沿 → BMC → 4B5B → PD 报文 |
 | **POWER-Z**（ChargerLAB） | `.sqlite` | 分析仪**已经解好的逻辑字节** + ADC 采样序列 | SQLite 读表 → Raw blob 拆事件 → 同一套 PD 语义解析 |
+| **POWER-Z**（录制 UFCS） | `.sqlite` | 同上，但录的是 **D+/D- 上的 UFCS**（融合快速充电） | SQLite 读表 → 定位 UFCS 帧 → 独立 UFCS 解析库（UART/消息头/CRC-8） |
 
-两条路径解出来的报文对象**同形**，所以界面、筛选、详情、时间轴、导出只有一处分叉。
+`.sqlite` 再按表名细分：有 `pd_table` 走 USB PD，有 `ufcs_table` 走 **UFCS（T/TAF 083—2024）
+独立解析库**（`src/js/ufcs/`）；两条路径解出来的报文对象**同形**，所以界面、筛选、详情、
+时间轴、导出只有「协议相关的那几处」分叉。
 
 一次可以打开**多份**抓包：窗口顶栏下方会出现标签栏，逐份切换。**每份文件各记各的**
 筛选条件、时间窗口、选中行与通道号，来回切不串味 —— 拿着两份不同充电器 / 线缆的抓包
@@ -35,6 +38,7 @@
 * [`.atkcc` 格式（逆向结论）](#atkcc-格式逆向结论)
 * [`.sqlite` 格式（POWER-Z 导出）](#sqlite-格式power-z-导出)
 * [PD 协议解析库](#pd-协议解析库)
+* [UFCS 协议解析库](#ufcs-协议解析库)
 * [目录结构](#目录结构)
 * [自检](#自检)
 * [已知限制](#已知限制)
@@ -374,7 +378,7 @@ GitHub 的 Windows runner 一直是 **Windows Server** 系列，从来没有过 
 ```
 node tools/version-check.mjs   # 版本号六处一致（外加 README 里的产物名提示项）
 node tools/syntax.mjs          # 全量语法检查（自动带上 tools/ 下的新脚本）
-node tools/selftest.js         # 协议层合成用例（44 项）
+node tools/selftest.js         # 协议层合成用例（64 项）
 ```
 
 这三项**在 10 个目标上各跑一遍** —— 顺带验证了解析内核在 Windows / macOS / Linux
@@ -427,25 +431,28 @@ node tools/serve.mjs        # 默认 http://127.0.0.1:5188，会自动开浏览�
 | **多份抓包 · 标签栏** | 拖拽 / 文件对话框都能一次给多份，每份占一个标签。标签带状态圆点（灰未解码 / 蓝呼吸解码中 / 绿完成 / 黄有告警 / 红打不开）与报文条数徽章；点选或 `Alt+1`…`Alt+9` 切换，`×` / 中键 / 右键菜单关闭（关闭 / 关闭其它 / 全部关闭）。**每份的筛选、时间窗口、选中行、通道、时间轴档位各自独立**，切回来原样还原；容器加载立即做，报文解码推迟到标签首次激活并走串行队列，拖一批进来不会被某一份大文件拖住 |
 | **报文表**          | `# / SOP / 报文类型 / ID / 方向 / Obj / 时间 / VBUS-IBUS / 数据hex / 解析详情`，虚拟滚动，几万条也不卡 |
 | **采样率来源标注**  | 顶栏显示实际采用的采样率并标出来源：`文件声明` / `波形实测` / `默认值`。声明与波形不一致时改按实测解码，并弹出提示；鼠标悬停可见 `channel.ini` 原文或原因。分析仪导出只有毫秒时间戳（`1.00 kHz`，标 `分析仪时间戳`），量级不同也能读 |
-| **方向区分**        | `Source`（供电方）/ `Sink`（受电方）/ `Plug`（线缆 e-marker）三色徽章；`SOP / SOP′ / SOP″` 分别标注 |
+| **方向区分**        | `Source`（供电方）/ `Sink`（受电方）/ `Plug`（线缆 e-marker）三色徽章；PD 标注 `SOP / SOP′ / SOP″`，UFCS 标注物理链路 `D+ / D- / D±`（供电设备 D+ 为 TX、充电设备 D- 为 TX）。UFCS 的消息头里只有**接收方**地址，发送方按「规范单向命令表 → 容器链路字节 → 接收方地址」三级还原，纯推断出来的会在详情里写明「推断」 |
 | **GOOD CRC 配对同色** | 每条 `GOOD CRC` 自动取「它所确认的那条报文」的颜色，而不是笼统的控制色。配对依据：GoodCRC 是对报文的即时应答（实测恒为紧邻 1 条），并用 PD 规范要求的 *MessageID 相同* 交叉校验；被确认报文本身是坏包时退化为纯邻近匹配。悬停报文类型可见 `确认 #N · 类型`，详情面板「链路概览」里也有「确认的报文」一栏 |
 | **选择性屏蔽**      | 按方向、SOP 类型、报文类别（控制/数据/扩展/VDM/异常）、**具体报文类型**（多选，带计数）、时间窗口、关键字任意组合过滤 |
 | **快捷过滤**        | 一键屏蔽 GOOD CRC 心跳包 / 只看 CRC 错误 / 只看功率协商 / 只看状态切换                        |
-| **CRC 错误标注**    | 校验未通过的报文在表格里整行标红，并在时间轴对应位置画一条贯穿的高亮竖线；配合「只看 CRC 错误」可一键筛出来。分析仪导出不含 CRC，此时统计行写「**CRC 未记录（分析仪不存）**」而不是「全通过」，详情面板也单列一行说明 |
+| **CRC 错误标注**    | 校验未通过的报文在表格里整行标红，并在时间轴对应位置画一条贯穿的高亮竖线；配合「只看 CRC 错误」可一键筛出来。分析仪导出**可能没存 CRC**（PD 的 `pd_table` 一律不存），此时统计行写「**CRC 未记录（分析仪不存）**」而不是「全通过」，详情面板也单列一行说明。UFCS 存不存 CRC 由容器定位阶段判定：存了就照实给「通过 / 失败」，没存才写「未记录」 |
 | **时间窗口**        | 底部 VBUS/IBUS 时间轴可**拖拽刷选**一段区间，表格立即联动                                     |
-| **两档模拟量视图**  | 分析仪导出除了 VBUS / IBUS 还录了第三、第四路模拟量（POWER-Z 的 **CC1 / CC2**，UFCS 的 **DP / DM**）。量程与 VBUS 差一个数量级，叠在一起会糊，所以做成标题旁的 `电压/电流 ↔ CC 线` 两档切换：纵轴刻度、悬停读数、曲线配色全部跟着换。ATK-C 的 `bus.ini` 只有两路，这一档自动隐藏 |
+| **两档模拟量视图**  | 分析仪导出除了 VBUS / IBUS 还录了第三、第四路模拟量（POWER-Z 的 **CC1 / CC2**，UFCS 的 **DP / DM**）。量程与 VBUS 差一个数量级，叠在一起会糊，所以做成标题旁的 `电压/电流 ↔ 差分线` 两档切换（档名跟着文件走：PD 显示「CC 线」、UFCS 显示「DP / DM」）：纵轴刻度、悬停读数、曲线配色全部跟着换。ATK-C 的 `bus.ini` 只有两路，这一档自动隐藏 |
 | **插拔事件**        | 分析仪会把 DFP/UFP 的插入 / 拔出记成独立事件（ATK-C 只存波形，看不到这个）。顶栏「插拔」chip 给出计数 |
 | **位域详情**        | 右侧面板逐位展开报文头（B15 扩展 / B14-12 对象数 / B11-9 MsgID / B8 PowerRole / B7-6 Rev / B5 DataRole / B4-0 类型）、扩展头、每个数据对象（PDO/RDO/VDM）的全部字段。分析仪来源的报文会在标题旁标「分析仪逻辑字节」，并把「实测码率」改称「BMC 码率」、「报文时长」改称「线上时长」—— 那是按 600 kbps 标称时钟折算的，不是量出来的 |
 | **分组配色**        | 每个数据对象（VDO / PDO / RDO / 扩展消息的数据块）单独成组，**相邻分组换色相**（8 色循环）并带左侧色条；`Source_Capabilities` 这种七八个 PDO 的长报文，不用读标题也能一眼看出边界。分组标题**滚动吸顶**，长列表翻到哪都知道自己在看第几个对象 |
-| **详情宽度可拖 / 可收起** | 详情面板与表格之间的分隔条可**拖拽改宽**（下限 280 / 上限 900，且始终给中间表格留 420px，窄窗口下自动收紧），双击分隔条或按 `Enter` 回到 390 默认；也可聚焦分隔条后用 `← →` 微调（`Shift` 加大步长，`Home/End` 到最窄/最宽）。宽度存 `localStorage`，下次打开还在。按 `Esc` 或点右上 `×` 收起，**收起后窗口右缘出现一条 22px 的「详情」竖栏**，点它就能展开 —— 没有报文可点时（零报文的 UFCS 抓包）也回得来 |
-| **未实现协议如实说明** | 分析仪抓的是本工程未覆盖的协议时（目前是 UFCS），界面不装作解析失败：**常驻提示条**讲清原因、统计行写「已读入 N 条原始帧 · UFCS 语义解析未实现」、表格空态也换成专门话术，而模拟量轨迹照常可用 |
+| **详情宽度可拖 / 可收起** | 详情面板与表格之间的分隔条可**拖拽改宽**（下限 280 / 上限 900，且始终给中间表格留 420px，窄窗口下自动收紧），双击分隔条或按 `Enter` 回到 390 默认；也可聚焦分隔条后用 `← →` 微调（`Shift` 加大步长，`Home/End` 到最窄/最宽）。宽度存 `localStorage`，下次打开还在。按 `Esc` 或点右上 `×` 收起，**收起后窗口右缘出现一条 22px 的「详情」竖栏**，点它就能展开 —— 没有报文可点时（一行也没定位出报文的抓包）也回得来 |
+| **UFCS 融合快充解析** | POWER-Z 录的 UFCS（`ufcs_table`）走**独立解析库**：UART 起止位 → 消息头四段位域（设备地址 / 消息编号 / 协议版本 / 消息类型）→ 控制 / 数据 / 厂家自定义三类消息 → **CRC-8（多项式 0x29，初值 0x00）**。17 条控制命令、14 条数据命令逐字段展开（`Output_Capabilities` 的每种输出模式、`Request`、`Source / Sink / Cable / Device / Error Information`、`Config_Watchdog`、`Refuse`、`Verify_*`、`Power_Change`、`Sink_Information_Extended`、`Test_Request`…）。方向按「规范单向命令表 → 容器链路字节 → 接收方地址」三级还原，`ACK / NCK` 与被确认报文配对。容器前缀（4B 时间戳 / 再带一个链路字节）与「存不存 CRC」都用消息头合法性 + CRC-8 反证定位，**不假设结构** |
+| **认不出的行如实说明** | UFCS 导出里有的行既定位不出报文、也不像插拔事件（容器格式各家实现不一）：界面不装作解析失败，统计行写「已读入 N 行，但没有一行能认出 UFCS 报文」、表格空态换专门话术，模拟量轨迹照常可用 |
 | **导出**            | CSV（当前筛选结果）或 JSON（全部报文，含原始位域字段与 `ackOf` 配对序号）                     |
 | **其它**            | 明/暗主题、紧凑/舒适行高、上一条/下一条（↑↓）、`/` 聚焦搜索、`Ctrl/⌘+O` 打开、`Alt+1..9` 切标签、`T` 切主题、`G` 切 GOOD CRC 屏蔽、折叠筛选栏 |
 
 界面截图见 `artifacts/e2e-screenshot.png`（跑 `npm run e2e` 时自动生成），
 多份抓包时的标签栏见 `artifacts/e2e-multi.png`（`npm run e2e:multi`，一份 `.atkcc` + 一份 `.sqlite`），
 POWER-Z 的 `.sqlite` 拖进来后的样子见 `artifacts/e2e-powerz.png`（`npm run e2e:powerz`），
-UFCS 抓包「只出容器与模拟量」的样子见 `artifacts/e2e-ufcs.png`，
+UFCS 抓包解出报文后的样子见 `artifacts/e2e-ufcs.png`（`npm run e2e:ufcs`），
+手上没有私有抓包时也能看：`npm run e2e:ufcs:synth` 会现造一份 UFCS 导出再截图到
+`artifacts/e2e-ufcs-synth.png`，走的界面路径与上面完全相同，
 GOOD CRC 配对同色的效果见 `artifacts/ack-colors.png`，
 分组配色见 `artifacts/group-colors-srcap.png`（Source_Cap 七个 PDO）、
 `artifacts/group-colors-vdm.png`（线缆 e-Marker 的 VDO 链）、
@@ -544,6 +551,28 @@ UFCS 抓包（国产快充协议）结构完全一样，只是表名换成 `ufcs
 
 拼不通的字节**如实标记**并停止，不硬猜长度 —— 一个错的长度会把后面所有事件读歪。
 
+### UFCS 的 Raw blob 里是什么
+
+UFCS 导出（`ufcs_table`）的表结构与 PD 完全一样，但**一行的 Raw 是另一套帧结构**：
+4 字节毫秒时间戳打头、后面直接跟一条（或多条）UFCS 报文，**没有 PD 那种 marker 字节**；
+各家实现「存不存 CRC」也不一致。本工程手上没有该格式的公开资料，因此**不假设结构**，
+改用「穷举前缀长度（0…16 B）× 两种 CRC 读法 + 消息头合法性 + CRC-8 反证」定位
+（`src/js/ufcs/frame.js#ufcsLocateFrames`），按三级择优：
+
+| 级别 | 含义 | 处理 |
+| ---- | ---- | ---- |
+| A | 带 CRC，且每一帧 CRC-8 都对得上 | 最可信（正常抓包的绝大多数行） |
+| B | 带 CRC，但有帧对不上 | 真·坏包照解，`crcOk = false` |
+| C | 不存 CRC（只到消息主体为止） | 本工具补算 CRC，`crcOk = null` |
+
+同级内比「消息头字段 + 命令编号是否合法」，再比特前缀长短（越短越像真的容器头）。
+这样无论前缀是 0 / 4 字节时间戳 / 「时间戳 + 链路字节」，都落回同一条解析路径。
+前缀 ≥5 字节时，紧邻报文的那一个字节按「`0` = 供电侧(D+) / `1` = 充电侧(D−)」解读为链路标记
+—— 这也是「方向」的三级判据之一。
+
+时间基准取 SQLite 的 `Time` 列（与 `ufcs_chart` 的 ADC 采样同一套时基，×1000 得毫秒），
+容器前缀里那 4 字节时间戳只作诊断信息 —— 保证报文与模拟量曲线对得上。
+
 ### 怎么复用同一套 PD 语义
 
 报文已经是逻辑字节了，但**不想抄第二份解析**。于是把它**反向铺回成一份 1bit/采样数组**：
@@ -552,6 +581,12 @@ SOP 有序集符号 → 各字节（低半字节先行）→ 按规范算出的 
 `PdDecoder#decodeWire()` 之后直接复用 `decode()` ——
 报文头、VDM、PDO/RDO、扩展消息、跨报文状态（PDO 登记表、SOP 电源角色）**全都一致**，
 不会出现「两条路径慢慢跑偏」。
+
+> **UFCS 不套用这条路径**。UFCS 的物理层是 UART（1 起始位 + 8 数据位 + 1 结束位），
+> 报文结构与 PD 完全不同（没有 4B5B、没有 32 位报文头、没有 PDO 表）。
+> 强行复用只会两败俱伤，所以它**单独成一库** `src/js/ufcs/`，只在
+> **报文对象契约**（`sop / msgType / role / details / crcOk / startSample …`）这一层与 PD 对齐 ——
+> 界面、筛选、详情、时间轴、导出照旧共用同一段渲染代码。
 
 三个必须守住的细节：
 
@@ -583,9 +618,18 @@ SOP 有序集符号 → 各字节（低半字节先行）→ 按规范算出的 
 ### 逐条核对
 
 ```bash
-npm run powerz:inspect              # 全样本体检（默认读仓库上一级的 .sqlite）
+npm run powerz:inspect              # 全样本体检（默认读仓库上一级的 .sqlite），PD 与 UFCS 都认
 npm run powerz:inspect -- --packets # 连类型分布一起打
-npm run e2e:powerz                  # 端到端：拖拽 .sqlite 进单文件版，35 项断言 + 截图
+npm run e2e:powerz                  # 端到端：拖拽 .sqlite（USB PD）进单文件版，36 项断言 + 截图
+npm run e2e:ufcs                    # 端到端：拖拽真实 UFCS 导出，报文表 / 详情面板 / 差分线视图 + 截图
+npm run e2e:ufcs:synth              # 同上，但样本是现造的（无需私有抓包，CI 可跑）→ 35 项 + 1 跳过
+```
+
+`e2e:ufcs` 与 `e2e:ufcs:synth` 走的是同一条界面路径，只差样本来源：
+前者拖的是真实 `ufcs_vivo_x300u.sqlite`（**不在仓库里**，理由见「CI 构建」一节的样本说明），
+后者先用 `tools/make-test-ufcs.mjs` 现造一份最小的 UFCS 导出再拖进去 ——
+那份样本里 8 帧覆盖控制 / 数据 / 自定义三类、故意掺 1 条坏 CRC，
+所以「解出报文」「CRC 统计口径」「ACK 配对」这些断言都真的跑得起来，不是空过。
 ```
 
 
@@ -636,6 +680,57 @@ e-Marker 的 SOP'/SOP'' VDM）只给了概要字符串。本库按规范把整�
 
 ---
 
+## UFCS 协议解析库
+
+UFCS（融合快速充电）不在 USB PD 规范内，本工程按 **T/CCSA 393—2024 / T/TAF 083—2024
+《移动终端融合快速充电技术要求》**（仓库根目录有该 PDF）实现，**单独成一库** `src/js/ufcs/`。
+它零外部依赖、浏览器 + Node 双栈通用，整个目录复制到别的工程即可复用。
+
+```js
+import { UfcsDecoder } from './js/ufcs/index.js';
+
+const ufcs = new UfcsDecoder({ sampleRate: 1000 });
+// bodyBytes = 消息头 + 消息主体（**不含** CRC）；
+// crc 传 null 表示容器没存 CRC，此时 crcOk 记为 null（不谎报通过）
+const pkt = ufcs.decode(bodyBytes, { crc, timeMs: 12, line: 'D+' });
+```
+
+返回的报文对象与 PD 侧**同形**（`sop / msgType / msgKind / role / header / msgId / rev /
+revText / nObjects / crc / crcCalc / crcOk / summary / details / warnings / text /
+startSample …`），所以界面、筛选、详情、时间轴、导出都不必为新协议再写一套。
+
+### 覆盖的规范条目
+
+| 模块 | 覆盖的内容 |
+| --- | --- |
+| `crc.js` | 规范 8.2 的 **CRC-8**：多项式 X⁸+X⁵+X³+1（`0x29`）、初值 `0x00`，覆盖「消息头 + 消息主体」 |
+| `frame.js` | 表 13 消息头四段位域、图 13/14/15 三种帧结构（控制 / 数据 / 厂家自定义）、容器前缀定位 `ufcsLocateFrames` |
+| `tables.js` | 表 14 的 **17 条控制命令**、表 15 的 **14 条数据命令**、设备地址、协议版本编号、拒绝原因、扩展状态类型、异常位、波特率档位（115200 / 57600 / 38400）、**单向命令方向表** |
+| `format.js` | 大端位域取值（`ufcsBits`）与物理量格式化（电压 ×10 mV、电流 ×10 mA、温度 raw−50 ℃） |
+| `payload.js` | 8.2.4 各条数据命令的逐字段解析（见下） |
+| `decoder.js` | 主解码器 `UfcsDecoder`：位域 → 主体 → CRC → 方向还原 → 逐字段 → 组装报文对象；`ufcsLinkAck` 做 ACK/NCK 配对 |
+
+**逐字段解析到的数据命令**（表 15，`payload.js` 分发）：
+
+`Output_Capabilities`（每种输出模式 8 字节：模式编号 / 电流步进 / 电压步进 / 最大最小电压电流）、
+`Request`、`Source_Information`、`Sink_Information`、`Cable_Information`、`Device_Information`、
+`Error_Information`、`Config_Watchdog`、`Refuse`、`Verify_Request`、`Verify_Response`、
+`Power_Change`、`Sink_Information_Extended`、`Test_Request`；控制消息的 17 条命令给出
+「发送者 → 接收者」「是否必选」「语义摘要」。规范未定义的命令编号**如实列出原始字节**，不硬套结构。
+
+### 三个容易踩的点
+
+| 点 | 做法 | 为什么 |
+| ---- | ---- | ------ |
+| **字节序** | 多字节字段**高字节在前**（大端） | 规范反复强调「先发送高字节」，与 PD 的小端**正好相反**。载荷数组本身就是大端位串（`payload[0]` 是最高字节），取 `bit b` 时 `字节下标 = 长度-1-(b>>3)`、`位下标 = b&7` |
+| **方向** | 「规范单向命令表 → 容器链路字节 → 接收方地址」三级还原 | 消息头里**只有接收方**地址。物理层 D+/D- 全双工、供电设备 D+ 为 TX、充电设备 D- 为 TX，配合接收方才能唯一确定发送方；纯推断出来的会标出来 |
+| **CRC 覆盖范围** | 消息头 + 消息主体，**不含**容器前缀 / UART 起止位 | 容器不存 CRC 时由本工具补算并置 `crcOk = null`，绝不据此宣布「通过」 |
+
+> 库内所有顶层名字统一带 `ufcs` / `UFCS_` 前缀，理由同上（单文件打包器会把整个 ES Module
+> 图拍平进一个 IIFE 作用域，重名会互相覆盖）。
+
+---
+
 ## 目录结构
 
 ```
@@ -652,6 +747,14 @@ PDScope/
 │  │   ├─ vdm.js          VDM（含 Discover Identity 的线缆/端口 VDO —— plug 信令）
 │  │   ├─ extended.js     扩展消息数据块（SCEDB/SDB/GBCDB/制造商/安全/固件/EPR 能力…）
 │  │   ├─ decoder.js      主解码器 PdDecoder（比特流 → 结构化报文对象）
+│  │   └─ index.js        聚合入口（外部从这里 import）
+│  ├─ js/ufcs/            独立 UFCS 解析库（零依赖、浏览器 + Node 通用，可整目录复用）
+│  │   ├─ crc.js          CRC-8（多项式 0x29）
+│  │   ├─ frame.js        消息头位域 / 三种帧结构 / 容器前缀定位（ufcsLocateFrames）
+│  │   ├─ tables.js       控制命令表(17) / 数据命令表(14) / 设备地址 / 单向命令方向表…
+│  │   ├─ format.js       大端位域取值与格式化（工具函数统一 ufcs* 前缀）
+│  │   ├─ payload.js      各数据命令逐字段解析 + 厂家自定义消息
+│  │   ├─ decoder.js      主解码器 UfcsDecoder（逻辑字节 → 结构化报文对象）
 │  │   └─ index.js        聚合入口（外部从这里 import）
 │  ├─ js/core/            容器与波形内核（浏览器 + Node 通用，零依赖）
 │  │   ├─ zip.js          ZIP 读取（含 ZIP64 / EOCD 定位）
@@ -690,6 +793,8 @@ PDScope/
    ├─ tauri-e2e.mjs       真实 Tauri 窗口里的端到端自检 + 截图（测桌面版）
    ├─ perf-probe.mjs      「打开卡不卡」探针：阻塞间隙 + longtask + 函数级 CPU 占比
    ├─ make-test-atkcc.mjs 造 .atkcc 压力样本（逐位跳变 / 伪随机 / 真实波形重复 N 轮）
+   ├─ make-test-ufcs.mjs  造最小 UFCS 的 .sqlite 导出（覆盖控制/数据/自定义 + 1 条坏 CRC），
+   │                      供无私有抓包时跑 `npm run e2e:ufcs:synth`
    ├─ chunk-cost.mjs      逐块差分解码成本（cost(k) - cost(k-1)），定位贵的那一块
    ├─ serve.mjs           本地静态服务 + 示例文件接口
    ├─ build-standalone.mjs  打包单文件 dist/PDScope.html
@@ -724,21 +829,23 @@ PDScope/
 # 版本号 / 语法 / 协议层（纯 Node，秒级）
 node tools/version-check.mjs              # 版本号五处是否一致（最便宜，先跑它）
 node tools/syntax.mjs                     # 全量语法检查（几秒；界面脚本错一个字符就是白屏）
-node tools/selftest.js                    # 合成用例 44 项：4B5B / PD / CRC + 采样率 + plug 信令 + POWER-Z 路径
+node tools/selftest.js                    # 合成用例 64 项：4B5B / PD / CRC + 采样率 + plug 信令 + POWER-Z / UFCS 路径
 node tools/ackcheck.js                    # GOOD CRC 配对（跨 5 份真实抓包）
-node tools/powerz-inspect.mjs             # POWER-Z（.sqlite）全样本体检（需要样本文件，非 0 退出即异常）
+node tools/powerz-inspect.mjs             # POWER-Z（.sqlite，PD 与 UFCS）全样本体检（需要样本文件，非 0 退出即异常）
 
-# 界面 29 项（ATK-C）/ 35 项（POWER-Z）/ 26 通过 + 12 跳过（UFCS 零报文）/ 38 项（多份抓包）
+# 界面 30 项（ATK-C）/ 36 项（POWER-Z·PD）/ 39 项（多份抓包）/ 35 项 + 1 跳过（UFCS 合成样本）
 # （走系统已装的 Chrome/Edge，不下载浏览器）
 npm run e2e                               # 单文件版，自包含；会先重建 dist
-npm run e2e:powerz                        # 同上，但拖进去的是 POWER-Z 的 .sqlite
-npm run e2e:ufcs                          # 同上，但拖进去的是零报文的 UFCS 导出
+npm run e2e:powerz                        # 同上，但拖进去的是 POWER-Z 的 .sqlite（USB PD）
+npm run e2e:ufcs                          # 同上，但拖进去的是真实 UFCS 导出（解出 UFCS 报文）
+npm run e2e:ufcs:synth                    # 同上，但样本现造（make-test-ufcs.mjs），无需私有抓包
 npm run e2e:multi                         # 连续拖两份（.atkcc + .sqlite），测标签栏与各份状态隔离
-npm run e2e:all                           # 上面四种样本依次跑一遍（npm test 用的就是它）
+npm run e2e:all                           # 上面四种样本依次跑一遍（npm test 用的就是它；需私有抓包）
 npm run e2e:serve                         # 本地服务模式（需另开 node tools/serve.mjs）
 node tools/e2e.mjs --file dist/PDScope.html --drop "../制糖40w-ip18pro.atkcc"
 node tools/e2e.mjs --file dist/PDScope.html --drop "../山泽60w-ip18pro.sqlite"
 node tools/e2e.mjs --file dist/PDScope.html --drop "../ufcs_vivo_x300u.sqlite"
+node tools/e2e.mjs --file dist/PDScope.html --drop "artifacts/_ufcs_synth.sqlite"   # UFCS，样本现造
 node tools/e2e.mjs --file dist/PDScope.html \
      --drop "../制糖40w-ip18pro.atkcc" --drop2 "../山泽60w-ip18pro.sqlite"   # 多份抓包
 
@@ -769,7 +876,7 @@ npm run check
 当前 5 份抓包共 1141 条有效 GOOD CRC **100% 配对成功**，1100 条可校验的配对
 **MessageID 全部一致**，最远距离恒为 1 条报文。
 
-**`selftest.js`** 用例共 **44 项**，分五组。第一组先在合成报文的**字段级**校验
+**`selftest.js`** 用例共 **64 项**，分六组。第一组先在合成报文的**字段级**校验
 4B5B / PD / CRC 语义（8 项）；第二组把同一串报文按 **1.5 / 2.5 / 4 / 6 MHz**
 重新采样一遍（4 项），检查：用真实采样率能解出全部报文、波形反推的采样率误差 < 1%、
 按反推值解码同样得到全部报文，并确认「采样率写错一倍就一条也解不出来」——
@@ -780,10 +887,21 @@ BIST 模式在 PD 2.0 与 3.x 下的不同含义、Discover SVIDs 的两两成�
 第四组（6 项）只测 `channel.ini` 的**采样率声明解析**：多键名（`SamplingFrequency` /
 `SampleRate` / 小写下划线写法）、多单位（裸数字 = kHz、`MHz`、`kHz`）、
 以及「只有 `Resolution` 或整个键都缺」时退回默认值。
-第五组（20 项）专测 **POWER-Z 的 `.sqlite` 路径**：Raw blob 的插入/拔出/包裹报文拆帧与
-「拼不通要如实标截断」、`decodeWire` 的语义等价与「CRC 未记录 ≠ 通过」、SQLite 页/记录读取，
-以及 `PowerzCapture` 的端到端（含 UFCS 只做容器不假装解析）。这一组用**手搓的最小 SQLite 库**
-做输入，不依赖任何真实样本，CI 上也能跑。
+第五组（18 项）专测 **POWER-Z 的 `.sqlite` 路径（USB PD）**：Raw blob 的插入/拔出/包裹报文拆帧与
+「拼不通要如实标截断」、`decodeWire` 的语义等价与「CRC 未记录 ≠ 通过」、SQLite 页/记录读取、
+`PowerzCapture` 的端到端，以及「不是 POWER-Z 的 SQLite 要判为不支持」。
+第六组（22 项）专测 **UFCS**（见下）。后两组都用**手搓的最小 SQLite 库**做输入，
+不依赖任何真实样本，CI 上也能跑。
+
+**UFCS 那一组（22 项）测的是**：CRC-8 与一份**表驱动**参照实现随机比对 400 组（写法不同，
+两边必须一致，防转录错误）；消息头四段位域；控制 / 数据 / 厂家自定义三类消息；
+`Output_Capabilities` / `Request` / `Cable_Information` / `Sink_Information_Extended` / `Refuse`
+的**逐字段**取值；CRC 错误被识别但其余字段不受影响；数据长度不符要报出来；
+方向与规范单向命令表不符要告警；容器前缀定位的四种情形——**4B 时间戳 + 带 CRC**、
+**时间戳 + 链路字节**、**不存 CRC**、**一行两帧**；最后手搓一个含 5 条真实 UFCS 帧
+（其中 1 条故意打坏 CRC）+ 1 行残行的 SQLite，走 `PowerzCapture` **端到端**校验：
+报文顺序与类型、方向与链路（D+/SRC … D-/SNK）、ACK 与被确认报文配对、统计口径
+（`badCrc=1 / crcUnknown=0 / 残行=1`）、以及模拟量可用且**不再标注「未实现」**。
 
 **`pd-regress.mjs`** 把重构前的解码器从 `git HEAD` 取出来，与新库在同一份抓包上
 **逐包逐字段对比**（sop / msgType / header / crcOk / nObjects / dataWords）。
@@ -792,25 +910,35 @@ BIST 模式在 PD 2.0 与 3.x 下的不同含义、Discover SVIDs 的两两成�
 并在每个样本前打一行「报文 / 线缆链路 / 扩展 / 坏 CRC / 警告」汇总，便于人工核对与全样本体检。
 
 **`e2e.mjs`** 直接走 Chrome DevTools Protocol（用系统已装的 Chrome/Edge，不下载浏览器），
-**29 项**校验：页面骨架、抓包解码、虚拟滚动、方向过滤、关键字搜索、时间轴绘制、主题切换、
+**30 项**校验：页面骨架、抓包解码、虚拟滚动、方向过滤、关键字搜索、时间轴绘制、主题切换、
 采样率来源标注、**详情面板拖拽改宽**（用真实鼠标事件走一遍 pointer capture，验证加宽 / 落盘 /
 收起还原 / 超限夹紧 / 双击复位）、**收起后右缘出现展开把手**、
 **标签栏出现 / 顶栏文件 chip 跟随当前标签 / 关闭全部后标签栏收起并回到引导页**、
 无控制台异常，最后自动截图。
 加 `--drop <文件>` 可注入真实抓包；`--eval "<js>"` 进调试模式，在页面里跑任意表达式并打印结果。
 
-拖进去的若是 `.sqlite`，**另外再跑 6 项**（共 **35 项**）：来源标注为 POWER-Z、
-CRC 统计口径是「未记录」而非「全通过」、插拔事件计数、差分线视图可切换（PD 是 CC1/CC2、
-UFCS 是 DP/DM，档名与标题跟着文件走）且切换后重绘并换标题、切回电压/电流。
+拖进去的若是 `.sqlite`，**另外再跑 6 项**（共 **36 项**）：来源标注为 POWER-Z、
+CRC 统计口径、插拔事件计数、差分线视图可切换（PD 是 CC1/CC2、UFCS 是 DP/DM，
+档名与标题跟着文件走）且切换后重绘并换标题、切回电压/电流。
 所以 `e2e:powerz` 是 POWER-Z 路径的界面级回归。
 
-拖进去的若是**零报文**的导出（UFCS，语义解析未实现），依赖「列表里有行」的 12 项断言
-**显式跳过**并计入汇总（`26 通过, 0 失败, 12 跳过`），而不是判失败 —— 那些断言在这份样本上
-本就无从谈起。同时改测「零报文路径」本身：常驻提示条讲清原因、顶栏显示原始帧条数、
-表格空态用的是「协议未实现」话术而非「筛选后为空」、时间轴照常绘制、把手能重开详情面板。
-跳过数会打进汇总行，避免「全绿」被误读成「所有断言都跑过了」。
+这份样本是 PD 还是 UFCS 由顶栏「来源」chip 判定，几处断言的措辞跟着换：PD 的 CRC 恒为
+「未记录（分析仪不存）」；**UFCS 存不存 CRC 由容器决定**，断言只要求「未记录 / 全通过 /
+错误 N」三者之一、且不谎报。PD 的「插拔」chip 必须有；UFCS 容器一般不带连接/断开标记，
+没有就跳过而不判失败（**有却不显示**才算错 —— 判据是「如实」，不是「必须有」）。
+同理「首行内容合理」与「头位域块与协议匹配」也不能共用一套词表：前者的类型名
+（`Source_Capabilities` / `Output_Capabilities`）与后者的块名（`报文头` / `消息头`）
+两种协议各不相同，两个分支都必须**只出现其一**。
 
-加 `--drop2 <文件>` 则进入**多份抓包**模式（`npm run e2e:multi`，共 **38 项**）：
+若这份样本**一行报文都没定位出来**（容器格式对不上，或本来就没有报文），依赖「列表里有行」的
+11 项断言**显式跳过**并计入汇总（`.sqlite` 还会再跳过 CRC 口径 / 插拔计数两项，
+合计 `23 通过, 0 失败, 13 跳过`），而不是判失败 ——
+那些断言在这份样本上本就无从谈起。同时改测「零报文路径」本身：提示条说清原因、
+统计行给出「已读入 N 行」、表格空态用的是「没有一行能认出」而非「筛选后为空」、
+时间轴照常绘制、把手能重开详情面板。跳过数会打进汇总行，避免「全绿」被误读成
+「所有断言都跑过了」。
+
+加 `--drop2 <文件>` 则进入**多份抓包**模式（`npm run e2e:multi`，共 **39 项**）：
 先按普通路径注入第一份、**故意改掉它的筛选**（关掉 SNK）并记下条数，再注入第二份，然后断言
 标签栏由一条变两条、两份是**不同来源**（`.atkcc` 与 `.sqlite` 各记各的）、报文条数**各自独立**、
 **新标签的筛选是默认值**（没有被上一份污染）、切回第一份后筛选面板已还原且条数与切走前一致；
@@ -885,7 +1013,7 @@ node tools/cli.js "../苹果40w-ip18pro.atkcc" --csv            # CSV
 node tools/cli.js "../apple_40w_avs_iphone_air.atkcc" --scan  # 各通道活动度
 node tools/cli.js "../绿联70w-ip18pro.atkcc" --rate 2400000    # 强制指定采样率（排查用）
 node tools/cli.js "../山泽60w-ip18pro.sqlite"                  # POWER-Z 导出，自动识别
-node tools/cli.js "../ufcs_vivo_x300u.sqlite"                  # UFCS：只出模拟量，并明确提示未解析
+node tools/cli.js "../ufcs_vivo_x300u.sqlite"                  # UFCS：解出 UFCS 报文表（.sqlite 自动分流）
 ```
 
 实测样本（`.atkcc` → 报文数 / CRC 错误）：
@@ -898,16 +1026,35 @@ node tools/cli.js "../ufcs_vivo_x300u.sqlite"                  # UFCS：只出�
 | 苹果40w-ip18pro            | 1    | 738  | 6        |
 | apple_40w_avs_iphone_air   | 24   | 1048 | 5        |
 
-实测样本（`.sqlite` → 报文数 / 线缆链路 / 插拔 / 拆帧自检）：
+实测样本（`.sqlite`，USB PD → 报文数 / 线缆链路 / 插拔 / 拆帧自检）：
 
 | 文件                  | 协议   | 表行  | 报文 | 线缆链路 | 扩展 | 插拔 | 时长     | 拆帧自检 |
 | --------------------- | ------ | ----: | ---: | -------: | ---: | ---: | -------- | -------- |
 | 山泽60w-ip18pro       | USB PD | 45    | 44   | 4        | 3    | 1 / 0 | 9.91 s   | ✔ 0 坏包 / 0 截断 |
 | 酷泰科6u-18pro        | USB PD | 77    | 76   | 4        | 7    | 1 / 0 | 8.50 s   | ✔ 0 坏包 / 0 截断 |
-| ufcs_vivo_x300u       | UFCS   | 26099 | 0（未解析） | —  | —    | —     | 2493.98 s | ✔ 容器与模拟量正常 |
 
-（`npm run powerz:inspect` 会把上表连同线缆链路报文与首条扩展消息的完整字段一起打出来；
-CRC 一栏在所有 `.sqlite` 上都是「未记录」—— 分析仪本来就不存 CRC。）
+被测样本（`.sqlite`，UFCS）：
+
+| 文件                  | 协议 | 表行  | 时长      | 备注 |
+| --------------------- | ---- | ----: | --------- | ---- |
+| ufcs_vivo_x300u       | UFCS | 26099 | 2493.98 s | 容器结构与模拟量已确认；报文数由下面这条命令现跑现得 |
+
+UFCS 的 Raw blob 是**另一套帧结构**（见上文「UFCS 的 Raw blob 里是什么」），且没有公开资料，
+所以解析器不假设结构、改用「穷举前缀 × 两种 CRC 读法 + 消息头合法性 + CRC-8 反证」定位。
+跑一遍就知道这份样本解出了多少条：
+
+```bash
+npm run powerz:inspect                  # 汇总行给出：报文 / UFCS 帧 / 未定位行 / CRC 口径
+npm run e2e:ufcs                        # 界面级：报文表、详情面板、差分线视图
+```
+
+汇总行里的「UFCS 帧」是容器里定位到的帧数，「未定位行」是既不是 UFCS 报文、也不像插拔事件的行数 ——
+两者都会进 `PowerzCapture.decode()` 的 `stats`，**不写死预期值**：容器格式各家实现不一，
+与其在文档里钉一个没验证过的数字，不如让工具如实报出来。
+
+（`npm run powerz:inspect` 会把上表连同代表性报文的完整字段一起打出来；PD 的 `pd_table`
+一律不存 CRC，所以那一栏恒为「未记录」；**UFCS 存不存 CRC 由容器决定**，未记录 / 全通过 / 错误 N
+都如实列出来。）
 
 ---
 
@@ -940,15 +1087,22 @@ CRC 一栏在所有 `.sqlite` 上都是「未记录」—— 分析仪本来就�
   复用已有窗口。（要改成复用需要引入 `tauri-plugin-single-instance`。）
 * `bus.ini` 里的 VBUS/IBUS 是阶梯保持采样，时间轴按最近邻取值，不做插值。
   POWER-Z 的 ADC 采样序列同理（也是阶梯保持）。
-* **POWER-Z 的报文不含 CRC**，文件里只存到数据对象为止。界面会按规范补算 CRC 让解析走通，
-  但绝不据此宣布「校验通过」—— 统计行写「CRC 未记录（分析仪不存）」，详情面板单列一行说明，
-  也不会把这类报文算进「只看 CRC 错误」。
+* **PD 的 POWER-Z 报文不含 CRC**（`pd_table`），文件里只存到数据对象为止。界面会按规范补算
+  CRC 让解析走通，但绝不据此宣布「校验通过」—— 统计行写「CRC 未记录（分析仪不存）」，
+  详情面板单列一行说明，也不会把这类报文算进「只看 CRC 错误」。
+  UFCS 的 `ufcs_table` 存不存 CRC 各家实现不一：存了就照实给「通过 / 失败」，
+  没存才走同一套「未记录」话术。
 * **POWER-Z 没有波形**，所以「报文时长 / 码率」是按 PD 标称的 600 kbps BMC 时钟折算的
   线上时长，不是从电平里量出来的（详情面板对应标成「线上时长 / BMC 码率」）。
   时间轴同理：分析仪只给毫秒时间戳，按「1 采样点 = 1 ms」映射。
-* **UFCS 只做容器与模拟量，不做报文的语义解析**。该协议不在本工程参考的 USB PD 规范内，
-  共用的 4B5B / 报文头 / PDO 那套表都用不上。界面会常驻提示条讲清这一点，
-  并把「已读入 N 条原始帧」如实写进统计行 —— 不假装解析成功，也不谎报失败。
+* **UFCS 的容器（Raw blob）格式没有公开资料**。本工程按 T/TAF 083—2024 实现的是**报文语义**
+  （消息头 / 三类消息结构 / CRC-8），但分析仪把报文塞进 `ufcs_table.Raw` 时外面还套了一层
+  私有前缀（时间戳、可能还有链路字节），存不存 CRC 也各家不同。所以定位这一层用的是
+  「穷举前缀 × 两种 CRC 读法 + 消息头合法性 + CRC-8 反证」的**稳健推断**，而不是按某个
+  已知结构硬切（详见「UFCS 的 Raw blob 里是什么」）。遇到对不上的样本，界面会如实写
+  「已读入 N 行，但没有一行能认出 UFCS 报文」，模拟量照常可看 —— 不假装解析成功，也不谎报失败。
+* **UFCS 的波特率是按规范缺省档位 115200 bps 折算「线上时长」的**（报文里没有速率字段），
+  不是从 D+/D- 电平量出来的；详情面板把这一项标为「标称波特率」。
 * **SQLite 读取器不覆盖索引页 / WAL / 加密库 / UTF-16 文本编码 / 虚拟表**。
   实测的 POWER-Z 导出都是「三张普通表 + 回滚日志模式 + UTF-8」，够用；遇到别的库会显式报错。
 * **`.atkcc` 的文件关联（双击打开）没有为 `.sqlite` 注册** —— 它能被程序正常解析

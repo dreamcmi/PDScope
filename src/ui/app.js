@@ -80,6 +80,7 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
  */
 function toneOf(p) {
   if (p.msgType === 'VDM') return 'VDM';
+  if (p.msgKind === 'custom') return 'Custom';     // UFCS 厂家自定义消息
   if (p.msgKind === 'ext') return 'Extended';
   if (p.msgKind === 'data') return 'Data';
   if (p.msgKind === 'special') return 'Error';
@@ -90,7 +91,30 @@ function kindOf(p) {
   if (p.crcOk === false) return 'Error';
   return toneOf(p);
 }
-const CAT_CLASS = { Control: 'cat-Control', Data: 'cat-Data', Extended: 'cat-Extended', VDM: 'cat-VDM', Error: 'cat-Error' };
+const CAT_CLASS = {
+  Control: 'cat-Control', Data: 'cat-Data', Extended: 'cat-Extended',
+  VDM: 'cat-VDM', Custom: 'cat-Custom', Error: 'cat-Error',
+};
+
+/* ── 协议相关的形状差异 ────────────────────────────────
+   同一份界面要同时服务两种协议，差异集中在三处：链路叫法（SOP 序列 / D+D-）、
+   报文类别（Extended/VDM / Custom）、以及「心跳包」「功率协商」这类语义分组。
+   下面几个帮助函数是唯一的分叉点，别在别处再写 `=== 'UFCS'` 的判断。 */
+const isUfcs = () => S?.meta?.protocol === 'UFCS';
+/** 自动应答心跳包：PD 是 GOOD CRC，UFCS 是 ACK / NCK */
+const isAutoAck = (p) => (isUfcs()
+  ? (p.msgType === 'ACK' || p.msgType === 'NCK')
+  : p.msgType === 'GOOD CRC');
+/** 链路一栏的名字与候选取值 */
+const linkTitle = () => (isUfcs() ? '物理链路' : 'SOP 类型');
+const linkValues = () => (isUfcs()
+  ? [['D+', 'D+'], ['D-', 'D−'], ['D±', 'D±']]
+  : [['SOP', 'SOP'], ["SOP'", 'SOP&prime;'], ["SOP''", 'SOP&Prime;'],
+    ['Hard Reset', 'Hard Reset'], ['Cable Reset', 'Cable Reset']]);
+/** 报文类别一栏的候选 */
+const catValues = () => (isUfcs()
+  ? [['Control', '控制'], ['Data', '数据'], ['Custom', '自定义'], ['Error', '异常']]
+  : [['Control', '控制'], ['Data', '数据'], ['Extended', '扩展'], ['VDM', 'VDM'], ['Error', '异常']]);
 
 /**
  * GOOD CRC 配色配对（界面侧）。
@@ -111,9 +135,14 @@ function pairAckTone(packets) {
   }
 }
 
-/** 是否属于「功率协商」/「状态切换」这两类关注点 */
+/** 是否属于「功率协商」/「状态切换」这两类关注点（两种协议各一套判据） */
 const POWER_TYPES = /Source_Cap|Request|EPR_Request|EPR_Mode|PPS|BIST|Source_Capabilities_Extended|EPR_Source|EPR_Sink|Sink_Cap/i;
 const ENTER_TYPES = /PS RDY|VDM|Alert|Status|Source_Info|Revision|Enter_USB|Discover|Sink_Cap|Notify/i;
+/** UFCS：协商 = 能力/请求/输出调整；状态 = 各类信息上报与查询 */
+const UFCS_POWER_TYPES = /Output_Capabilities|Request|Power_Change|Power_Ready|Accept|Config_Watchdog/i;
+const UFCS_ENTER_TYPES = /_Information|Source_Info|Sink_Info|Cable_Info|Device_Info|Error_Info|Get_/i;
+const isPowerType = (t) => (isUfcs() ? UFCS_POWER_TYPES : POWER_TYPES).test(t);
+const isEnterType = (t) => (isUfcs() ? UFCS_ENTER_TYPES : ENTER_TYPES).test(t);
 
 /* ═══════════════════════ 文档（一份抓包 = 一个标签） ═══════════════════════ */
 /**
@@ -126,11 +155,22 @@ const ENTER_TYPES = /PS RDY|VDM|Alert|Status|Source_Info|Revision|Enter_USB|Disc
  * `filters / sort / viewMode / tlMode / channel / selected` 刻意也放在这里 ——
  * 它们是「对这份抓包的看法」，不是全局偏好，切回来必须原样还在。
  */
-function newFilters() {
+/**
+ * 一份抓包的筛选条件。**默认值跟着协议走**：UFCS 的链路是 D+/D-、类别里没有
+ * Extended/VDM 而有自定义消息 —— 用 PD 的默认集合去筛 UFCS，会把所有报文都筛没。
+ *
+ * @param {'pd'|'UFCS'} [protocol]
+ */
+function newFilters(protocol = 'pd') {
+  const ufcs = protocol === 'UFCS';
   return {
     roles: new Set(['SRC', 'SNK', 'Plug']),
-    sops: new Set(['SOP', "SOP'", "SOP''", 'Hard Reset', 'Cable Reset']),
-    cats: new Set(['Control', 'Data', 'Extended', 'VDM', 'Error']),
+    sops: new Set(ufcs
+      ? ['D+', 'D-', 'D±']
+      : ['SOP', "SOP'", "SOP''", 'Hard Reset', 'Cable Reset']),
+    cats: new Set(ufcs
+      ? ['Control', 'Data', 'Custom', 'Error']
+      : ['Control', 'Data', 'Extended', 'VDM', 'Error']),
     types: new Set(),          // 空 = 全部
     hideGoodCrc: true,
     onlyBad: false,
@@ -358,6 +398,9 @@ async function loadContainer(file) {
     doc.rate = cap.meta.sampleRate;      // 先用文件声明的值，解码时再由波形自检核一遍
     doc.tlMode = 'power';
     doc.decodedMs = 0;
+    // 协议在容器层才认出来，而筛选的默认值跟协议绑定（见 newFilters）——
+    // 这里补一次，免得 UFCS 抓包一打开就被 PD 的默认筛选条件滤成空表。
+    doc.filters = newFilters(cap.meta.protocol);
 
     // 多通道时扫描活动度，自动挑一个「有报文」的通道（分析仪导出只有 1 个逻辑通道）
     const chs = cap.meta.channels;
@@ -517,12 +560,17 @@ async function decodeDoc(doc) {
     doc.busSeries = buildBusSeries(bus, total, doc.rate, 2400);
     doc.totalSamples = total;
 
-    // 该协议只有容器、没有语义解析（目前是 UFCS）→ 明确说清，别让人以为解析失败。
+    // 该协议只有容器、没有语义解析 → 明确说清，别让人以为解析失败。
     // 加载期记下的 loadNotice（比如「所有通道都像噪声线」）只在一条报文都没解出来时才顶上来，
     // 免得正常抓包上挂个多余提示。
     doc.notice = stats.unsupported
       ? { text: stats.unsupported, sub: `${stats.unsupportedMsgs} 条原始帧已读入，模拟量轨迹正常可用` }
-      : (doc.loadNotice && !packets.length ? doc.loadNotice : null);
+      : (stats.ufcsUnlocatedRows
+        ? {
+          text: `${stats.ufcsUnlocatedRows} 行没能认出 UFCS 报文`,
+          sub: `已解出 ${stats.packetCount} 条报文；这些行既不是 UFCS 报文、也不像插拔事件，已跳过（不影响其余报文）`,
+        }
+        : (doc.loadNotice && !packets.length ? doc.loadNotice : null));
     doc.noticeOff = false;
     doc.selected = -1;
     doc.filters.tFrom = 0; doc.filters.tTo = 1;      // 换了文件/通道 → 时间窗口回到全时段
@@ -705,6 +753,7 @@ function renderAll() {
   renderMeta();
   renderChannels();
   renderNotice();
+  renderFilterSections();
   buildTypeList();
   syncFilterUI();
   applyFilters(true);
@@ -714,8 +763,46 @@ function renderAll() {
   refitDetailW();
 }
 
+/* ── 筛选面板的协议自适应 ──────────────────────────────
+   面板只有一副、协议有两套：链路一栏从「SOP 序列」换成「D+/D-」，类别去掉
+   Extended/VDM、加上自定义，快速过滤与关键字按钮也换一批文案。
+   每次整片重画都调一次 —— 重画本来就是「这份文件的一切都重来」的意思。 */
+const UFCS_KEYWORDS = ['Request', 'Output_Capabilities', 'Power_Ready', 'Cable', 'Refuse', 'Verify'];
+const PD_KEYWORDS = ['PPS', 'AVS', 'VID', 'Alert', 'CRC'];
+
+function renderFilterSections() {
+  const ufcs = isUfcs();
+
+  $('#sopTitle').textContent = linkTitle();
+  $('#catTitle').textContent = '报文类别';
+  $('#thSop').textContent = ufcs ? '链路' : 'SOP';
+  $('#thObj').textContent = ufcs ? '字节' : 'Obj';
+
+  $('#fSop').innerHTML = linkValues()
+    .map(([v, t]) => `<button class="chip is-on" data-v="${esc(v)}">${t}</button>`).join('');
+  $('#fCat').innerHTML = catValues()
+    .map(([v, t]) => `<button class="chip cat-${v.toLowerCase()} is-on" data-v="${v}">${t}</button>`).join('');
+
+  $('#lbHideGoodCrc').textContent = ufcs ? '屏蔽 ACK / NCK 应答包' : '屏蔽 GOOD CRC 心跳包';
+  $('#lbOnlyPower').textContent = ufcs
+    ? '只看功率协商（Output_Capabilities / Request）'
+    : '只看功率协商（Source_Cap / Request / PPS）';
+  $('#lbOnlyEnter').textContent = ufcs
+    ? '只看信息上报（Source/Sink/Cable_Information）'
+    : '只看状态切换（PS_RDY / VDM / Alert）';
+
+  const kws = ufcs ? UFCS_KEYWORDS : PD_KEYWORDS;
+  $('#kwRow').innerHTML = kws.map((k) => `<button class="btn tiny" data-kw="${esc(k)}">${esc(k)}</button>`).join('');
+  $$('#kwRow [data-kw]').forEach((b) => b.addEventListener('click', () => {
+    $('#fSearch').value = b.dataset.kw; S.filters.q = b.dataset.kw; applyFilters();
+  }));
+
+  $('#fSearch').placeholder = ufcs ? '消息名 / 命令编号 / 数据hex…' : '消息名 / 数据hex / 备注…';
+}
+
 /* ── 常驻提示条：讲清「这份文件为什么只解出一部分」这类事 ──
-   目前只有一种情况用它：分析仪抓到的是本工程未实现语义解析的协议（UFCS）。
+   目前 UFCS 抓到「既不是报文、也不像插拔」的行会走这里（定位不出容器前缀或残行）。
+   另有 `stats.unsupported` 这条扩展路径留给将来「认得容器但还没写语义解析」的新协议。
    与 toast 的分工：toast 是「刚刚发生了什么」，会自己消失；
    提示条是「这份文件是什么情况」，在整个浏览过程中都成立，必须一直看得见。
    内容按文档存（`doc.notice`），所以切回来还在；点过「知道了」的记在 `noticeOff` 上。 */
@@ -870,7 +957,11 @@ function renderChannels() {
 /* ═══════════════════════ 筛选 ═══════════════════════ */
 function buildTypeList() {
   const counts = new Map();
-  for (const p of S.packets) counts.set(p.msgType, (counts.get(p.msgType) || 0) + 1);
+  const kinds = new Map();          // 类型 → 语义类别（直接取真实报文，别去猜名字）
+  for (const p of S.packets) {
+    counts.set(p.msgType, (counts.get(p.msgType) || 0) + 1);
+    if (!kinds.has(p.msgType)) kinds.set(p.msgType, p.kind);
+  }
   const arr = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 
   const body = $('#msBody');
@@ -887,20 +978,22 @@ function buildTypeList() {
       applyFilters();
     });
     const dot = el('span', 'dot');
-    dot.style.background = catColor(kindOf({ msgType: t, msgKind: guessKind(t) }));
+    dot.style.background = catColor(kinds.get(t) ?? guessKind(t, t));
     lab.append(cb, dot, el('span', '', t), el('span', 'cnt', String(n)));
     body.appendChild(lab);
   }
   updateMsHead(arr.length);
 }
-function guessKind(t) {
-  if (t === 'VDM') return 'data';
-  if (/GOOD CRC|ACCEPT|REJECT|PING|PS RDY|GOTO MIN|Swap|Wait|Soft_Reset|Data_Reset|Not_Supported|FR_Swap|Get_/.test(t)) return 'control';
-  if (/Extended|_Info$|Status|Battery|Country|Manufacturer|Security|Firmware|Revision/.test(t)) return 'ext';
+/** 兜底猜类别（真实报文里没这个类型时才用；UFCS 的类型名带下划线，按名字判更准） */
+function guessKind(t, name = t) {
+  if (name === 'VDM') return 'data';
+  if (/GOOD CRC|ACCEPT|REJECT|PING|PS RDY|GOTO MIN|Swap|Wait|Soft_Reset|Data_Reset|Not_Supported|FR_Swap|Get_/.test(name)) return 'control';
+  if (/Extended|_Info$|Status|Battery|Country|Manufacturer|Security|Firmware|Revision/.test(name)) return 'ext';
   return 'data';
 }
 function catColor(k) {
-  const v = getComputedStyle(document.documentElement).getPropertyValue('--' + ({ Control: 'ctrl', Data: 'data', Extended: 'ext', VDM: 'vdm', Error: 'err' }[k] || 'ctrl'));
+  const map = { Control: 'ctrl', Data: 'data', Extended: 'ext', VDM: 'vdm', Custom: 'custom', Error: 'err' };
+  const v = getComputedStyle(document.documentElement).getPropertyValue('--' + (map[k] || 'ctrl'));
   return v.trim() || '#888';
 }
 function updateMsHead(total) {
@@ -912,19 +1005,24 @@ addEventListener('click', (e) => {
   if (!e.target.closest('#fType')) $('#msBody').classList.remove('open');
 });
 
-// 角色 / SOP / 类别 chips
+// 角色 / 链路 / 类别 chips
 /**
- * 注意传的是**键名**而不是 Set 本身：`S.filters` 每切一次标签就换一份，
- * 初始化时抓一个 Set 引用下来，之后点 chip 改的就会一直是第一份文档的筛选集。
+ * 用**事件委托**绑在容器上，而不是逐个 chip 绑 —— 这几个容器会随协议整片重建
+ * （见 renderFilterSections），逐个绑的话每次重建都要重绑，漏一次就点不动了。
+ *
+ * 注意改的是 `S.filters[key]` 这个**键**而不是 Set 本身：`S.filters` 每切一次标签
+ * 就换一份，把 Set 引用抓下来，之后点 chip 改的就会一直是第一份文档的筛选集。
  */
 function wireChips(sel, key) {
-  $$(sel + ' .chip').forEach((c) => c.addEventListener('click', () => {
+  $(sel).addEventListener('click', (e) => {
+    const c = e.target.closest('.chip');
+    if (!c || !c.dataset.v) return;
     const set = S.filters[key];
     const v = c.dataset.v;
     if (set.has(v)) { set.delete(v); c.classList.remove('is-on'); }
     else { set.add(v); c.classList.add('is-on'); }
     applyFilters();
-  }));
+  });
 }
 wireChips('#fRole', 'roles');
 wireChips('#fSop', 'sops');
@@ -979,7 +1077,10 @@ $('#btnCurView').addEventListener('click', applyTimeRangeFromView);
 
 /** 重置当前文档的全部筛选（只影响这一份，其它标签各自的筛选原样保留） */
 $('#btnReset').addEventListener('click', () => {
-  S.filters = newFilters();
+  // 默认值必须跟着**当前文件的协议**走。写死 newFilters() 就等于拿 PD 的
+  // SOP / 类别白名单去筛 UFCS —— D+ / D- / Data 一个都不在里面，
+  // 一按重置整张列表会连同搜索框一起被清空。
+  S.filters = newFilters(S.meta?.protocol);
   S.viewMode = 'all';
   syncFilterUI();
   applyFilters();
@@ -996,17 +1097,17 @@ function applyFilters(keepScroll) {
     if (!f.sops.has(p.sop)) continue;
     if (!f.cats.has(p.kind)) continue;
     if (f.types.size && !f.types.has(p.msgType)) continue;
-    if (f.hideGoodCrc && p.msgType === 'GOOD CRC') continue;
+    if (f.hideGoodCrc && isAutoAck(p)) continue;
     if (f.onlyBad && p.crcOk !== false) continue;
-    if (f.onlyPower && !POWER_TYPES.test(p.msgType)) continue;
-    if (f.onlyEnter && !ENTER_TYPES.test(p.msgType)) continue;
+    if (f.onlyPower && !isPowerType(p.msgType)) continue;
+    if (f.onlyEnter && !isEnterType(p.msgType)) continue;
     const t = p.startSample / tb;
     if (t < f.tFrom - 1e-9 || t > f.tTo + 1e-9) continue;
     if (q) {
       const hay = (p.msgType + ' ' + (p.summary || '') + ' ' + (p.dataHex || '') + ' ' + p.sop + ' ' + p.role).toLowerCase();
       if (!hay.includes(q)) continue;
     }
-    if (S.viewMode === 'neg' && !(POWER_TYPES.test(p.msgType) || ENTER_TYPES.test(p.msgType))) continue;
+    if (S.viewMode === 'neg' && !(isPowerType(p.msgType) || isEnterType(p.msgType))) continue;
     if (S.viewMode === 'err' && p.crcOk !== false) continue;
     out.push(p);
   }
@@ -1056,10 +1157,14 @@ function updateCounters() {
   } else if (S.state === 'ready') {
     line = '这份抓包还没解析，点一下上方标签即可开始';
   } else if (S.meta?.source === 'powerz') {
-    // 载入了文件但一条报文都没有：只有「协议未实现语义解析」这一种合理解释
-    line = S.stats?.unsupported
-      ? `已读入 <b>${S.stats.unsupportedMsgs ?? 0}</b> 条原始帧 · <span style="color:var(--warn)">${esc(S.meta.protocol)} 语义解析未实现</span>`
-      : `已读入分析仪导出，但其中没有可解析的报文`;
+    // 载入了文件但一条报文都没有：两种情况，话术不一样
+    if (S.stats?.unsupported) {
+      line = `已读入 <b>${S.stats.unsupportedMsgs ?? 0}</b> 条原始帧 · <span style="color:var(--warn)">${esc(S.meta.protocol)} 语义解析未实现</span>`;
+    } else if (S.stats?.ufcsUnlocatedRows) {
+      line = `已读入 <b>${S.stats.ufcsUnlocatedRows}</b> 行，但没有一行能认出 ${esc(S.meta.protocol)} 报文`;
+    } else {
+      line = `已读入分析仪导出，但其中没有可解析的报文`;
+    }
   } else {
     line = '等待打开抓包文件…';
   }
@@ -1113,7 +1218,7 @@ function setEmptyState(kind, extra) {
   }
   if (kind === 'pending') {
     t.textContent = '正在解析这份抓包';
-    p.textContent = '解析完成后这里会列出解出的 PD 报文。';
+    p.textContent = '解析完成后这里会列出解出的报文。';
     n.textContent = '';
     n.hidden = true;
     return;
@@ -1121,7 +1226,14 @@ function setEmptyState(kind, extra) {
   if (kind === 'unsupported') {
     t.textContent = `${extra || '该协议'} 抓包已载入，但语义解析未实现`;
     p.textContent = '报文容器与 VBUS / IBUS / 差分线模拟量轨迹已正常读出，可以直接在下方时间轴上看电压电流曲线。';
-    n.textContent = '报文列表需要该协议的规范才能逐字段还原，本工程目前只覆盖 USB PD。';
+    n.textContent = '报文列表需要该协议的规范才能逐字段还原，本工程目前只覆盖 USB PD 与 UFCS。';
+    n.hidden = false;
+    return;
+  }
+  if (kind === 'noframe') {
+    t.textContent = `${extra || '该抓包'} 里没有认出报文`;
+    p.textContent = '文件里的每一行都读过了，但既不像 UFCS 报文（消息头 + CRC-8 对不上）、也不像插拔事件。';
+    n.textContent = '模拟量轨迹仍然可用；如果这条线路上确实跑着 UFCS，请把样本发来核对容器格式。';
     n.hidden = false;
     return;
   }
@@ -1150,7 +1262,9 @@ function renderTable() {
     else if (!S.meta) setEmptyState('none');
     else if (!S.packets.length) {
       if (S.state === 'ready' || S.pending) setEmptyState('pending');
-      else setEmptyState(S.stats?.unsupported ? 'unsupported' : 'nomsg', S.meta.protocol);
+      else if (S.stats?.unsupported) setEmptyState('unsupported', S.meta.protocol);
+      else if (S.stats?.kind === 'ufcs' && S.stats?.ufcsUnlocatedRows) setEmptyState('noframe', S.meta.protocol);
+      else setEmptyState('nomsg');
     } else setEmptyState('filtered');
     vph.style.height = '0px'; vrows.innerHTML = ''; vrows.style.transform = 'translateY(0)';
     return;
@@ -1190,7 +1304,7 @@ function rowEl(p, i) {
   + `<div class="td type ${cls}"${tip}>${esc(p.msgType)}</div>`
   + `<div class="td num">${p.msgId ?? ''}</div>`
   + `<div class="td"><span class="pill ${p.role}">${esc(p.role)}</span></div>`
-  + `<div class="td num">${p.nObjects ?? ''}</div>`
+  + `<div class="td num">${p.protocol === 'UFCS' ? (p.dataLen ?? '') : (p.nObjects ?? '')}</div>`
   + `<div class="td time">${fmtTime(p.timeMs)}</div>`
   + `<div class="td bus">${p.vbus.toFixed(3)} V <em>/</em> ${p.ibus.toFixed(3)} A</div>`
   + `<div class="td mono">${highlightHex(hex)}</div>`
@@ -1267,10 +1381,12 @@ function renderDetail(p) {
   const box = $('#detailBody');
   const cls = CAT_CLASS[p.tone] || '';
   const h = [];
+  const ufcs = p.protocol === 'UFCS';
+  const revLabel = ufcs ? `UFCS ${p.revText || ''}`.trim() : `r${p.rev}`;
 
   h.push(`<div class="dhero ${p.crcOk === false ? 'dhero-bad' : ''}">
     <div class="t1 ${cls}">${esc(p.msgType)}</div>
-    <div class="t2">#${p.index} · ${esc(p.sop)} · ${esc(p.role)} · ID ${p.msgId ?? '-'} · r${p.rev} · ${fmtTime(p.timeMs)}`
+    <div class="t2">#${p.index} · ${esc(p.sop)} · ${esc(p.role)} · ID ${p.msgId ?? '-'} · ${esc(revLabel)} · ${fmtTime(p.timeMs)}`
     + (p.synthetic ? '<span class="srcbadge">分析仪逻辑字节</span>' : '') + `</div>
   </div>`);
 
@@ -1284,22 +1400,32 @@ function renderDetail(p) {
     ${cell('IBUS', p.ibus.toFixed(3) + ' A')}
     ${cell('起始时间', fmtTime(p.timeMs))}
     ${cell(p.bitrateNominal ? '线上时长' : '报文时长', p.durationUs.toFixed(1) + ' µs')}
-    ${cell('数据对象', String(p.nObjects ?? 0))}
-    ${cell(p.bitrateNominal ? 'BMC 码率' : '实测码率', (p.bitrate / 1000).toFixed(1) + ' kbps')}
+    ${cell(ufcs ? '数据长度' : '数据对象', ufcs ? `${p.dataLen ?? 0} B` : String(p.nObjects ?? 0))}
+    ${cell(p.bitrateNominal ? (ufcs ? '标称波特率' : 'BMC 码率') : '实测码率', (p.bitrate / 1000).toFixed(1) + ' kbps')}
     ${cell('CRC', p.crcOk === null ? '未记录（分析仪不存）' : p.crcOk ? '通过' : '校验失败')}
-    ${p.ackOf != null ? cell('确认的报文', `#${p.ackOf} · ${p.ackType || ''}`) : ''}
+    ${p.ackOf != null ? cell(ufcs ? '应答的报文' : '确认的报文', `#${p.ackOf} · ${p.ackType || ''}`) : ''}
   </div></div>`);
 
-  // 报文头位域
-  h.push(`<div class="dsec"><h5>报文头 (16 bit)</h5><div class="dbits">
-    ${bit('B15', 'Extended', bid(p.header, 15, 15), p.msgKind === 'ext' ? '扩展消息' : '标准消息')}
-    ${bit('B14-12', 'Object 数', bid(p.header, 12, 14), String(p.nObjects ?? 0))}
-    ${bit('B11-9', 'Message ID', bid(p.header, 9, 11), String(p.msgId ?? 0))}
-    ${bit('B8', 'Power Role', bid(p.header, 8, 8), p.powerRole ? '1 · Source' : '0 · Sink')}
-    ${bit('B7-6', 'Spec Revision', bid(p.header, 6, 7), `${bid(p.header, 6, 7)} · PD ${p.rev === 3 ? '3.x' : '2.0'}`)}
-    ${bit('B5', 'Data Role', bid(p.header, 5, 5), p.dataRole ? '1 · DFP' : '0 · UFP')}
-    ${bit('B4-0', 'Message Type', bid(p.header, 0, 4), `${p.msgTypeRaw ?? 0} · ${p.msgType}`)}
-  </div></div>`);
+  // 报文头位域：两种协议的 16 bit 头结构完全不同，各画各的
+  if (ufcs) {
+    const u = p.ufcs || {};
+    h.push(`<div class="dsec"><h5>消息头 (16 bit)</h5><div class="dbits">
+      ${bit('B15-13', '设备地址', bid(p.header, 13, 15), `${u.addrText || ''}（接收方）`)}
+      ${bit('B12-9', '消息编号', bid(p.header, 9, 12), String(p.msgId ?? 0))}
+      ${bit('B8-3', '协议版本编号', bid(p.header, 3, 8), `UFCS ${p.revText || ''}`)}
+      ${bit('B2-0', '消息类型', bid(p.header, 0, 2), `${p.msgKind === 'custom' ? '自定义消息' : p.msgKind === 'data' ? '数据消息' : '控制消息'} · 命令 0x${(p.msgTypeRaw ?? 0).toString(16).toUpperCase().padStart(2, '0')}`)}
+    </div></div>`);
+  } else {
+    h.push(`<div class="dsec"><h5>报文头 (16 bit)</h5><div class="dbits">
+      ${bit('B15', 'Extended', bid(p.header, 15, 15), p.msgKind === 'ext' ? '扩展消息' : '标准消息')}
+      ${bit('B14-12', 'Object 数', bid(p.header, 12, 14), String(p.nObjects ?? 0))}
+      ${bit('B11-9', 'Message ID', bid(p.header, 9, 11), String(p.msgId ?? 0))}
+      ${bit('B8', 'Power Role', bid(p.header, 8, 8), p.powerRole ? '1 · Source' : '0 · Sink')}
+      ${bit('B7-6', 'Spec Revision', bid(p.header, 6, 7), `${bid(p.header, 6, 7)} · PD ${p.rev === 3 ? '3.x' : '2.0'}`)}
+      ${bit('B5', 'Data Role', bid(p.header, 5, 5), p.dataRole ? '1 · DFP' : '0 · UFP')}
+      ${bit('B4-0', 'Message Type', bid(p.header, 0, 4), `${p.msgTypeRaw ?? 0} · ${p.msgType}`)}
+    </div></div>`);
+  }
 
   if (p.extHeader != null) {
     h.push(`<div class="dsec"><h5>扩展报文头 (16 bit)</h5><div class="dbits">
@@ -1312,7 +1438,7 @@ function renderDetail(p) {
 
   // 原始数据
   if (p.dataHex) {
-    h.push(`<div class="dsec"><h5>数据对象 (hex)</h5><div class="dobj"><div class="dobj-b hx">${esc(p.dataHex)}</div></div></div>`);
+    h.push(`<div class="dsec"><h5>${ufcs ? '整帧字节 (hex)' : '数据对象 (hex)'}</h5><div class="dobj"><div class="dobj-b hx">${esc(p.dataHex)}</div></div></div>`);
   }
 
   // 逐字段解析（按 Object 分组，每组一个配色，便于区分相邻的 VDO / PDO / 数据对象）
@@ -1729,9 +1855,11 @@ function exportAs(fmt) {
   const base = (S.fileName || 'pdscope').replace(/\.(atkcc|sqlite|db)$/i, '');
   let blob, name;
   if (fmt === 'csv') {
-    const head = ['#', 'SOP', 'MsgType', 'ID', 'Direction', 'Objects', 'Elapsed', 'Time(ms)', 'VBUS(V)', 'IBUS(A)', 'Data', 'CRC', 'Note'];
+    // UFCS 那一列是「数据字节数」（借 nObjects 存），PD 是「数据对象个数」——表头跟着换
+    const ufcsCsv = S.meta?.protocol === 'UFCS';
+    const head = ['#', 'SOP', 'MsgType', 'ID', 'Direction', ufcsCsv ? 'Bytes' : 'Objects', 'Elapsed', 'Time(ms)', 'VBUS(V)', 'IBUS(A)', 'Data', 'CRC', 'Note'];
     const rows = S.view.map((p) => [
-      p.index, p.sop, p.msgType, p.msgId ?? '', p.role, p.nObjects ?? '', fmtTime(p.timeMs), p.timeMs.toFixed(4),
+      p.index, p.sop, p.msgType, p.msgId ?? '', p.role, (ufcsCsv ? p.dataLen : p.nObjects) ?? '', fmtTime(p.timeMs), p.timeMs.toFixed(4),
       p.vbus.toFixed(4), p.ibus.toFixed(4), p.dataHex || '',
       p.crcOk === null ? '' : p.crcOk ? 'OK' : 'BAD', (p.summary || '').replace(/"/g, '""'),
     ]);

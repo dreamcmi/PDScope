@@ -39,7 +39,9 @@ const mCargo = /^\s*version\s*=\s*"([^"]+)"/m.exec(pkgSec);
 add('src-tauri/Cargo.toml', '[package] version', mCargo ? mCargo[1] : null);
 
 // ── src-tauri/Cargo.lock ─────────────────────────────────────────
-const mLock = /\[\[package\]\]\nname = "pdscope"\nversion = "([^"]+)"/.exec(read('src-tauri/Cargo.lock'));
+// 行尾用 \r?\n：Cargo 在 Windows 上写出来的是 CRLF，只认 \n 会在 Windows
+// 检出上直接读不到（表现为「版本号对不上」，其实是正则没匹配上）。
+const mLock = /\[\[package\]\]\r?\nname = "pdscope"\r?\nversion = "([^"]+)"/.exec(read('src-tauri/Cargo.lock'));
 add('src-tauri/Cargo.lock', '[[package]] pdscope', mLock ? mLock[1] : null);
 
 // ── src/ui/app.js ────────────────────────────────────────────────
