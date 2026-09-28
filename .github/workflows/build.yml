@@ -246,7 +246,7 @@ jobs:
         shell: pwsh
         run: |
           $rel = "src-tauri/target/${{ matrix.target }}/release"
-          $out = "PDScope-${{ matrix.name }}-${{ env:VERSEG }}"
+          $out = "PDScope-${{ matrix.name }}-${{ env.VERSEG }}"
           New-Item -ItemType Directory -Force -Path $out | Out-Null
           Copy-Item "$rel/pdscope.exe" "$out/$out-portable.exe"
           if (Test-Path "$rel/bundle/nsis") { Copy-Item (Get-ChildItem "$rel/bundle/nsis/*" | Select-Object -First 1) "$out/$out-setup.exe" }
