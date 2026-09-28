@@ -6,7 +6,7 @@
  * （sha256sum / shasum -a 256 / Get-FileHash），用 Node 自带的 crypto 三平台一句话搞定。
  *
  * 用法：
- *   node tools/ci-checksum.mjs --dir PDScope-windows11-x64-v0.3.0   # 哈希该目录下所有文件（排除 .sha256）
+ *   node tools/ci-checksum.mjs --dir PDScope-windows11-x64-v0.3.1   # 哈希该目录下所有文件（排除 .sha256）
  *   node tools/ci-checksum.mjs --prefix PDScope-windows11-x64       # 哈希当前目录下以该前缀开头的文件
  *   node tools/ci-checksum.mjs --paths a.exe b.msi                  # 手动指定文件
  *

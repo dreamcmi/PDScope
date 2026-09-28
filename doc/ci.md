@@ -11,7 +11,7 @@
 | 推 `v*` 标签 | 发版：除了 Artifacts，再自动建一个**草稿** Release 汇总全部产物 |
 
 ```bash
-git tag v0.3.0 && git push origin v0.3.0     # 走发版那条路
+git tag v0.3.1 && git push origin v0.3.1     # 走发版那条路
 ```
 
 > Artifacts 要登录 GitHub 才能下载。想让任何人都能下，就推个标签，
@@ -24,8 +24,8 @@ git tag v0.3.0 && git push origin v0.3.0     # 走发版那条路
 产物**散着传、不打包**：每个安装包 / 可执行文件各自一个文件上传，文件名统一是
 `PDScope-<目标>-<版本段>-<内容>`。其中「版本段」：
 
-* 推 `v*` 标签（发版）→ 纯版本号，如 `v0.3.0`；
-* 普通推送 → `v0.3.0_<8 位短 commit>_<YYYYMMDD>`，一眼能看出是哪次提交、哪天出的。
+* 推 `v*` 标签（发版）→ 纯版本号，如 `v0.3.1`；
+* 普通推送 → `v0.3.1_<8 位短 commit>_<YYYYMMDD>`，一眼能看出是哪次提交、哪天出的。
 
 上传用 `archive: false` 直传裸文件，所以 **Actions 的 Artifacts 列表里每一项就是一个文件**，
 点下载得到的也是文件本身（不再是整体 zip）。每个文件配一个同名 `.sha256`，校验和也是
@@ -120,7 +120,7 @@ GitHub 的 Windows runner 一直是 **Windows Server** 系列，从来没有过 
   （`.dmg` / `.deb` / `.exe` / `.msi` / `.AppImage.zip`），这个限制只影响「整个目录」的产物，
   而我们 macOS 只出 `.dmg`、Linux 把 AppImage 压成 zip（`+x` 位在下载链路里本就保不住，
   不如直接打包让用户解压后自己 `chmod +x`），所以正好避开了这一点。
-  ② 各目标的出包名是按架构走的（`pdscope.exe`、`PDScope_0.3.0_x64-setup.exe` …），
+  ② 各目标的出包名是按架构走的（`pdscope.exe`、`PDScope_0.3.1_x64-setup.exe` …），
   x64 与 arm64 之间、不同打包类型之间都可能撞名；而所有产物在 Release 里是平铺的，
   同名文件会互相覆盖且不报错。所以每个文件都在上传前加上
   `PDScope-<目标>-<版本段>-` 前缀，天然唯一。

@@ -42,7 +42,7 @@ node tools/build-standalone.mjs         # 生成 dist/PDScope.html
 ```bash
 npm install        # 只装 tauri-cli（几 MB），不会下载浏览器内核
 npm run app:exe    # 只出可执行文件（绿色版，完全离线）
-npm run app:build  # 出当前平台的安装包（Windows: PDScope_0.3.0_x64-setup.exe）
+npm run app:build  # 出当前平台的安装包（Windows: PDScope_0.3.1_x64-setup.exe）
 ```
 
 命令行解析（不起界面）：
