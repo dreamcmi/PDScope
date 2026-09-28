@@ -13,9 +13,12 @@
  * 只改其中一处不会报错，只会悄悄装出来一个「文件名 0.3.0、关于里写 0.2.0」的包，
  * 而且这种不一致往往是发给别人之后才发现的。所以放在自检链最前面统一核对。
  *
+ * 另外扫一遍 README.md 与 doc/*.md 里写的安装包产物名（PDScope_0.2.0_x64-setup.exe）：
+ * 文档里的版本号不参与判定，只列出来提示 —— 但它是漏改时的第一个信号。
+ *
  * 用法：node tools/version-check.mjs
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 
 const rows = [];                                  // [文件, 位置, 版本]
 
@@ -48,12 +51,19 @@ add('src-tauri/Cargo.lock', '[[package]] pdscope', mLock ? mLock[1] : null);
 const mApp = /\bversion:\s*'([^']+)'/.exec(read('src/ui/app.js'));
 add('src/ui/app.js', 'PDScope.version', mApp ? mApp[1] : null);
 
-// ── README.md（只提示，不拦） ────────────────────────────────────
-// 文档里会写安装包产物名（PDScope_0.2.0_x64-setup.exe），最容易忘记跟着改。
-const readmeVers = [...new Set(
-  [...read('README.md').matchAll(/PDScope_(\d+\.\d+\.\d+)/g)].map((m) => m[1]),
-)];
-if (readmeVers.length) add('README.md', '安装包产物名', readmeVers.join('、'));
+// ── 文档里的产物名（只提示，不拦） ───────────────────────────────
+// README 与 doc/*.md 里会写安装包产物名，最容易忘记跟着改。
+// doc/ 不存在时跳过（老仓库或只保留 README 的情形）。
+const docFiles = [
+  'README.md',
+  ...(existsSync('doc')
+    ? readdirSync('doc').filter((f) => f.endsWith('.md')).sort().map((f) => `doc/${f}`)
+    : []),
+];
+for (const f of docFiles) {
+  const vers = [...new Set([...read(f).matchAll(/PDScope_(\d+\.\d+\.\d+)/g)].map((m) => m[1]))];
+  if (vers.length) add(f, '安装包产物名', vers.join('、'));
+}
 
 // ── 比对 ─────────────────────────────────────────────────────────
 const target = pkg.version;
