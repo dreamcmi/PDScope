@@ -28,8 +28,9 @@ git tag v0.3.0 && git push origin v0.3.0     # 走发版那条路
 * 普通推送 → `v0.3.0_<8 位短 commit>_<YYYYMMDD>`，一眼能看出是哪次提交、哪天出的。
 
 上传用 `archive: false` 直传裸文件，所以 **Actions 的 Artifacts 列表里每一项就是一个文件**，
-点下载得到的也是文件本身（不再是整体 zip）。每个文件配一个同名 `.sha256`
-（`sha256sum -c <文件>.sha256` 一句校验），校验和打包在一个 `PDScope-<目标>-sha256` 里。
+点下载得到的也是文件本身（不再是整体 zip）。每个文件配一个同名 `.sha256`，校验和也是
+逐个直传（Artifacts 里每个 `.sha256` 单独一条、与主产物名字一一对应），
+`sha256sum -c <文件>.sha256` 一句校验。
 
 | 目标 | runner | Rust target | 产物（散文件） |
 | --- | --- | --- | --- |
@@ -126,9 +127,8 @@ GitHub 的 Windows runner 一直是 **Windows Server** 系列，从来没有过 
   ③ 上传用 `archive: false` 直传裸文件（不打 zip），让 Artifacts 列表里每一项就是一个
   文件、下载即文件本身。`archive: false` 有两个限制：只能传单个文件、且 `name` 参数失效
   （文件名直接用作 artifact 名），所以这里每个产物类型单独一个 upload step、用
-  `contains(matrix.bundles, …)` 判断该目标是否产这个文件；唯一没走 `archive: false` 的是
-  `.sha256` —— 它是多个文件（每个产物一个），只能保持默认打包成一个
-  `PDScope-<目标>-sha256` 的 zip。
+  `contains(matrix.bundles, …)` 判断该目标是否产这个文件；`.sha256` 也逐个配对直传
+  （每个主产物后面紧跟它的校验和 step，`if` 条件与主产物一致，名字一一对应）。
   不整体打包成大 zip / tar.gz，是为了让每个文件能单独下载、单独校验；
   唯一的例外是 AppImage 单文件压一层 zip，让绿色包也保持单文件可独立分发。
 

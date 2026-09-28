@@ -224,31 +224,6 @@ jobs:
           echo "归置后的产物："
           ls -lh "$out"
 
-      # 纯取证步骤：只把各 bundle 的原始体积写进运行摘要，任何异常都不许影响构建。
-      - name: 清点各 bundle 体积
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          b="src-tauri/target/${{ matrix.target }}/release/bundle"
-          if [ ! -d "$b" ]; then echo "没有 bundle 目录，跳过"; exit 0; fi
-          cd "$b"
-          {
-            echo ""
-            echo "**各 bundle 原始体积**（未压缩，Linux 那两行正是归档大的原因）"
-            echo ""
-            echo '| bundle | 体积 | 文件 |'
-            echo '| --- | --- | --- |'
-            for d in macos dmg deb appimage; do
-              if [ -d "$d" ]; then
-                for f in "$d"/*; do
-                  if [ -e "$f" ]; then
-                    printf '| `%s` | %s | `%s` |\n' "$d" "$(du -sh "$f" | cut -f1)" "$(basename "$f")"
-                  fi
-                done
-              fi
-            done
-          } >> "$GITHUB_STEP_SUMMARY"
-
       # Windows 产物散着传（不打 zip），每个文件统一重命名成
       #   PDScope-<目标>-<版本段>-<内容>.<ext>
       # 安装包（NSIS setup.exe / MSI）与绿色版单 exe 各一个文件。
@@ -275,7 +250,7 @@ jobs:
       # archive:false 时只能传单个文件、且 name 参数失效 —— 文件名（带版本段）会直接
       # 用作 artifact 名，所以列表里看到的就是 PDScope-<目标>-<版本段>-<内容>.<ext>。
       # path 用精确文件名（归置脚本已保证确定性命名），避免 glob 误匹配到多个文件导致
-      # archive:false 报错。
+      # archive:false 报错。每个产物文件后面紧跟着它的 .sha256，也逐个直传、名字对得上。
       # 用 contains(matrix.bundles, ...) 判断该目标是否产这个文件，缺 MSI 的 arm64 不会误传。
 
       - name: 上传 NSIS 安装包
@@ -287,6 +262,15 @@ jobs:
           path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/PDScope-${{ matrix.name }}-${{ env.VERSEG }}-setup.exe
           archive: false
 
+      - name: 上传 NSIS 校验和
+        if: contains(matrix.bundles, 'nsis')
+        uses: actions/upload-artifact@v7
+        with:
+          if-no-files-found: error
+          retention-days: 30
+          path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/PDScope-${{ matrix.name }}-${{ env.VERSEG }}-setup.exe.sha256
+          archive: false
+
       - name: 上传 MSI 安装包
         if: contains(matrix.bundles, 'msi')
         uses: actions/upload-artifact@v7
@@ -294,6 +278,15 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/PDScope-${{ matrix.name }}-${{ env.VERSEG }}-setup.msi
+          archive: false
+
+      - name: 上传 MSI 校验和
+        if: contains(matrix.bundles, 'msi')
+        uses: actions/upload-artifact@v7
+        with:
+          if-no-files-found: error
+          retention-days: 30
+          path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/PDScope-${{ matrix.name }}-${{ env.VERSEG }}-setup.msi.sha256
           archive: false
 
       - name: 上传绿色版 exe
@@ -305,6 +298,15 @@ jobs:
           path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/PDScope-${{ matrix.name }}-${{ env.VERSEG }}-portable.exe
           archive: false
 
+      - name: 上传绿色版校验和
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          if-no-files-found: error
+          retention-days: 30
+          path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/PDScope-${{ matrix.name }}-${{ env.VERSEG }}-portable.exe.sha256
+          archive: false
+
       - name: 上传 dmg
         if: contains(matrix.bundles, 'dmg')
         uses: actions/upload-artifact@v7
@@ -312,6 +314,15 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/PDScope-${{ matrix.name }}-${{ env.VERSEG }}.dmg
+          archive: false
+
+      - name: 上传 dmg 校验和
+        if: contains(matrix.bundles, 'dmg')
+        uses: actions/upload-artifact@v7
+        with:
+          if-no-files-found: error
+          retention-days: 30
+          path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/PDScope-${{ matrix.name }}-${{ env.VERSEG }}.dmg.sha256
           archive: false
 
       - name: 上传 deb
@@ -323,6 +334,15 @@ jobs:
           path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/PDScope-${{ matrix.name }}-${{ env.VERSEG }}.deb
           archive: false
 
+      - name: 上传 deb 校验和
+        if: contains(matrix.bundles, 'deb')
+        uses: actions/upload-artifact@v7
+        with:
+          if-no-files-found: error
+          retention-days: 30
+          path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/PDScope-${{ matrix.name }}-${{ env.VERSEG }}.deb.sha256
+          archive: false
+
       - name: 上传 AppImage
         if: contains(matrix.bundles, 'appimage')
         uses: actions/upload-artifact@v7
@@ -332,15 +352,14 @@ jobs:
           path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/PDScope-${{ matrix.name }}-${{ env.VERSEG }}.AppImage.zip
           archive: false
 
-      - name: 上传 SHA256 校验和
+      - name: 上传 AppImage 校验和
+        if: contains(matrix.bundles, 'appimage')
         uses: actions/upload-artifact@v7
         with:
-          # sha256 是多个文件（每个产物一个），archive:false 只能传单个，所以这里保持
-          # 默认打包成一个 zip，集中放该目标的全部 .sha256
-          name: PDScope-${{ matrix.name }}-sha256
           if-no-files-found: error
           retention-days: 30
-          path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/*.sha256
+          path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/PDScope-${{ matrix.name }}-${{ env.VERSEG }}.AppImage.zip.sha256
+          archive: false
 
       - name: 写运行摘要
         if: always()
@@ -355,10 +374,6 @@ jobs:
             echo "| Rust target | \`${{ matrix.target }}\` |"
             echo "| 安装包 | ${{ matrix.bundles }} |"
             echo "| 说明 | ${{ matrix.note }} |"
-            echo ""
-            echo '```'
-            ls -lh "PDScope-${{ matrix.name }}-${{ env.VERSEG }}"/* 2>/dev/null
-            echo '```'
           } >> "$GITHUB_STEP_SUMMARY" || true
 
   # 推 v* 标签时把全部产物汇总到一个草稿 Release：产物没签名，先让人看一眼再决定发不发
