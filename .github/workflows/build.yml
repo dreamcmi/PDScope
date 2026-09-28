@@ -201,14 +201,25 @@ jobs:
           b="src-tauri/target/${{ matrix.target }}/release/bundle"
           out="PDScope-${{ matrix.name }}-${{ env.VERSEG }}"
           mkdir -p "$out"
-          # 按 bundle 目录类型逐个重命名归置（跳过 macos/ 目录：.app 已在 dmg 里）
-          if [ -d "$b/dmg" ]; then       cp "$b/dmg"/*       "$out/$out.dmg";       fi
-          if [ -d "$b/deb" ]; then       cp "$b/deb"/*       "$out/$out.deb";       fi
+          # 按 bundle 目录类型逐个重命名归置（跳过 macos/ 目录：.app 已在 dmg 里）。
+          # 每个目录里 Tauri 可能额外产出 .blockmap / .sig 等文件，所以用 find 按后缀
+          # 精确定位主产物，而不是 cp 目录下所有文件（那会撞名报「not a directory」）。
+          if [ -d "$b/dmg" ]; then
+            f=$(find "$b/dmg" -maxdepth 1 -name '*.dmg' -print -quit)
+            [ -n "$f" ] && cp "$f" "$out/$out.dmg"
+          fi
+          if [ -d "$b/deb" ]; then
+            f=$(find "$b/deb" -maxdepth 1 -name '*.deb' -print -quit)
+            [ -n "$f" ] && cp "$f" "$out/$out.deb"
+          fi
           # AppImage 体积大（~165 MB，几乎全是 WebKitGTK），zip 压缩能省下一截传输体积。
           # 解压后记得 chmod +x 再跑（zip 不保留可执行位）。
           if [ -d "$b/appimage" ]; then
-            cp "$b/appimage"/* "$out/$out.AppImage"
-            ( cd "$out" && zip -9 "$out.AppImage.zip" "$out.AppImage" && rm "$out.AppImage" )
+            f=$(find "$b/appimage" -maxdepth 1 -name '*.AppImage' -print -quit)
+            if [ -n "$f" ]; then
+              cp "$f" "$out/$out.AppImage"
+              ( cd "$out" && zip -9 "$out.AppImage.zip" "$out.AppImage" && rm "$out.AppImage" )
+            fi
           fi
           echo "归置后的产物："
           ls -lh "$out"
@@ -249,8 +260,8 @@ jobs:
           $out = "PDScope-${{ matrix.name }}-${{ env.VERSEG }}"
           New-Item -ItemType Directory -Force -Path $out | Out-Null
           Copy-Item "$rel/pdscope.exe" "$out/$out-portable.exe"
-          if (Test-Path "$rel/bundle/nsis") { Copy-Item (Get-ChildItem "$rel/bundle/nsis/*" | Select-Object -First 1) "$out/$out-setup.exe" }
-          if (Test-Path "$rel/bundle/msi")  { Copy-Item (Get-ChildItem "$rel/bundle/msi/*"  | Select-Object -First 1) "$out/$out-setup.msi" }
+          if (Test-Path "$rel/bundle/nsis") { $f = Get-ChildItem "$rel/bundle/nsis/*-setup.exe" | Select-Object -First 1; if ($f) { Copy-Item $f "$out/$out-setup.exe" } }
+          if (Test-Path "$rel/bundle/msi")  { $f = Get-ChildItem "$rel/bundle/msi/*.msi"  | Select-Object -First 1; if ($f) { Copy-Item $f "$out/$out-setup.msi" } }
           Get-ChildItem $out | Format-Table Name, Length -AutoSize
 
       # 每个产物文件单独配一个同名 .sha256（内容一行一文件，与 sha256sum -c 兼容）。
@@ -259,13 +270,76 @@ jobs:
         shell: bash
         run: node tools/ci-checksum.mjs --dir "PDScope-${{ matrix.name }}-${{ env.VERSEG }}"
 
-      # 产物文件名带目标名，否则不同目标的同名文件汇总到 Release 时会互相覆盖
-      - uses: actions/upload-artifact@v6
+      # 每个产物文件单独一个 artifact，且用 archive:false 直传裸文件（不打 zip）：
+      # Artifacts 列表里每一项就是一个文件，下载下来就是文件本身。
+      # archive:false 时只能传单个文件、且 name 参数失效 —— 文件名（带版本段）会直接
+      # 用作 artifact 名，所以列表里看到的就是 PDScope-<目标>-<版本段>-<内容>.<ext>。
+      # 用 contains(matrix.bundles, ...) 判断该目标是否产这个文件，缺 MSI 的 arm64 不会误传。
+      # sha256 校验和也逐个直传（每个 .sha256 一个 artifact）。
+
+      - name: 上传 NSIS 安装包
+        if: contains(matrix.bundles, 'nsis')
+        uses: actions/upload-artifact@v6
         with:
-          name: PDScope-${{ matrix.name }}
           if-no-files-found: error
           retention-days: 30
-          path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/*
+          path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/*-setup.exe
+          archive: false
+
+      - name: 上传 MSI 安装包
+        if: contains(matrix.bundles, 'msi')
+        uses: actions/upload-artifact@v6
+        with:
+          if-no-files-found: error
+          retention-days: 30
+          path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/*-setup.msi
+          archive: false
+
+      - name: 上传绿色版 exe
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v6
+        with:
+          if-no-files-found: error
+          retention-days: 30
+          path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/*-portable.exe
+          archive: false
+
+      - name: 上传 dmg
+        if: contains(matrix.bundles, 'dmg')
+        uses: actions/upload-artifact@v6
+        with:
+          if-no-files-found: error
+          retention-days: 30
+          path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/*.dmg
+          archive: false
+
+      - name: 上传 deb
+        if: contains(matrix.bundles, 'deb')
+        uses: actions/upload-artifact@v6
+        with:
+          if-no-files-found: error
+          retention-days: 30
+          path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/*.deb
+          archive: false
+
+      - name: 上传 AppImage
+        if: contains(matrix.bundles, 'appimage')
+        uses: actions/upload-artifact@v6
+        with:
+          if-no-files-found: error
+          retention-days: 30
+          path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/*.AppImage.zip
+          archive: false
+
+      - name: 上传 SHA256 校验和
+        uses: actions/upload-artifact@v6
+        with:
+          # sha256 是多个文件（每个产物一个），archive:false 只能传单个，所以这里保持
+          # 默认打包成一个 zip，集中放该目标的全部 .sha256
+          name: PDScope-${{ matrix.name }}-sha256
+          if-no-files-found: error
+          retention-days: 30
+          path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/*.sha256
 
       - name: 写运行摘要
         if: always()
