@@ -21,27 +21,36 @@ git tag v0.3.0 && git push origin v0.3.0     # 走发版那条路
 
 每个目标都一对一落到一台真实存在的 GitHub runner 镜像上（runner 标签已逐个核对过）。
 
-| 目标 | runner | Rust target | Artifacts 里的归档 | 归档里是什么 |
-| --- | --- | --- | --- | --- |
-| Windows11-x64 | `windows-2025` | `x86_64-pc-windows-msvc` | `PDScope-windows11-x64.zip`<br>`PDScope-windows11-x64-portable.zip` | 安装包版：NSIS `-setup.exe` + `.msi`<br>绿色版：单个 `PDScope.exe` |
-| Windows11-arm64 | `windows-11-arm` | `aarch64-pc-windows-msvc` | `PDScope-windows11-arm64.zip`<br>`PDScope-windows11-arm64-portable.zip` | 安装包版：NSIS `-setup.exe`<br>绿色版：单个 `PDScope.exe` |
-| macos15-arm64 | `macos-15` | `aarch64-apple-darwin` | `PDScope-macos15-arm64.tar.gz` | `PDScope.app` + `.dmg` |
-| macos15-x64 | `macos-15-intel` | `x86_64-apple-darwin` | `PDScope-macos15-x64.tar.gz` | 同上 |
-| macos26-arm64 | `macos-26` | `aarch64-apple-darwin` | `PDScope-macos26-arm64.tar.gz` | 同上 |
-| macos26-x64 | `macos-26-intel` | `x86_64-apple-darwin` | `PDScope-macos26-x64.tar.gz` | 同上 |
-| ubuntu2404-x64 | `ubuntu-24.04` | `x86_64-unknown-linux-gnu` | `PDScope-ubuntu2404-x64.tar.gz` | `.deb` + `.AppImage` |
-| ubuntu2404-arm64 | `ubuntu-24.04-arm` | `aarch64-unknown-linux-gnu` | `PDScope-ubuntu2404-arm64.tar.gz` | 同上 |
-| ubuntu2604-x64 | `ubuntu-26.04` | `x86_64-unknown-linux-gnu` | `PDScope-ubuntu2604-x64.tar.gz` | 同上 |
-| ubuntu2604-arm64 | `ubuntu-26.04-arm` | `aarch64-unknown-linux-gnu` | `PDScope-ubuntu2604-arm64.tar.gz` | 同上 |
+产物**散着传、不打包**：每个安装包 / 可执行文件 / `.app` 目录各自一个文件上传，
+文件名统一是 `PDScope-<目标>-<版本段>-<内容>`。其中「版本段」：
 
-每个归档都配一个同名的 `.sha256`（例如 `PDScope-windows11-x64.zip.sha256`），校验一句就够：
-`sha256sum -c PDScope-windows11-x64.zip.sha256`（macOS 用 `shasum -a 256 -c`）。
+* 推 `v*` 标签（发版）→ 纯版本号，如 `v0.3.0`；
+* 普通推送 → `v0.3.0_<8 位短 commit>_<YYYYMMDD>`，一眼能看出是哪次提交、哪天出的。
 
-## 为什么 Ubuntu 的归档大一个数量级（167 ~ 180 MB，而 Windows / macOS 只有 3 ~ 4 MB）
+每个文件都配一个同名 `.sha256`（`sha256sum -c <文件>.sha256` 一句校验）。
+
+| 目标 | runner | Rust target | 产物（散文件） |
+| --- | --- | --- | --- |
+| Windows11-x64 | `windows-2025` | `x86_64-pc-windows-msvc` | NSIS `-setup.exe` + `.msi` + `-portable.exe`（绿色版） |
+| Windows11-arm64 | `windows-11-arm` | `aarch64-pc-windows-msvc` | NSIS `-setup.exe` + `-portable.exe`（绿色版） |
+| macos15-arm64 | `macos-15` | `aarch64-apple-darwin` | `.dmg` |
+| macos15-x64 | `macos-15-intel` | `x86_64-apple-darwin` | 同上 |
+| macos26-arm64 | `macos-26` | `aarch64-apple-darwin` | 同上 |
+| macos26-x64 | `macos-26-intel` | `x86_64-apple-darwin` | 同上 |
+| ubuntu2404-x64 | `ubuntu-24.04` | `x86_64-unknown-linux-gnu` | `.deb` + `.AppImage.zip` |
+| ubuntu2404-arm64 | `ubuntu-24.04-arm` | `aarch64-unknown-linux-gnu` | 同上 |
+| ubuntu2604-x64 | `ubuntu-26.04` | `x86_64-unknown-linux-gnu` | 同上 |
+| ubuntu2604-arm64 | `ubuntu-26.04-arm` | `aarch64-unknown-linux-gnu` | 同上 |
+
+> macOS 只出 `.dmg`：dmg 挂载后里面就是 `.app` 本体 + 一个指向 `/Applications` 的软链，
+> 把 `.app` 拖进 Applications 即完成安装，所以不需要再单独出一份 `.app`。
+> 其余 `.deb` / `.AppImage` / `.exe` / `.msi` 都是单文件，直接传。
+
+## 为什么 Ubuntu 的 AppImage 大一个数量级（167 ~ 180 MB，而 Windows / macOS 只有 3 ~ 4 MB）
 
 差的不是本程序，是**浏览器内核 —— 也就是 WebView 由谁提供**：
 
-| 平台 | WebView 来源 | 进不进归档 | 归档体积 |
+| 平台 | WebView 来源 | 进不进包 | 包体积 |
 | --- | --- | --- | --- |
 | Windows | 系统 **WebView2**（Win10 / 11 基本内置） | 不进 | 2.4 ~ 4 MB |
 | macOS | 系统 **WKWebView**（10.15+ 随系统走） | 不进 | 3.4 ~ 3.6 MB |
@@ -54,14 +63,16 @@ git tag v0.3.0 && git push origin v0.3.0     # 走发版那条路
   130 MB，再加 glib / libsoup3 / ICU / GStreamer 一串，**未压缩超过 500 MB**。
   Tauri 官方文档也直说 AppImage 会把体积从 2 ~ 6 MB 拉到「70+ MB」，且
   **没有缩小它的办法**（维护者的原话：这是 AppImage 的工作方式，不带全依赖反而更容易出事）。
-* 归档里这两份是**装在一起**的，所以下载 167 ~ 180 MB 才有那个几 MB 的 `.deb`。
+  AppImage 内部本就是 squashfs 压缩，外层再压一层 zip 省不了多少，这里压 zip 纯粹是
+  为了让「绿色包」和 `.deb` 一样是单文件、且不必处理 `+x` 位在下载链路里的丢失问题。
+  上传前把它压成 `.AppImage.zip`，解压后记得 `chmod +x` 再运行。
 * `ubuntu2604-*` 比 `ubuntu2404-*` 再大 8 ~ 9 MB：同样是 AppImage，但 26.04 自带的
   WebKitGTK 版本更新、体积也更大。
 
 > CI 每次构建都会在**运行摘要**的「清点各 bundle 体积」一栏列出 `.deb` / `.AppImage`
 > 各自的原始体积，想核对直接看那一步的表格。
 
-> **Windows 的绿色版**：`PDScope-windows11-x64-portable.zip` 解压后就是一个 `PDScope.exe`，
+> **Windows 的绿色版**：`PDScope-<目标>-<版本段>-portable.exe` 就是那个可执行文件，
 > 双击即用、不写注册表、不需要安装。它依赖系统的 **WebView2 运行时**（Win11 与新版 Win10
 > 自带）；想要「双击 `.atkcc` 直接打开」的文件关联，就装安装包版。
 >
@@ -99,16 +110,19 @@ GitHub 的 Windows runner 一直是 **Windows Server** 系列，从来没有过 
   要的话把矩阵里那行的 `bundles` 改成 `nsis,msi` 即可。
 * **Windows 额外出一个绿色版。** 构建时 `--bundles` 产出的
   `target/<三元组>/release/pdscope.exe` 本身就是完整可运行的程序（前端已经编进二进制里），
-  把它单独压成 `-portable.zip` 就行，不需要额外构建一次。
-* **每个目标的产物都先收拢成一个「带目标名」的归档再上传。** 两个原因：
+  把它改名为 `-portable.exe` 一起传就行，不需要额外构建一次。
+* **产物散着传，靠「文件名带目标名 + 版本段」区分。** 两个原因：
   ① `actions/upload-artifact` 有个官方写明、关不掉的限制「Permission Loss」——
-  上传后所有目录变 755、文件变 644，符号链接也不保留；而 macOS 的 `.app` 内部全是
-  符号链接与可执行位、Linux 的 `.AppImage` 必须带 `+x`，散着上传会得到一个
-  「解压后打不开」的包。`tar` 能把权限和链接原样保住，所以 macOS / Linux 用 `.tar.gz`。
+  上传后所有目录变 755、文件变 644，符号链接也不保留。不过我们的产物都是**单文件**
+  （`.dmg` / `.deb` / `.exe` / `.msi` / `.AppImage.zip`），这个限制只影响「整个目录」的产物，
+  而我们 macOS 只出 `.dmg`、Linux 把 AppImage 压成 zip（`+x` 位在下载链路里本就保不住，
+  不如直接打包让用户解压后自己 `chmod +x`），所以正好避开了这一点。
   ② 各目标的出包名是按架构走的（`pdscope.exe`、`PDScope_0.3.0_x64-setup.exe` …），
   x64 与 arm64 之间、不同打包类型之间都可能撞名；而所有产物在 Release 里是平铺的，
-  同名文件会互相覆盖且不报错。必须靠「归档名带目标名」区分开。
-  Windows 用 `.zip`（没有可执行位这回事，zip 就够，也更合 Windows 用户的习惯）。
+  同名文件会互相覆盖且不报错。所以每个文件都在上传前加上
+  `PDScope-<目标>-<版本段>-` 前缀，天然唯一。
+  不整体打包成大 zip / tar.gz，是为了让每个文件能单独下载、单独校验；
+  唯一的例外是 AppImage 单文件压一层 zip，让绿色包也保持单文件可独立分发。
 
 ## CI 里跑了哪些自检
 

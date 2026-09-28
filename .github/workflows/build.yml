@@ -122,6 +122,23 @@ jobs:
           node-version: '24'
           package-manager-cache: false
 
+      # 产物名的「版本段」：推 v* 标签（发版）就是纯版本号（v0.3.0），
+      # 普通推送则是 v0.3.0_<8 位短 commit>_<YYYYMMDD>，一眼能看出是哪次提交、哪天出的。
+      # 版本号从 package.json 读，短 commit 与日期从环境取，写进 GITHUB_ENV 供后续步骤共用。
+      - name: 定产物版本段
+        shell: bash
+        run: |
+          ver="v$(node -p "require('./package.json').version")"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            suffix=""
+          else
+            short="$(echo "${GITHUB_SHA:-$GITHUB_REF}" | cut -c1-8)"
+            date="$(date -u +%Y%m%d)"
+            suffix="_${short}_${date}"
+          fi
+          echo "VERSEG=${ver}${suffix}" >> "$GITHUB_ENV"
+          echo "产物版本段：${ver}${suffix}"
+
       # 仓库里的 src-tauri/.cargo/config.toml 是给国内开发机用的 USTC 镜像，
       # 海外 runner 走官方源更快更稳，先删掉
       - name: 切回 crates.io 官方源
@@ -136,7 +153,7 @@ jobs:
           sudo apt-get update || echo "::warning::apt-get update 失败，继续试装"
           for p in libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libxdo-dev \
                    libayatana-appindicator3-dev libssl-dev patchelf file \
-                   build-essential curl wget; do
+                   build-essential curl wget zip; do
             sudo apt-get install -y --no-install-recommends "$p" \
               || echo "::warning title=依赖缺失::$p 在这个 Ubuntu 版本上装不上，继续"
           done
@@ -172,19 +189,29 @@ jobs:
       - name: 构建可执行文件与安装包
         run: npm run app:build -- --target "${{ matrix.target }}" --bundles "${{ matrix.bundles }}"
 
-      # macOS / Linux 先 tar 一层再上传：upload-artifact 会把权限压成 644 且不保留
-      # 符号链接（官方 Limitations「Permission Loss」），而 .app 与 .AppImage 全靠它们
-      - name: 打包（macOS / Linux）
+      # 产物散着传（不打大包），每个文件统一重命名成
+      #   PDScope-<目标>-<版本段>-<内容>.<ext>
+      # 版本段：发版 = v0.3.0，普通推送 = v0.3.0_<短commit>_<日期>。
+      # macOS 只出 .dmg：dmg 挂载后里面就是 .app + 指向 /Applications 的软链，
+      # 拖进 Applications 即完成安装，不需要再单独出一份 .app 包。
+      - name: 归置产物（macOS / Linux）
         if: runner.os != 'Windows'
         run: |
           set -euo pipefail
-          cd "src-tauri/target/${{ matrix.target }}/release/bundle"
-          dirs=""
-          for d in macos dmg deb appimage; do
-            if [ -d "$d" ]; then dirs="$dirs $d"; fi   # 不用 [ ] && —— set -e 会在判断为假时把脚本掐断
-          done
-          echo "打进包里的目录：$dirs"
-          tar -czf "$GITHUB_WORKSPACE/PDScope-${{ matrix.name }}.tar.gz" $dirs
+          b="src-tauri/target/${{ matrix.target }}/release/bundle"
+          out="PDScope-${{ matrix.name }}-${{ env.VERSEG }}"
+          mkdir -p "$out"
+          # 按 bundle 目录类型逐个重命名归置（跳过 macos/ 目录：.app 已在 dmg 里）
+          if [ -d "$b/dmg" ]; then       cp "$b/dmg"/*       "$out/$out.dmg";       fi
+          if [ -d "$b/deb" ]; then       cp "$b/deb"/*       "$out/$out.deb";       fi
+          # AppImage 体积大（~165 MB，几乎全是 WebKitGTK），zip 压缩能省下一截传输体积。
+          # 解压后记得 chmod +x 再跑（zip 不保留可执行位）。
+          if [ -d "$b/appimage" ]; then
+            cp "$b/appimage"/* "$out/$out.AppImage"
+            ( cd "$out" && zip -9 "$out.AppImage.zip" "$out.AppImage" && rm "$out.AppImage" )
+          fi
+          echo "归置后的产物："
+          ls -lh "$out"
 
       # 纯取证步骤：只把各 bundle 的原始体积写进运行摘要，任何异常都不许影响构建。
       - name: 清点各 bundle 体积
@@ -211,30 +238,34 @@ jobs:
             done
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # Windows 出两个 zip：安装包版（NSIS + MSI）与绿色版（单个 exe，解压即用）
-      - name: 打包（Windows）
+      # Windows 产物散着传（不打 zip），每个文件统一重命名成
+      #   PDScope-<目标>-<版本段>-<内容>.<ext>
+      # 安装包（NSIS setup.exe / MSI）与绿色版单 exe 各一个文件。
+      - name: 归置产物（Windows）
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $rel = "src-tauri/target/${{ matrix.target }}/release"
-          New-Item -ItemType Directory -Force -Path out, portable | Out-Null
-          Copy-Item "$rel/pdscope.exe" portable/PDScope.exe
-          Copy-Item "$rel/bundle/nsis/*" out/
-          if (Test-Path "$rel/bundle/msi") { Copy-Item "$rel/bundle/msi/*" out/ }
-          Compress-Archive -Path "out/*"      -DestinationPath "PDScope-${{ matrix.name }}.zip"
-          Compress-Archive -Path "portable/*" -DestinationPath "PDScope-${{ matrix.name }}-portable.zip"
-          Get-ChildItem PDScope-*.zip | Format-Table Name, Length -AutoSize
+          $out = "PDScope-${{ matrix.name }}-${{ env:VERSEG }}"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          Copy-Item "$rel/pdscope.exe" "$out/$out-portable.exe"
+          if (Test-Path "$rel/bundle/nsis") { Copy-Item (Get-ChildItem "$rel/bundle/nsis/*" | Select-Object -First 1) "$out/$out-setup.exe" }
+          if (Test-Path "$rel/bundle/msi")  { Copy-Item (Get-ChildItem "$rel/bundle/msi/*"  | Select-Object -First 1) "$out/$out-setup.msi" }
+          Get-ChildItem $out | Format-Table Name, Length -AutoSize
 
+      # 每个产物文件单独配一个同名 .sha256（内容一行一文件，与 sha256sum -c 兼容）。
+      # 脚本扫描产物目录、排除自身生成的 .sha256，避免二次哈希。
       - name: 生成 SHA256 校验和
-        run: node tools/ci-checksum.mjs --name "${{ matrix.name }}"
+        shell: bash
+        run: node tools/ci-checksum.mjs --dir "PDScope-${{ matrix.name }}-${{ env.VERSEG }}"
 
-      # 归档名带目标名，否则不同目标的同名文件汇总到 Release 时会互相覆盖
+      # 产物文件名带目标名，否则不同目标的同名文件汇总到 Release 时会互相覆盖
       - uses: actions/upload-artifact@v6
         with:
           name: PDScope-${{ matrix.name }}
           if-no-files-found: error
           retention-days: 30
-          path: PDScope-${{ matrix.name }}*
+          path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/*
 
       - name: 写运行摘要
         if: always()
@@ -251,7 +282,7 @@ jobs:
             echo "| 说明 | ${{ matrix.note }} |"
             echo ""
             echo '```'
-            ls -lh "PDScope-${{ matrix.name }}"* 2>/dev/null
+            ls -lh "PDScope-${{ matrix.name }}-${{ env.VERSEG }}"/* 2>/dev/null
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY" || true
 
