@@ -33,9 +33,9 @@ npm run app:build       # 出当前平台的全部安装包
 
 | 平台        | 只出可执行文件        | 出安装包             | 安装包产物                                          |
 | ----------- | --------------------- | -------------------- | --------------------------------------------------- |
-| **Windows** | `npm run app:exe`     | `npm run app:win`    | `bundle/nsis/PDScope_0.3.1_x64-setup.exe`（NSIS）<br>`npm run app:build` 还多出 `bundle/msi/PDScope_0.3.1_x64_zh-CN.msi` |
-| **macOS**   | `npm run app:exe`     | `npm run app:mac`    | `bundle/dmg/PDScope_0.3.1_x64.dmg` + `bundle/macos/PDScope.app` |
-| **Linux**   | `npm run app:exe`     | `npm run app:linux`  | `bundle/appimage/PDScope_0.3.1_amd64.AppImage` + `bundle/deb/PDScope_0.3.1_amd64.deb` |
+| **Windows** | `npm run app:exe`     | `npm run app:win`    | `bundle/nsis/PDScope_0.3.3_x64-setup.exe`（NSIS）<br>`npm run app:build` 还多出 `bundle/msi/PDScope_0.3.3_x64_zh-CN.msi` |
+| **macOS**   | `npm run app:exe`     | `npm run app:mac`    | `bundle/dmg/PDScope_0.3.3_x64.dmg` + `bundle/macos/PDScope.app` |
+| **Linux**   | `npm run app:exe`     | `npm run app:linux`  | `bundle/appimage/PDScope_0.3.3_amd64.AppImage` + `bundle/deb/PDScope_0.3.3_amd64.deb` |
 
 产物在 `src-tauri/target/<三元组>/release/` 下 —— **显式传 `--target` 时路径里会多一层三元组目录**，
 不传才是 `target/release/`。三个平台的依赖见[环境准备](env.md)。
@@ -113,7 +113,7 @@ pdscope.exe --help                                            # 用法；--versi
   输出    D:\抓包\绿联70w-ch0.csv
   · 分块 8/16 · 已解出 348 条
 
-PDScope 0.3.1 · 命令行导出
+PDScope 0.3.3 · 命令行导出
   输入    D:\抓包\绿联70w.atkcc
   来源    ATK-C 原始采样 · USB PD · ch0
   采样率  2.50 MHz

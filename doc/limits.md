@@ -3,7 +3,7 @@
 ## 构建与打包
 
 * **桌面版不交叉编译**。想在 macOS 上用桌面版，就得在 macOS 上构建（或直接用单文件版）。
-  本机只实测了 Windows 产物：`pdscope.exe` 约 3.3 MB、NSIS 安装包 `PDScope_0.3.1_x64-setup.exe` 1.2 MB。
+  本机只实测了 Windows 产物：`pdscope.exe` 约 3.3 MB、NSIS 安装包 `PDScope_0.3.3_x64-setup.exe` 1.2 MB。
 * **安装包只验到「能打出来」**。打安装包时 Tauri 会从 GitHub Releases 下载打包辅助程序
   （NSIS / WiX / appimage 工具），本机已实测可下载并成功产出 NSIS 与 MSI；但**没有在本机执行安装**，
   所以「装完之后双击 `.atkcc` 直接打开」这条只在命令行与拖拽两条等效路径上实测过 ——

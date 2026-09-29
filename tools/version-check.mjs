@@ -5,7 +5,7 @@
  * 为什么需要它：这个仓库的版本号散落在 5 个文件里，而它们各自被不同的东西读走：
  *
  *   package.json              npm 元数据
- *   src-tauri/tauri.conf.json  安装包名（PDScope_0.3.1_x64-setup.exe）、.app 的 CFBundleVersion
+ *   src-tauri/tauri.conf.json  安装包名（PDScope_0.3.3_x64-setup.exe）、.app 的 CFBundleVersion
  *   src-tauri/Cargo.toml       可执行文件自身的版本
  *   src-tauri/Cargo.lock       锁文件里的根包（漏改会让 cargo 认为它和 Cargo.toml 不一致）
  *   src/ui/app.js              界面「关于」里显示的版本
@@ -13,8 +13,8 @@
  * 只改其中一处不会报错，只会悄悄装出来一个「文件名 0.4.0、关于里写 0.3.1」的包，
  * 而且这种不一致往往是发给别人之后才发现的。所以放在自检链最前面统一核对。
  *
- * 另外扫一遍 README.md 与 doc/*.md 里写的安装包产物名（PDScope_0.3.1_x64-setup.exe）：
- * 文档里的版本号不参与判定，只列出来提示 —— 但它是漏改时的第一个信号。
+ * 另外扫一遍 README.md 与 doc/*.md 里写的安装包产物名（PDScope_0.3.3_x64-setup.exe）：
+ * 文档里的版本号**同样参与判定**（漏改一样会红）—— 它往往是漏改时最先暴露的一处。
  *
  * 用法：node tools/version-check.mjs
  */

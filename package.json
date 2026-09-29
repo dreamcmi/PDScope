@@ -1,7 +1,7 @@
 {
   "name": "pdscope",
   "productName": "PDScope",
-  "version": "0.3.1",
+  "version": "0.3.3",
   "description": "USB Power Delivery 抓包解析上位机 — 直接解析正点原子 ATK-C (.atkcc) 抓包文件",
   "type": "module",
   "author": "PDScope",

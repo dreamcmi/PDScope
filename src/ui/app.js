@@ -2377,7 +2377,7 @@ window.pdscopeExportCsv = async ({ name, bytes, channel, limit, bom = true, onPr
  * 外壳的启动流程应该是「等 `PDScope.ready === true`，再调 openBytes/openUrl/exportCsv」。
  */
 window.PDScope = {
-  version: '0.3.1',
+  version: '0.3.3',
   env: ENV,                       // { tauri, http, file, desktop, hasServer, name, label, proto }
   ready: false,
   openBytes: window.pdscopeOpenBytes,
