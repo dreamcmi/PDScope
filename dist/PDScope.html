@@ -28,6 +28,8 @@
   /* 详情面板宽度。放在变量里而不是写死在 .detail 上，是为了让「拖拽」只改一个变量，
      而 body.detail-collapsed 的 width:0 依然能靠选择器优先级压过去。 */
   --detail-w: 390px;
+  /* 底部曲线区高度：拖它上方那条分隔条改的就是这个变量（与 app.js 的 TL_H_DEF 一致） */
+  --tl-h: 158px;
 }
 
 html[data-theme="light"]{
@@ -505,10 +507,33 @@ body.side-collapsed .sidebar{ width:0; opacity:0; overflow:hidden; border-right:
 
 /* ── 时间轴 ─────────────────────────────────────────── */
 .timeline{
-  flex:none; height:158px; background:var(--panel);
+  flex:none; height:var(--tl-h, 158px); background:var(--panel);
   border-top:1px solid var(--line); display:flex; flex-direction:column;
   position:relative;
 }
+/* 时间轴高度拖拽条：跟详情栏那条竖向分隔条同一套做法（负外边距不占位、::after 撑命中区），
+   只是方向转成横向。默认 158px 高太扁，想看清曲线就把它往上拖。 */
+.tl-splitter{
+  flex:none; height:6px; margin:-3px 0; position:relative; z-index:7;
+  cursor:row-resize; touch-action:none;
+}
+.tl-splitter::after{
+  /* 命中区 11px：向上 7px、向下 4px。刻意少往时间轴里伸展 —— 表头那排按钮紧贴分隔条，
+     命中区压得太深会让「点按钮最上沿」变成「拖高度」。 */
+  content:''; position:absolute; left:0; right:0; top:-4px; bottom:-1px;
+}
+.tl-splitter > i{
+  position:absolute; left:0; right:0; top:2px; bottom:2px;
+  border-radius:2px; background:transparent;
+  transition:background var(--dur);
+}
+.tl-splitter:hover > i{ background:color-mix(in srgb, var(--tx-3) 45%, transparent); }
+.tl-splitter:focus-visible{ outline:none; }
+.tl-splitter:focus-visible > i,
+.tl-splitter.is-drag > i{ background:var(--accent); }
+/* 拖动中：锁住文本选择。cursor 只对没有自己光标规则的区域生效（画布自己是 crosshair、
+   按钮是 pointer），和详情面板那条分隔条的处理方式一致。 */
+body.tl-resizing{ user-select:none; cursor:row-resize; }
 .tl-head{
   height:28px; flex:none; display:flex; align-items:center; gap:8px;
   padding:0 12px; border-bottom:1px solid var(--line-2);
@@ -518,6 +543,12 @@ body.side-collapsed .sidebar{ width:0; opacity:0; overflow:hidden; border-right:
 .tl-head .seg{ padding:1px; }
 .tl-head .seg-item{ height:19px; padding:0 8px; font-size:10.5px; }
 #busCanvas{ flex:1 1 auto; width:100%; display:block; cursor:crosshair; }
+/* 「复位视图」：纵轴被缩放/平移过就点亮 —— 一眼看出「图不是画歪了，是我自己调过」 */
+#btnTlFit.is-dirty{
+  color:var(--accent);
+  border-color:color-mix(in srgb, var(--accent) 45%, var(--line));
+  background:var(--accent-sf);
+}
 .tl-tip{
   position:absolute; pointer-events:none; display:none;
   padding:4px 7px; border-radius:6px; font-size:10.5px; font-family:var(--mono);
@@ -926,6 +957,11 @@ body.detail-collapsed .detail-rail span{
         </div>
       </div>
 
+      <!-- 时间轴高度拖拽条（↑ ↓ 也能微调）：把曲线区拉高到半屏、或压扁让报文表多露几行 -->
+      <div class="tl-splitter" id="tlSplitter" role="separator" aria-orientation="horizontal"
+           aria-label="调整时间轴高度" aria-controls="timeline" tabindex="0"
+           title="上下拖动调整曲线区高度 · 双击恢复默认 · 聚焦后 ↑↓ 微调"><i></i></div>
+
       <div class="timeline" id="timeline">
         <div class="tl-head">
           <span class="tl-title" id="tlTitle">VBUS / IBUS 时间轴</span>
@@ -935,7 +971,7 @@ body.detail-collapsed .detail-rail span{
           </div>
           <div class="spacer"></div>
           <label class="switch sm"><input type="checkbox" id="tlFollow" checked /><span></span>跟随选中</label>
-          <button class="btn tiny" id="btnTlFit">适应宽度</button>
+          <button class="btn tiny" id="btnTlFit" title="滚轮缩放纵轴、上下拖动平移纵轴、双击曲线区复位；点这里把时间与纵轴一起回到全览">复位视图</button>
         </div>
         <canvas id="busCanvas"></canvas>
         <div class="tl-tip" id="tlTip"></div>
@@ -8041,6 +8077,16 @@ function newDoc(file) {
     cancel: false,
     /** 时间轴画哪一组曲线：'power' = VBUS/IBUS，'aux' = CC1/CC2（分析仪导出才有） */
     tlMode: 'power',
+    /**
+     * 时间轴的**纵轴视图**：两档各记一套（两档量程差一个数量级，共用一套会很别扭）。
+     *
+     *   · `z` 缩放：1 = 自适应（曲线刚好铺满，留 12% 余量），2 = 放大两倍只看下半截；
+     *   · `o` 平移：以「自适应满量程」为单位，0 = 贴底，0.5 = 整体上移半屏。
+     *
+     * 屏幕映射 `y = y0 + H − (v / vmax − o) × z × H`，可见窗口（归一化值）是 `[o, o + 1/z]`。
+     * 它是「对这份数据的看法」，所以跟着文档走；换文件 / 换通道时回到默认（见 decodeDoc）。
+     */
+    tlY: newTlY(),
     chActivity: new Map(),
     /** 多通道文件自动挑通道的结果（挑中哪个、排除了几条噪声线） */
     channelPick: null,
@@ -8420,6 +8466,7 @@ async function decodeDoc(doc) {
     doc.noticeOff = false;
     doc.selected = -1;
     doc.filters.tFrom = 0; doc.filters.tTo = 1;      // 换了文件/通道 → 时间窗口回到全时段
+    doc.tlY = newTlY();                              // 纵轴的缩放/平移同理（量程变了，旧参数没意义）
     doc.state = 'done';
 
     setProgress(1, '完成');
@@ -8595,6 +8642,7 @@ addEventListener('resize', () => closeTabMenu());
  * 左侧筛选控件的勾选状态、时间轴标题、详情面板全都要跟着换人。
  */
 function renderAll() {
+  tlCancelDrag();        // 换文档/切标签时，上一份文档上没结束的拖拽不能带过来
   renderTabs();
   renderMeta();
   renderChannels();
@@ -9355,7 +9403,52 @@ function dgroupHtml(title, items, idx) {
 
 /* ═══════════════════════ 时间轴 ═══════════════════════ */
 const cv = $('#busCanvas');
-let TL = { x0: 0, y0: 0, w: 0, h: 0, dpr: 1, drag: null };
+let TL = { x0: 0, y0: 0, w: 0, h: 0, drag: null };
+
+/** Y 轴视图的两套默认值（power / aux），每份文档各持一份 */
+function newTlY() {
+  return { power: { z: 1, o: 0 }, aux: { z: 1, o: 0 } };
+}
+
+/** 当前文档 + 当前档位对应的 Y 视图参数 */
+function tlView() {
+  if (!S.tlY) S.tlY = newTlY();
+  const k = S.tlMode === 'aux' ? 'aux' : 'power';
+  if (!S.tlY[k]) S.tlY[k] = { z: 1, o: 0 };
+  return S.tlY[k];
+}
+
+/**
+ * 缩放/平移的合法区间。
+ *
+ * 缩放给到 ×0.25（整条曲线缩成下四分之一，看长时间的整体走势）到 ×200（放大看某个台阶的抖动）；
+ * 平移以「自适应满量程」为单位，允许往下露半个量程、往上最多三个量程 —— 再远就是一片空白，
+ * 徒增「我是不是把图拖丢了」的困惑（双击或「复位视图」一键回来）。
+ */
+const TL_Z_MIN = 0.25, TL_Z_MAX = 200;
+function clampTlY(v) {
+  v.z = clamp(v.z, TL_Z_MIN, TL_Z_MAX);
+  // 可见窗口顶端 = o + 1/z，别让它超过 4 个量程；底端不低于 −0.5
+  const hi = Math.max(-0.5, Math.min(3, 4 - 1 / v.z));
+  v.o = clamp(v.o, -0.5, hi);
+  return v;
+}
+
+const tlDirty = (v = tlView()) => Math.abs(v.z - 1) > 1e-3 || Math.abs(v.o) > 1e-3;
+
+/** 「复位视图」按钮的两种状态：没动过就是普通样式，动过就点亮并说明当前倍率 */
+function syncTlYUI() {
+  const btn = $('#btnTlFit');
+  if (!btn) return;
+  const v = tlView();
+  const dirty = tlDirty(v);
+  btn.classList.toggle('is-dirty', dirty);
+  btn.title = dirty
+    ? `纵轴已调整：放大 ×${v.z.toFixed(2)}、偏移 ${v.o >= 0 ? '+' : ''}${v.o.toFixed(2)}`
+      + ' —— 点这里复位；也可以双击曲线区，或 Ctrl+滚轮缩放 / 上下拖动平移'
+    : 'Ctrl+滚轮缩放纵轴、上下拖动（或右键拖动、拖左右刻度栏）平移纵轴、双击复位；'
+      + '点这里把时间与纵轴一起回到全览。曲线区本身的高度请拖它上方那条分隔条';
+}
 
 /**
  * 时间轴当前该画哪一对曲线。
@@ -9407,6 +9500,7 @@ function renderTimelineHead() {
   seg.hidden = !hasAux;
   if (!hasAux) S.tlMode = 'power';
   $$('#tlSeg .seg-item').forEach((b) => b.classList.toggle('is-on', b.dataset.v === S.tlMode));
+  syncTlYUI();                 // 切档 / 换文档后，「复位视图」按钮要反映当前档的纵轴状态
 }
 $$('#tlSeg .seg-item').forEach((b) => b.addEventListener('click', () => {
   S.tlMode = b.dataset.v;
@@ -9434,20 +9528,46 @@ function drawTimeline(selPkt) {
   const cSrc = cs.getPropertyValue('--src').trim();
   const cPlug = cs.getPropertyValue('--plug').trim();
 
-  const padL = 42, padR = 42, padT = 8, padB = 16;
+  const padL = 42, padR = 42, padT = 8, padB = 18;
   const x0 = padL, y0 = padT, W = Math.max(10, w - padL - padR), H = Math.max(10, hgt - padT - padB);
-  TL = { x0, y0, w: W, h: H, dpr };
+  // 用展开更新几何，把 `drag` 一起带过去。**不能写成字面量** `TL = { x0, y0, ... }`：
+  // 拖动过程中会调 drawTimeline 画预览，一换对象就把 TL.drag 抹掉，横向刷选当场自毁
+  // （预览那一步还会读 TL.drag.x 抛异常）。
+  TL = { ...TL, x0, y0, w: W, h: H };
+  TL.axisBandTop = y0 + H;      // 横轴时间标签所在那条带子的上沿（CSS px）
 
-  // 网格
+  // 网格（横向：值刻度）
   g.strokeStyle = cLine; g.lineWidth = 1;
   for (let i = 0; i <= 4; i++) {
     const y = y0 + (H * i) / 4;
     g.beginPath(); g.moveTo(x0, y + .5); g.lineTo(x0 + W, y + .5); g.stroke();
   }
 
+  /* ── 横轴：时间刻度 ──────────────────────────────────
+   * 以前底下那条 padB 带子是留白，整条时间轴只有左右两个值刻度、看不到时间。
+   * 这里补上五等分的时间标签 + 对应位置的淡竖线（竖线画在曲线之前，不压曲线）。
+   * 单位随时长自适应：0.17s 的抓包标「0ms…170ms」，几秒的标「0.00s…2.50s」，
+   * 超过一分钟标「0:00…1:23」—— 一律写死秒的话短抓包五格全是同一个数。
+   */
+  const totalSec = (S.totalSamples || 0) / (S.rate || 1);
+  const xTicks = [];
+  if (totalSec > 0) {
+    for (let i = 0; i <= 4; i++) {
+      const t = i / 4, x = x0 + t * W;
+      xTicks.push({ t, sec: t * totalSec, label: fmtAxisTime(t * totalSec, totalSec), x });
+      if (i > 0 && i < 4) {                  // 首尾两条与纵轴重叠，不画
+        g.strokeStyle = hexA(cLine, .75);
+        g.beginPath(); g.moveTo(x + .5, y0); g.lineTo(x + .5, y0 + H); g.stroke();
+      }
+    }
+    g.fillStyle = cTx3; g.font = '10px ui-monospace, monospace'; g.textAlign = 'center';
+    for (const tk of xTicks) g.fillText(tk.label, tk.x, y0 + H + 13);
+  }
+  TL.xTicks = xTicks;
+
   const cur = tlCurves();
   if (!cur) {
-    g.fillStyle = cTx3; g.font = '11px sans-serif';
+    g.fillStyle = cTx3; g.font = '11px sans-serif'; g.textAlign = 'left';
     g.fillText(S.cap ? '这份抓包没有模拟量轨迹数据' : '打开抓包后显示 VBUS / IBUS', x0 + 8, y0 + H / 2);
     return;
   }
@@ -9457,33 +9577,49 @@ function drawTimeline(selPkt) {
   const colR = themeVar[cur.rColor] || cAccent;
 
   const N = s.n;
-  const xs = (i) => x0 + (i / (N - 1)) * W;
-  const yL = (v) => y0 + H - (v / cur.lmax) * H;
-  const yR = (v) => y0 + H - (v / cur.rmax) * H;
+  // N === 1（只有单个采样点，例如只导出一行 ADC 数据的分析仪文件）时 `i/(N-1)` 是 0/0 = NaN，
+  // Canvas 遇到 NaN 会把整条路径丢掉 —— 网格和刻度都在、只有曲线消失，看着像数据丢了。
+  // 这种序列就画在横向正中，并且**不画填充**（一个点撑不起一块面积，画成三角是撒谎）。
+  const single = N === 1;
+  const xs = (i) => x0 + (single ? 0.5 : i / (N - 1)) * W;
 
-  // 填充左轴曲线
-  g.beginPath();
-  g.moveTo(x0, y0 + H);
-  for (let i = 0; i < N; i++) g.lineTo(xs(i), yL(cur.l[i]));
-  g.lineTo(x0 + W, y0 + H); g.closePath();
-  g.fillStyle = hexA(colL, .16); g.fill();
+  // 纵轴视图：自适应量程 cur.lmax / cur.rmax 之上再叠一层「用户缩放 + 平移」
+  const vy = clampTlY(tlView());
+  const yOf = (v, base) => y0 + H - ((v / base - vy.o) * vy.z) * H;
+  /** 第 p 条网格线（p = 0 顶部 … 1 底部）对应的值 */
+  const valAt = (p, base) => (vy.o + (1 - p) / vy.z) * base;
+  const yL = (v) => yOf(v, cur.lmax);
+  const yR = (v) => yOf(v, cur.rmax);
 
-  // 左轴曲线
-  g.beginPath();
-  for (let i = 0; i < N; i++) i ? g.lineTo(xs(i), yL(cur.l[i])) : g.moveTo(xs(i), yL(cur.l[i]));
-  g.strokeStyle = colL; g.lineWidth = 1.7; g.stroke();
+  // 放大后曲线会画出画布可视区，套一层裁剪，免得压到刻度文字上
+  g.save();
+  g.beginPath(); g.rect(x0, y0, W, H); g.clip();
+
+  // 填充左轴曲线（单点序列没有"曲线下的面积"可言，跳过填充，只画点）
+  if (!single) {
+    g.beginPath();
+    g.moveTo(x0, y0 + H);
+    for (let i = 0; i < N; i++) g.lineTo(xs(i), yL(cur.l[i]));
+    g.lineTo(x0 + W, y0 + H); g.closePath();
+    g.fillStyle = hexA(colL, .16); g.fill();
+  }
+
+  // 左轴曲线（单点时画一个实心点，不然路径长度为 0 什么都看不见）
+  if (single) {
+    g.fillStyle = colL; g.beginPath(); g.arc(xs(0), yL(cur.l[0]), 3, 0, 7); g.fill();
+  } else {
+    g.beginPath();
+    for (let i = 0; i < N; i++) i ? g.lineTo(xs(i), yL(cur.l[i])) : g.moveTo(xs(i), yL(cur.l[i]));
+    g.strokeStyle = colL; g.lineWidth = 1.7; g.stroke();
+  }
 
   // 右轴曲线
-  g.beginPath();
-  for (let i = 0; i < N; i++) i ? g.lineTo(xs(i), yR(cur.r[i])) : g.moveTo(xs(i), yR(cur.r[i]));
-  g.strokeStyle = colR; g.lineWidth = 1.3; g.setLineDash([3, 2]); g.stroke(); g.setLineDash([]);
-
-  // 坐标轴刻度
-  g.fillStyle = cTx3; g.font = '10px ui-monospace, monospace';
-  for (let i = 0; i <= 4; i++) {
-    const y = y0 + (H * i) / 4;
-    g.textAlign = 'right'; g.fillText((cur.lmax * (1 - i / 4)).toFixed(cur.lDigits) + cur.lUnit, x0 - 5, y + 3);
-    g.textAlign = 'left'; g.fillText((cur.rmax * (1 - i / 4)).toFixed(cur.rDigits) + cur.rUnit, x0 + W + 5, y + 3);
+  if (single) {
+    g.fillStyle = colR; g.beginPath(); g.arc(xs(0), yR(cur.r[0]), 2.4, 0, 7); g.fill();
+  } else {
+    g.beginPath();
+    for (let i = 0; i < N; i++) i ? g.lineTo(xs(i), yR(cur.r[i])) : g.moveTo(xs(i), yR(cur.r[i]));
+    g.strokeStyle = colR; g.lineWidth = 1.3; g.setLineDash([3, 2]); g.stroke(); g.setLineDash([]);
   }
 
   // 报文刻度
@@ -9512,10 +9648,20 @@ function drawTimeline(selPkt) {
     g.beginPath(); g.moveTo(x, y0); g.lineTo(x, y0 + H); g.stroke();
     g.beginPath(); g.arc(x, y0 + 4, 2.6, 0, 7); g.fillStyle = cAccent; g.fill();
   }
+  g.restore();
+
+  // 坐标轴刻度 —— 跟着纵轴视图走：放得越大，小数位越多（否则 ×50 之后刻度全是同一个数）
+  const lDig = cur.lDigits + (vy.z >= 20 ? 2 : vy.z >= 5 ? 1 : 0);
+  const rDig = cur.rDigits + (vy.z >= 20 ? 2 : vy.z >= 5 ? 1 : 0);
+  g.fillStyle = cTx3; g.font = '10px ui-monospace, monospace';
+  for (let i = 0; i <= 4; i++) {
+    const y = y0 + (H * i) / 4;
+    g.textAlign = 'right'; g.fillText(valAt(i / 4, cur.lmax).toFixed(lDig) + cur.lUnit, x0 - 5, y + 3);
+    g.textAlign = 'left'; g.fillText(valAt(i / 4, cur.rmax).toFixed(rDig) + cur.rUnit, x0 + W + 5, y + 3);
+  }
 
   TL.timeToX = (t) => x0 + t * W;
-  TL.xToTime = (x) => clamp((x - x0) / W, 0, 1);
-}
+  TL.xToTime = (x) => clamp((x - x0) / W, 0, 1);}
 function hexA(hex, a) {
   hex = (hex || '#888').replace('#', '');
   if (hex.length === 3) hex = hex.split('').map((c) => c + c).join('');
@@ -9523,15 +9669,105 @@ function hexA(hex, a) {
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
 }
 
-// 时间轴交互：拖拽缩放 / 点击选中
+/**
+ * 横轴时间标签怎么写字：单位跟着**总时长**走，不是跟着单个刻度走。
+ *
+ *   · 不到 1 秒 → `0ms / 42ms / 85ms / 127ms / 170ms`（短抓包若写「0.00s」五格全一样，毫无信息；
+ *     10ms 以内再补一位小数，否则相邻两格会连着重样）
+ *   · 不到 60 秒 → `0.00s / 1.25s / 2.50s`（两位数以上收一位小数，免得标签互相挤）
+ *   · 更长 → `0:00 / 0:21 / 1:23`
+ *
+ * 时间轴刻度只是**总时长的等分**（跟左边的时间窗口滑杆同一套归一化坐标），所以这里只吃
+ * 「秒」两个数就能算，不必关心是 .atkcc 的采样点还是分析仪的毫秒时间戳。
+ */
+function fmtAxisTime(sec, total) {
+  if (total < 0.01) return `${(sec * 1000).toFixed(1)}ms`;   // 10ms 以内：整数 ms 会连着重样，补一位小数
+  if (total < 1) return `${Math.round(sec * 1000)}ms`;
+  if (total < 60) return `${sec.toFixed(total < 10 ? 2 : 1)}s`;
+  const m = Math.floor(sec / 60);
+  return `${m}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
+}
+
+// 时间轴交互：横向拖拽刷选 / 点击选中 / 纵轴上下拖动 + 滚轮缩放
+/**
+ * 纵轴这一套为什么不跟「横向刷选」抢手势：
+ *   · 曲线区里的**普通左键拖动仍然是刷选时间**（老习惯不能变，e2e 也在测它）；
+ *   · 平移到**左右刻度栏**里拖（那里本来就只放数字）、或按住 **Shift** 拖、或**右键**拖；
+ *   · **滚轮**缩放纵轴，以光标所在的那条值为锚点（想看清哪一段就把鼠标放那儿滚）。
+ */
+const tlInGutter = (x) => x < TL.x0 || x > TL.x0 + TL.w;
+
 cv.addEventListener('mousedown', (e) => {
   if (!S.busSeries) return;
   const r = cv.getBoundingClientRect();
-  TL.drag = { x: e.clientX - r.left, moved: false, a: TL.xToTime(e.clientX - r.left) };
+  const x = e.clientX - r.left, y = e.clientY - r.top;
+  if (tlCurves() && (e.button === 2 || e.shiftKey || tlInGutter(x))) {
+    e.preventDefault();
+    TL.drag = { pan: true, y, o0: tlView().o, moved: false };
+    cv.style.cursor = 'grabbing';
+    return;
+  }
+  TL.drag = { x, moved: false, a: TL.xToTime(x) };
 });
+// 右键专门留给纵轴平移，别弹出上下文菜单
+cv.addEventListener('contextmenu', (e) => e.preventDefault());
+
+cv.addEventListener('wheel', (e) => {
+  // 只认 Ctrl/⌘ + 滚轮：普通滚轮在曲线上什么都不做（跟改动前一致，免得误触把量程改了）。
+  // 想让曲线区更大请看上面的时间轴分隔条 —— 那是「换个看法」，这（纵轴缩放）才是「看细节」。
+  if (!(e.ctrlKey || e.metaKey) || !S.busSeries || !tlCurves()) return;
+  e.preventDefault();
+  const r = cv.getBoundingClientRect();
+  const p = clamp((e.clientY - r.top - TL.y0) / Math.max(1, TL.h), 0, 1);
+  const vy = tlView();
+  const anchor = vy.o + (1 - p) / vy.z;                       // 光标下的归一化值：缩放时钉住不动
+  // deltaMode 必须归一：Chrome/WebView2 给的是像素（0，一格约 ±100），Firefox 给的是**行**（1，一格约 ±3）。
+  // 不换算的话 Firefox 上滚一格只放大 1.005 倍，观感就是「Ctrl+滚轮没反应」（而 Firefox 在支持矩阵里）。
+  const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 100 : 1;
+  vy.z = clamp(vy.z * Math.exp(-e.deltaY * unit * 0.0016), TL_Z_MIN, TL_Z_MAX);
+  vy.o = anchor - (1 - p) / vy.z;
+  clampTlY(vy);
+  drawTimeline(); syncTlYUI();
+}, { passive: false });
+
+// 双击 = 纵轴复位（横向不动）
+cv.addEventListener('dblclick', (e) => {
+  if (!S.busSeries || !tlCurves()) return;
+  e.preventDefault();
+  const vy = tlView();
+  vy.z = 1; vy.o = 0;
+  drawTimeline(); syncTlYUI();
+});
+
+/**
+ * 取消画布上正在进行的拖拽（刷选 / 纵轴平移）。
+ *
+ * 拖拽状态原本只有 `mouseup` 一个出口：一旦 mouseup 丢了（窗口失焦、系统弹窗、拖到窗口外、
+ * 切标签页），时间轴会永久停在拖动态 —— 不按键移动鼠标就在改纵轴或拖着灰色选区。
+ * 所以窗口失焦、切文档、以及「移动事件说按键已经松开」这三种情况都要主动收尾。
+ */
+function tlCancelDrag() {
+  if (!TL.drag) return;
+  TL.drag = null;
+  cv.style.cursor = '';
+}
+
 addEventListener('mousemove', (e) => {
   if (!TL.drag) return;
+  // buttons 位 0 = 左键。松开之后还来的移动事件不该继续改视图（也不该继续画预览）
+  if (typeof e.buttons === 'number' && !(e.buttons & 1)) { tlCancelDrag(); return; }
   const r = cv.getBoundingClientRect();
+  if (TL.drag.pan) {
+    const dy = (e.clientY - r.top) - TL.drag.y;
+    if (Math.abs(dy) > 1) TL.drag.moved = true;
+    const vy = tlView();
+    // 往下拖 = 曲线跟着往下走 = 视野往高值挪：Δo 与像素位移同号，除以（缩放 × 画布高）
+    vy.o = TL.drag.o0 + dy / (vy.z * Math.max(1, TL.h));
+    clampTlY(vy);
+    // 纯重绘，交给 rAF 合并（和分隔条那条路径一致），拖动时不必每个 move 都重画一遍
+    scheduleTimelineDraw(); syncTlYUI();
+    return;
+  }
   const x = clamp(e.clientX - r.left, TL.x0, TL.x0 + TL.w);
   if (Math.abs(x - TL.drag.x) > 3) TL.drag.moved = true;
   if (TL.drag.moved) {
@@ -9545,6 +9781,7 @@ addEventListener('mousemove', (e) => {
 addEventListener('mouseup', (e) => {
   if (!TL.drag) return;
   const r = cv.getBoundingClientRect();
+  if (TL.drag.pan) { TL.drag = null; cv.style.cursor = ''; return; }
   const x = clamp(e.clientX - r.left, TL.x0, TL.x0 + TL.w);
   const d = TL.drag; TL.drag = null;
   if (d.moved) {
@@ -9564,6 +9801,8 @@ addEventListener('mouseup', (e) => {
 cv.addEventListener('mousemove', (e) => {
   const r = cv.getBoundingClientRect();
   const x = e.clientX - r.left, y = e.clientY - r.top;
+  // 光标提示：刻度栏（以及按住 Shift 时）提示「这里可以上下拖」，曲线区仍是十字准星
+  if (!TL.drag && S.busSeries) cv.style.cursor = (e.shiftKey || tlInGutter(x)) ? 'ns-resize' : '';
   const tip = $('#tlTip');
   const cur = tlCurves();
   if (!cur || x < TL.x0 || x > TL.x0 + TL.w) { tip.style.display = 'none'; return; }
@@ -9575,11 +9814,20 @@ cv.addEventListener('mousemove', (e) => {
     + `${cur.rName} ${cur.r[i].toFixed(cur.rDigits)}${cur.rUnit}`;
   tip.style.display = 'block';
   tip.style.left = x + 'px';
-  tip.style.top = (y - 6) + 'px';
+  // 提示框的包含块是 #timeline（position:relative），而 y 是**画布内**坐标，
+  // 画布顶上还有表头（28px）+ 上边框 —— 不加 offsetTop 提示框会飘在光标上方一格表头。
+  tip.style.top = (cv.offsetTop + y - 6) + 'px';
 });
-cv.addEventListener('mouseleave', () => ($('#tlTip').style.display = 'none'));
-$('#btnTlFit').addEventListener('click', () => { resetTimeRange(); applyFilters(true); drawTimeline(); });
-addEventListener('resize', () => { refitDetailW(); drawTimeline(); });
+cv.addEventListener('mouseleave', () => { $('#tlTip').style.display = 'none'; if (!TL.drag) cv.style.cursor = ''; });
+$('#btnTlFit').addEventListener('click', () => {
+  resetTimeRange(); applyFilters(true);
+  const vy = tlView();
+  vy.z = 1; vy.o = 0;
+  drawTimeline(); syncTlYUI();
+});
+addEventListener('resize', () => { refitDetailW(); refitTlH(); drawTimeline(); });
+// 窗口失焦（点别的程序、系统弹窗）会吞掉 mouseup —— 主动收尾，免得时间轴卡在拖动态
+addEventListener('blur', tlCancelDrag);
 
 /* ═══════════════════════ 视图控制 ═══════════════════════ */
 $('#btnToggleSide').addEventListener('click', () => {
@@ -9597,9 +9845,13 @@ const DETAIL_W_DEF = 390;   // 与 CSS 里的默认值保持一致
 const DETAIL_W_MIN = 280;   // 再窄字段名就开始换行，得不偿失
 const DETAIL_W_MAX = 900;   // 再宽眼睛要在两栏之间横跳
 const MAIN_W_MIN  = 420;    // 中间表格至少留这么宽（--cols 里有两列 minmax）
+/** 用户选定的宽度：落盘的那一份。窗口 resize 时的临时夹取不许改它（见 refitDetailW） */
+let detailWPref = DETAIL_W_DEF;
 
 const detailEl = $('#detail');
 const splitterEl = $('#detailSplitter');
+const timelineEl = $('#timeline');
+const tlSplitterEl = $('#tlSplitter');
 let timelineRaf = 0;
 
 /** 允许区间。上限定为「窗口宽 − 左栏 − 中间最小宽」，所以窄窗口下拖不出去 */
@@ -9610,7 +9862,7 @@ function detailLimits() {
   return { min: DETAIL_W_MIN, max: Math.max(DETAIL_W_MIN, Math.min(DETAIL_W_MAX, bodyW - sideW - MAIN_W_MIN)) };
 }
 
-/** 写宽度（自动夹到合法区间）。persist=true 时落盘，拖动过程中不落盘以免狂写 localStorage */
+/** 写宽度（自动夹到合法区间）。persist=true 时落盘（并记下用户选的宽度），拖动过程中不落盘以免狂写 localStorage */
 function setDetailW(w, persist) {
   const { min, max } = detailLimits();
   const px = Math.round(Math.min(max, Math.max(min, w)));
@@ -9618,17 +9870,23 @@ function setDetailW(w, persist) {
   splitterEl.setAttribute('aria-valuenow', String(px));
   splitterEl.setAttribute('aria-valuemin', String(min));
   splitterEl.setAttribute('aria-valuemax', String(max));
-  if (persist) { try { localStorage.setItem(DETAIL_W_KEY, String(px)); } catch {} }
+  if (persist) {
+    detailWPref = px;                                   // 「用户选的宽度」只在这里更新
+    try { localStorage.setItem(DETAIL_W_KEY, String(px)); } catch {}
+  }
   return px;
 }
 const detailW = () => detailEl.getBoundingClientRect().width;
 
-/** 窗口尺寸或左栏开合变化后，把已存的宽度夹回合法区间（否则会挤扁中间表格） */
+/**
+ * 窗口尺寸或左栏开合变化后，把宽度重新夹回合法区间（否则会挤扁中间表格）。
+ *
+ * 注意用 `detailWPref`（用户选的那份）作为目标、且 **persist=false**：窗口临时变小只是
+ * 渲染上夹一下，绝不能把夹出来的小值写回 localStorage，否则用户把窗口缩一下再放大，
+ * 自己调好的宽度就永久丢了。
+ */
 function refitDetailW() {
-  let cur = NaN;
-  try { cur = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--detail-w'), 10); } catch {}
-  const { min, max } = detailLimits();
-  if (!(cur >= min && cur <= max)) setDetailW(Number.isFinite(cur) ? cur : DETAIL_W_DEF, true);
+  setDetailW(detailWPref, false);
 }
 
 /** 面板宽度变了，中间表格也跟着变宽 ⇒ 时间轴画布要重画。合并到一帧里，避免拖动中重复绘制 */
@@ -9636,6 +9894,109 @@ function scheduleTimelineDraw() {
   if (timelineRaf) return;
   timelineRaf = requestAnimationFrame(() => { timelineRaf = 0; drawTimeline(); });
 }
+
+/* ── 时间轴高度：拖拽 / 键盘 / 落盘 ────────────────────
+ * 与详情面板宽度同一套做法（见上），只是方向反过来：分隔条在时间轴**上方**，
+ * 往上拖 = 曲线区变高。默认 158px 只够看个大概，拉到半屏才能看清台阶与纹波。
+ */
+const TL_H_KEY = 'pdscope.tlH';
+const TL_H_DEF = 158;    // 与 CSS :root 里的 --tl-h 保持一致
+const TL_H_MIN = 92;     // 再矮就只剩表头了（canvas 至少还有 60px 可用）
+const TABLE_MIN_H = 96;  // 上面那块报文表至少留几行的位置
+/** 用户选定的高度：落盘的那一份。窗口 resize 时的临时夹取不许改它（见 refitTlH） */
+let tlHPref = TL_H_DEF;
+
+/** 允许区间：上限 = 中间栏高度 − 表格已经占掉的 − 表格最小高度 */
+function tlLimits() {
+  const body = $('#appBody').getBoundingClientRect();
+  const top = $('#tbody').getBoundingClientRect().top - body.top;
+  return { min: TL_H_MIN, max: Math.max(TL_H_MIN, Math.round(body.height - top - TABLE_MIN_H)) };
+}
+const tlH = () => Math.round(timelineEl.getBoundingClientRect().height);
+
+/**
+ * 写高度（夹到合法区间）。persist=true 才落盘，拖动过程中不落盘以免狂写 localStorage。
+ *
+ * `lim` 可以传进来「拖动开始时算好的区间」：拖动期间窗口没变、表格顶边也没动，
+ * 每帧再量一次只是白白触发布局重算（拖起来会发涩）。
+ */
+function setTlH(h, persist, lim) {
+  const { min, max } = lim || tlLimits();
+  const px = Math.round(Math.min(max, Math.max(min, h)));
+  document.documentElement.style.setProperty('--tl-h', px + 'px');
+  tlSplitterEl.setAttribute('aria-valuenow', String(px));
+  tlSplitterEl.setAttribute('aria-valuemin', String(min));
+  tlSplitterEl.setAttribute('aria-valuemax', String(max));
+  if (persist) {
+    tlHPref = px;                                       // 「用户选的高度」只在这里更新
+    try { localStorage.setItem(TL_H_KEY, String(px)); } catch {}
+  }
+  scheduleTimelineDraw();
+  return px;
+}
+
+/**
+ * 窗口尺寸变化后重新夹一次高度（否则矮窗口下时间轴会把表格挤没）。
+ *
+ * 目标始终是 `tlHPref`（用户选的那份）且 **persist=false**：窗口临时变小时只是渲染上夹一下，
+ * 不许把夹出来的小值写回 localStorage —— 否则把窗口缩一下再放大，用户调好的高度就永久丢了。
+ * 反过来窗口变大时，这里会自动把 `tlHPref` 还原回来。
+ */
+function refitTlH() {
+  setTlH(tlHPref, false);
+}
+
+/**
+ * 拖动：始终以「按下那一刻的高度与指针位置」为基准算目标高度。
+ *
+ * ⚠ 这里踩过一次坑：曾经把 `setTlH` 的返回值写回基准变量，于是每来一个 pointermove 就把
+ * 「从按下到现在的总位移」重新加一遍 —— 位移被反复累加，轻轻一拖就顶到上限、反向一拖就到底。
+ * 基准只能是**按下时**的 `dragH0`，当前值由它 + 总位移算出来，算完不许回写。
+ */
+let dragH0 = 0, dragY0 = 0, dragLim = null;
+tlSplitterEl.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  // 指针捕获：拖出 6px 命中区也不会丢事件（个别环境会抛，抛了不影响本次拖动）
+  try { tlSplitterEl.setPointerCapture(e.pointerId); } catch {}
+  tlSplitterEl.classList.add('is-drag');
+  document.body.classList.add('tl-resizing');
+  dragH0 = tlH();
+  dragY0 = e.clientY;
+  dragLim = tlLimits();
+});
+tlSplitterEl.addEventListener('pointermove', (e) => {
+  if (!tlSplitterEl.classList.contains('is-drag')) return;
+  // 按键已经松开（或事件本身不可信）就别再跟着走：宁可不跟，也不能跳
+  if (e.buttons && !(e.buttons & 1)) { endTlDrag(e); return; }
+  // 分隔条在时间轴上方：往上拖（clientY 变小）= 曲线区变高
+  setTlH(dragH0 + (dragY0 - e.clientY), false, dragLim);
+});
+function endTlDrag(e) {
+  if (!tlSplitterEl.classList.contains('is-drag')) return;
+  tlSplitterEl.classList.remove('is-drag');
+  document.body.classList.remove('tl-resizing');
+  try { tlSplitterEl.releasePointerCapture(e.pointerId); } catch {}
+  // 松手时用同一个基准再算一次并落盘（pointerup 也带坐标，不必依赖最后一次 move）
+  if (Number.isFinite(e.clientY)) setTlH(dragH0 + (dragY0 - e.clientY), true, dragLim);
+}
+tlSplitterEl.addEventListener('pointerup', endTlDrag);
+tlSplitterEl.addEventListener('pointercancel', endTlDrag);
+tlSplitterEl.addEventListener('lostpointercapture', endTlDrag);
+tlSplitterEl.addEventListener('dblclick', () => setTlH(TL_H_DEF, true));
+tlSplitterEl.addEventListener('keydown', (e) => {
+  const step = e.shiftKey ? 64 : 24;
+  let h = null;
+  // 分隔条在曲线上方：按 ↑ = 分隔条上移 = 曲线区变高，与直觉一致
+  if (e.key === 'ArrowUp')        h = tlH() + step;
+  else if (e.key === 'ArrowDown') h = tlH() - step;
+  else if (e.key === 'Home')      h = tlLimits().min;   // 最矮
+  else if (e.key === 'End')       h = tlLimits().max;   // 最高（半个屏以上）
+  else if (e.key === 'Enter')     h = TL_H_DEF;
+  if (h === null) return;
+  e.preventDefault();
+  setTlH(h, true);
+});
 
 let dragW = 0;
 splitterEl.addEventListener('pointerdown', (e) => {
@@ -9796,7 +10157,8 @@ addEventListener('keydown', (e) => {
 /**
  * 外壳（Tauri / 任何想把文件推给界面的宿主）与界面之间的契约。
  *
- * 设计原则：**界面不反向依赖外壳**。页面里没有一行 `__TAURI__` 调用，所以把同一个文件丢进
+ * 设计原则：**界面不反向依赖外壳**。页面里没有一处调用 Tauri 的 API（只在 ENV 里探测一次
+ * 「Tauri 注入的全局对象在不在」），所以把同一个文件丢进
  * 浏览器照样跑；外壳只要在页面就绪后调下面两个函数之一即可，没有外壳时它们就一直闲置。
  *
  *   · `window.pdscopeOpenBytes(name, bytes)` —— 外壳已经拿到字节（Tauri 走这条）
@@ -9939,6 +10301,32 @@ window.PDScope = {
   closeTab: (i) => closeDoc(DOCS[i]),
   closeAll: () => closeOtherDocs(null),
   closeActive: () => { if (DOCS.length) closeDoc(S); },
+  /**
+   * 时间轴的当前视图（给自动化用：e2e 靠它验「滚轮缩放 / 上下拖动」真的生效了，
+   * 不必去比像素）。`visible` 是纵轴当前可见的值窗口，量纲就是左轴那把
+   * （VBUS 是 V，差分线档也是 V）。
+   */
+  timeline: () => {
+    const cur = tlCurves();
+    const v = tlView();
+    const span = 1 / v.z;
+    return {
+      mode: S.tlMode,
+      curves: cur ? (cur.aux ? 'aux' : 'power') : null,
+      /** 曲线区（时间轴面板）当前高度，px —— 拖拽分隔条能改的那个 */
+      paneH: tlH(),
+      paneMin: tlLimits().min,
+      paneMax: tlLimits().max,
+      /** 横轴时间刻度（五等分）：t 是 0..1 的归一化位置，sec 是绝对秒数，label 是画在轴上的字 */
+      xTicks: (TL.xTicks || []).map((k) => ({ t: k.t, sec: k.sec, label: k.label })),
+      /** 横轴标签那条带子的上沿（CSS px）—— e2e 用它把「底部以前是空白」钉住 */
+      axisBandTop: TL.axisBandTop ?? null,
+      zoom: v.z,
+      offset: v.o,
+      dirty: tlDirty(v),
+      visible: cur ? { lo: v.o * cur.lmax, hi: (v.o + span) * cur.lmax } : null,
+    };
+  },
 };
 
 /* 初始化 */
@@ -9946,7 +10334,13 @@ document.documentElement.style.setProperty('--rh', UI.rowH + 'px');
 // 详情面板宽度：还原上次拖到的位置（越界由 setDetailW 夹回合法区间）
 let savedDetailW = NaN;
 try { savedDetailW = parseInt(localStorage.getItem(DETAIL_W_KEY), 10); } catch {}
-setDetailW(Number.isFinite(savedDetailW) ? savedDetailW : DETAIL_W_DEF, false);
+detailWPref = Number.isFinite(savedDetailW) ? savedDetailW : DETAIL_W_DEF;
+setDetailW(detailWPref, false);
+// 时间轴高度（曲线区那块）同理：还原上次拖到的高度，越界由 setTlH 夹回
+let savedTlH = NaN;
+try { savedTlH = parseInt(localStorage.getItem(TL_H_KEY), 10); } catch {}
+tlHPref = Number.isFinite(savedTlH) ? savedTlH : TL_H_DEF;
+setTlH(tlHPref, false);
 // 标注形态，便于 CSS 按形态微调（桌面版没有「载入示例」，单文件版可用 file: 特有能力）
 document.documentElement.dataset.env = ENV.name;
 renderTabs();

@@ -3,7 +3,7 @@
 ## 构建与打包
 
 * **桌面版不交叉编译**。想在 macOS 上用桌面版，就得在 macOS 上构建（或直接用单文件版）。
-  本机只实测了 Windows 产物：`pdscope.exe` 3.1 MB、NSIS 安装包 `PDScope_0.3.1_x64-setup.exe` 1.2 MB。
+  本机只实测了 Windows 产物：`pdscope.exe` 约 3.3 MB、NSIS 安装包 `PDScope_0.3.1_x64-setup.exe` 1.2 MB。
 * **安装包只验到「能打出来」**。打安装包时 Tauri 会从 GitHub Releases 下载打包辅助程序
   （NSIS / WiX / appimage 工具），本机已实测可下载并成功产出 NSIS 与 MSI；但**没有在本机执行安装**，
   所以「装完之后双击 `.atkcc` 直接打开」这条只在命令行与拖拽两条等效路径上实测过 ——
@@ -21,7 +21,8 @@
   set WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--disable-gpu --no-sandbox
   ```
 
-  自检脚本默认就带这两个参数，所以自检能过、手动开却白屏时，多半就是这个原因。
+  `tools/tauri-e2e.mjs` 默认就带这两个参数（`tools/tauri-cli-check.mjs` 不带），
+  所以自检能过、手动开却白屏时，多半就是这个原因。
 * **macOS 打包未签名未公证**。首次打开需要右键 →「打开」，或
   `xattr -dr com.apple.quarantine /Applications/PDScope.app`。想彻底绕开这一步，
   直接用单文件 `dist/PDScope.html`。
@@ -56,7 +57,7 @@
   （`--csv 出.csv`），或用 cmd 的重定向（字节级）。`--bom` / `--no-bom` 可强制 BOM 的有无。
 * **命令行导出全程窗口不可见**。隐藏窗口里的 JS 照常跑（解码让出主线程用的是 MessageChannel，
   不是会被后台节流的定时器），但万一渲染进程被安全软件整个挂起，程序会在
-  30 秒（页面还没开口）/ 120 秒（中途没进展）后**自己报错退出**，而不是无限等下去。
+  90 秒（页面还没开口）/ 120 秒（开口后中途没进展）后**自己报错退出**，而不是无限等下去。
 * **命令行导出的 CSV 是「全部报文」，不吃界面里的筛选**。要「只导筛出来的那些」，
   在界面里导。`--limit N` 是唯一能从命令行控制的截断。
 

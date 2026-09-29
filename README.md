@@ -23,7 +23,10 @@
   一键屏蔽 GoodCRC 心跳包、只看 CRC 错误、只看功率协商。
 * **逐位溯源**：右侧面板展开报文头每一位与每个数据对象（PDO / RDO / VDM / 扩展消息）的全部字段。
 * **CRC 如实报**：分析仪没存 CRC 就写「未记录」，不替对方的数据背书。
-* **底部时间轴**：VBUS / IBUS（分析仪还多一路差分线）可拖拽刷选区间，表格立即联动。
+* **底部时间轴**：横轴标出时间（单位随时长自适应）、VBUS / IBUS（分析仪还多一路差分线）可拖拽刷选区间，
+  表格立即联动；
+  **整块曲线区可以拖着拉高**（拖它上方那条分隔条，最高半个屏以上，双击回默认）；
+  纵轴还能 `Ctrl+滚轮` 缩放、上下拖动平移，不再是钉死的量程。
 * **导出**：CSV（当前筛选结果）或 JSON（全部报文，含原始位域与配对序号）。
   桌面版还能**不开界面**从命令行导 CSV：`pdscope.exe 抓包.atkcc --csv`（见 [桌面版](doc/desktop.md)）。
 
@@ -100,10 +103,10 @@ node tools/version-check.mjs     # 版本号一致（先跑它，最便宜）
 node tools/syntax.mjs            # 全量语法检查（几秒）
 node tools/selftest.js           # 协议层合成用例 91 项（含 CSV 导出格式 15 项）
 node tools/ackcheck.js           # GoodCRC 配对（跨真实抓包）
-npm run e2e                      # 界面 30 项（ATK-C）；36 项（.sqlite）；39 项（多份）
+npm run e2e                      # 界面 66 项（ATK-C，含 1 项跳过）；73 项（.sqlite 放第一份）
 npm run app:csv                  # 桌面版命令行导出：exe 的 CSV 与 node CLI 逐字节比（需先 app:exe）
 npm run perf:worst               # 「打开卡不卡」探针
-npm run check                    # 上面全部
+npm run check                    # 上面除 perf:worst 外全部（见 doc/testing.md）
 ```
 
 自检需要上一级目录里有抓包样本。全部工具、各项测什么、实测样本统计见 [doc/testing.md](doc/testing.md)。

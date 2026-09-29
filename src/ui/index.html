@@ -209,6 +209,11 @@
         </div>
       </div>
 
+      <!-- 时间轴高度拖拽条（↑ ↓ 也能微调）：把曲线区拉高到半屏、或压扁让报文表多露几行 -->
+      <div class="tl-splitter" id="tlSplitter" role="separator" aria-orientation="horizontal"
+           aria-label="调整时间轴高度" aria-controls="timeline" tabindex="0"
+           title="上下拖动调整曲线区高度 · 双击恢复默认 · 聚焦后 ↑↓ 微调"><i></i></div>
+
       <div class="timeline" id="timeline">
         <div class="tl-head">
           <span class="tl-title" id="tlTitle">VBUS / IBUS 时间轴</span>
@@ -218,7 +223,7 @@
           </div>
           <div class="spacer"></div>
           <label class="switch sm"><input type="checkbox" id="tlFollow" checked /><span></span>跟随选中</label>
-          <button class="btn tiny" id="btnTlFit">适应宽度</button>
+          <button class="btn tiny" id="btnTlFit" title="滚轮缩放纵轴、上下拖动平移纵轴、双击曲线区复位；点这里把时间与纵轴一起回到全览">复位视图</button>
         </div>
         <canvas id="busCanvas"></canvas>
         <div class="tl-tip" id="tlTip"></div>

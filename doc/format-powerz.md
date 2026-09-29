@@ -136,9 +136,9 @@ SOP 有序集符号 → 各字节（低半字节先行）→ 按规范算出的 
 ```bash
 npm run powerz:inspect              # 全样本体检（默认读仓库上一级的 .sqlite），PD 与 UFCS 都认
 npm run powerz:inspect -- --packets # 连类型分布一起打
-npm run e2e:powerz                  # 端到端：拖拽 .sqlite（USB PD）进单文件版，36 项断言 + 截图
+npm run e2e:powerz                  # 端到端：拖拽 .sqlite（USB PD）进单文件版，73 项断言 + 截图
 npm run e2e:ufcs                    # 端到端：拖拽真实 UFCS 导出，报文表 / 详情面板 / 差分线视图 + 截图
-npm run e2e:ufcs:synth              # 同上，但样本是现造的（无需私有抓包，CI 可跑）→ 36 项 + 1 跳过
+npm run e2e:ufcs:synth              # 同上，但样本是现造的（无需私有抓包，CI 可跑）→ 73 项 + 1 跳过
 ```
 
 `e2e:ufcs` 与 `e2e:ufcs:synth` 走的是同一条界面路径，只差样本来源：

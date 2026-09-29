@@ -105,6 +105,18 @@ log(`  浏览器：${browser}`);
 log(`  目标：  ${TARGET}`);
 log('');
 
+// 调试端口是固定的（9333，可用 --dbg 换）。若已经有别的 Chrome 占着它，我们会连到**那个**浏览器的
+// 标签页上 —— 测的就成了别人的页面（还带着上一次的标签与状态），失败信息完全对不上号。
+// 与其排查这种鬼故事，不如当场说清楚。
+try {
+  const probe = await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/version`);
+  if (probe.ok) {
+    log(`  ✘ 调试端口 ${DEBUG_PORT} 已被别的浏览器占用，拒绝继续。`);
+    log('    关掉它，或换端口重跑：node tools/e2e.mjs --dbg 1 …');
+    process.exit(2);
+  }
+} catch { /* 没人监听 = 正常 */ }
+
 const proc = spawn(browser, [
   '--headless=new',
   '--disable-gpu',
@@ -127,12 +139,16 @@ const cleanup = async () => {
 process.on('exit', () => { try { proc.kill('SIGKILL'); } catch {} });
 
 /* ── 找到页面 target ─────────────────────────────────── */
+const TARGET_BASE = basename(TARGET);
 async function findTarget() {
   for (let i = 0; i < 120; i++) {
     try {
       const r = await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/list`);
       const list = await r.json();
-      const pg = list.find((t) => t.type === 'page' && t.webSocketDebuggerUrl);
+      // 只认「打开的确实是我们的目标页」那个标签：端口上万一挂着别的实例，
+      // 取第一个 page 会连到不相干的页面，后面所有断言都会莫名其妙地失败。
+      const pg = list.find((t) => t.type === 'page' && t.webSocketDebuggerUrl
+        && decodeURIComponent(t.url || '').endsWith(TARGET_BASE));
       if (pg) return pg;
     } catch {}
     await sleep(250);
@@ -181,6 +197,12 @@ class CDP {
  * @param {RegExp} done 解码结束的判据，默认等统计行出现「显示」
  * @returns {Promise<string>} 注入的文件名（多个用 + 连接）
  */
+/**
+ * 把文件「拖」进页面，然后等它真的被接住。
+ *
+ * 等待条件除了状态行文案，还要看**标签数有没有涨**：零报文样本（容器能开、但一条报文都认不出）
+ * 的状态行里不会出现「显示 N 条」，只靠文案等会一路等到超时，后面整段断言就都跑在空状态上了。
+ */
 async function injectDrop(cdp, relPaths, done = /显示/) {
   const list = Array.isArray(relPaths) ? relPaths : [relPaths];
   const files = [];
@@ -192,6 +214,7 @@ async function injectDrop(cdp, relPaths, done = /显示/) {
   const arr = files
     .map((f) => `(()=>{const b=atob('${f.b64}');const a=new Uint8Array(b.length);for(let i=0;i<b.length;i++)a[i]=b.charCodeAt(i);return new File([a], ${JSON.stringify(f.nm)});})()`)
     .join(',');
+  const tabsBefore = await cdp.eval(`(window.PDScope && window.PDScope.tabs ? window.PDScope.tabs().length : 0)`);
   await cdp.eval(`(()=>{
     const dt=new DataTransfer();
     for (const f of [${arr}]) dt.items.add(f);
@@ -202,6 +225,8 @@ async function injectDrop(cdp, relPaths, done = /显示/) {
     await sleep(500);
     const s = await cdp.eval(`document.querySelector('#statLine').textContent || ''`);
     if (done.test(s)) break;
+    const n = await cdp.eval(`(window.PDScope && window.PDScope.tabs ? window.PDScope.tabs().length : 0)`);
+    if (Number(n) > Number(tabsBefore)) break;      // 标签已经建出来 = 文件被接住了
   }
   return files.map((f) => f.nm).join(' + ');
 }
@@ -437,6 +462,163 @@ try {
     const tlPainted = await cdp.eval(`(()=>{const c=document.querySelector('#busCanvas');const g=c.getContext('2d');const d=g.getImageData(0,0,c.width,c.height).data;let n=0;for(let i=3;i<d.length;i+=4*97)if(d[i]>0)n++;return n;})()`);
     check('时间轴已绘制', tlPainted > 20, `${tlPainted} 个非空采样`);
 
+    /* 6.1 横轴要标时间（以前底下那条带子是空白） */
+    {
+      const ticks = await cdp.eval(`window.PDScope.timeline().xTicks`);
+      check('横轴标出了时间刻度（五等分）',
+        Array.isArray(ticks) && ticks.length === 5 && ticks.every((k) => k && k.label),
+        (ticks || []).map((k) => k.label).join(' · '));
+      const last = (ticks || [])[4] || { sec: 0, label: '' };
+      check('刻度从 0 覆盖到整段时长', (ticks[0] || {}).sec === 0 && last.sec > 0,
+        `0 → ${Number(last.sec).toFixed(3)}s`);
+      check('时间单位随时长自适应（短抓包用 ms，不是一排 0.00s）',
+        last.sec < 1 ? /ms$/.test(last.label) : /(s|:\d\d)$/.test(last.label),
+        `总时长 ${Number(last.sec).toFixed(3)}s → 末刻度「${last.label}」`);
+      // 那条带子以前是空的：直接数它的像素，证明字真的画上去了（不看 DOM，看画布）。
+      // 起点必须从 axisBandTop **往下 2px** 算 —— 第 5 条横向网格线正好压在 axisBandTop 上，
+      // 从它开始数的话光是那条线就有 ~1000 像素，这条断言会退化成「网格线还在」永远为真
+      //（实测：从 +2 起数，有字 523、把 fillText 停掉后 0）。
+      const band = await cdp.eval(`(()=>{const c=document.querySelector('#busCanvas');const top=window.PDScope.timeline().axisBandTop+2;const sc=c.height/c.clientHeight;const yTop=Math.round(top*sc);const d=c.getContext('2d').getImageData(0,yTop,c.width,c.height-yTop).data;let n=0;for(let i=3;i<d.length;i+=4)if(d[i]>0)n++;return {n,rows:c.height-yTop};})()`);
+      check('底部时间带确实画上了字（不是网格线托底）', band.n > 200, `${band.n} 个非空像素 / ${band.rows} 行`);
+    }
+
+    /* 6.2 时间轴纵轴：滚轮缩放 / 上下拖动平移 / 双击复位（"定死的位置"→ 可调） */
+    if (tlPainted > 20) {
+      // 画布内容指纹：用来判断「重绘了，而且画出来的东西真的变了」
+      const TLSUM = `(()=>{const c=document.querySelector('#busCanvas');const d=c.getContext('2d').getImageData(0,0,c.width,c.height).data;let h=0;for(let i=0;i<d.length;i+=4*13)h=(h*31+d[i]+d[i+1]*3+d[i+2]*7+d[i+3]*11)>>>0;return h;})()`;
+      // 画布内的相对坐标 → 页面坐标（事件里用的是 clientX/clientY）
+      const at = (fx, fy) => `(()=>{const r=document.querySelector('#busCanvas').getBoundingClientRect();return {x:r.left+r.width*${fx},y:r.top+r.height*${fy}};})()`;
+
+      const tl0 = await cdp.eval(`window.PDScope.timeline()`);
+      const sum0 = await cdp.eval(TLSUM);
+      check('时间轴纵轴初始为自适应', tl0.zoom === 1 && tl0.offset === 0 && tl0.dirty === false,
+        `zoom=${tl0.zoom} offset=${tl0.offset}`);
+
+      // ① 滚轮向上 = 放大（以光标处为锚点）
+      const pMid = await cdp.eval(at(0.5, 0.5));
+      await cdp.eval(`(()=>{const c=document.querySelector('#busCanvas');for(let i=0;i<5;i++)c.dispatchEvent(new WheelEvent('wheel',{deltaY:-120,ctrlKey:true,clientX:${pMid.x},clientY:${pMid.y},bubbles:true,cancelable:true}));return true;})()`);
+      await sleep(200);
+      const tl1 = await cdp.eval(`window.PDScope.timeline()`);
+      const sum1 = await cdp.eval(TLSUM);
+      check('Ctrl+滚轮可放大纵轴', tl1.zoom > 1.5 && tl1.dirty === true, `zoom ×${tl1.zoom.toFixed(2)}`);
+      check('缩放后画布确实重绘', sum1 !== sum0, `${sum0} → ${sum1}`);
+      check('缩放后可见量程随之收窄',
+        tl1.visible.hi - tl1.visible.lo < tl0.visible.hi - tl0.visible.lo,
+        `${(tl1.visible.hi - tl1.visible.lo).toFixed(2)} < ${(tl0.visible.hi - tl0.visible.lo).toFixed(2)}`);
+      check('「复位视图」按钮被点亮', await cdp.eval(`document.querySelector('#btnTlFit').classList.contains('is-dirty')`));
+
+      // ② 上下拖动平移：Shift + 左键拖（曲线区留给横向刷选，所以平移用 Shift / 右键 / 刻度栏）
+      const pDrag = await cdp.eval(at(0.5, 0.5));
+      const off1 = tl1.offset;
+      await cdp.eval(`(()=>{const c=document.querySelector('#busCanvas');c.dispatchEvent(new MouseEvent('mousedown',{clientX:${pDrag.x},clientY:${pDrag.y},button:0,shiftKey:true,bubbles:true,cancelable:true}));
+        window.dispatchEvent(new MouseEvent('mousemove',{clientX:${pDrag.x},clientY:${pDrag.y + 40},buttons:1,bubbles:true}));
+        window.dispatchEvent(new MouseEvent('mouseup',{clientX:${pDrag.x},clientY:${pDrag.y + 40},bubbles:true}));return true;})()`);
+      await sleep(150);
+      const tl2 = await cdp.eval(`window.PDScope.timeline()`);
+      check('Shift 上下拖动可平移纵轴（往下拖 → 视野往高值走）', tl2.offset > off1 + 0.01,
+        `offset ${off1.toFixed(3)} → ${tl2.offset.toFixed(3)}`);
+      check('平移不改变缩放', Math.abs(tl2.zoom - tl1.zoom) < 1e-6, `zoom ×${tl2.zoom.toFixed(2)}`);
+      const tFromPan = await cdp.eval(`document.querySelector('#tFrom').value`);
+      const tToPan = await cdp.eval(`document.querySelector('#tTo').value`);
+      check('平移纵轴不会顺手改掉时间窗口', tFromPan === '0' && tToPan === '1000',
+        `${tFromPan}~${tToPan} / 1000`);
+
+      // ③ 左右刻度栏里拖也能平移（那里本来就是刻度，不参与横向刷选）
+      const pGut = await cdp.eval(at(0.02, 0.5));
+      const off2 = tl2.offset;
+      await cdp.eval(`(()=>{const c=document.querySelector('#busCanvas');c.dispatchEvent(new MouseEvent('mousedown',{clientX:${pGut.x},clientY:${pGut.y},button:0,buttons:1,bubbles:true,cancelable:true}));
+        window.dispatchEvent(new MouseEvent('mousemove',{clientX:${pGut.x},clientY:${pGut.y - 30},buttons:1,bubbles:true}));
+        window.dispatchEvent(new MouseEvent('mouseup',{clientX:${pGut.x},clientY:${pGut.y - 30},bubbles:true}));return true;})()`);
+      await sleep(150);
+      const tl3 = await cdp.eval(`window.PDScope.timeline()`);
+      check('拖左右刻度栏同样能平移纵轴', tl3.offset < off2 - 0.01, `offset ${off2.toFixed(3)} → ${tl3.offset.toFixed(3)}`);
+
+      // ④ 每档各记一套：切到差分线档应是它自己的默认值，切回来还是刚才那样
+      const hasAux = await cdp.eval(`!!document.querySelector('#tlSeg') && !document.querySelector('#tlSeg').hidden`);
+      if (hasAux) {
+        await cdp.eval(`document.querySelector('#tlSeg .seg-item[data-v="aux"]').click()`);
+        await sleep(150);
+        const tlAux = await cdp.eval(`window.PDScope.timeline()`);
+        check('换档后纵轴是这一档自己的状态（互不串味）',
+          tlAux.mode === 'aux' && tlAux.zoom === 1 && tlAux.offset === 0, `aux zoom=${tlAux.zoom}`);
+        await cdp.eval(`document.querySelector('#tlSeg .seg-item[data-v="power"]').click()`);
+        await sleep(150);
+        const tlBack = await cdp.eval(`window.PDScope.timeline()`);
+        check('切回电压/电流档，纵轴调过的状态还在',
+          Math.abs(tlBack.zoom - tl3.zoom) < 1e-6 && Math.abs(tlBack.offset - tl3.offset) < 1e-6,
+          `zoom ×${tlBack.zoom.toFixed(2)} offset ${tlBack.offset.toFixed(3)}`);
+      } else {
+        skip('换档后纵轴各记一套', '该样本没有第二档（差分线）数据');
+      }
+
+      // ⑤ 双击曲线区复位纵轴
+      await cdp.eval(`(()=>{const c=document.querySelector('#busCanvas');const r=c.getBoundingClientRect();
+        c.dispatchEvent(new MouseEvent('dblclick',{clientX:r.left+r.width/2,clientY:r.top+r.height/2,bubbles:true,cancelable:true}));return true;})()`);
+      await sleep(150);
+      const tl4 = await cdp.eval(`window.PDScope.timeline()`);
+      check('双击曲线区把纵轴复位', tl4.zoom === 1 && tl4.offset === 0 && tl4.dirty === false,
+        `zoom=${tl4.zoom} offset=${tl4.offset}`);
+      check('复位后按钮回到普通态', !(await cdp.eval(`document.querySelector('#btnTlFit').classList.contains('is-dirty')`)));
+
+      // ⑥ 缩放后再点「复位视图」也能回来（并顺带把时间窗口一起复位）
+      await cdp.eval(`(()=>{const c=document.querySelector('#busCanvas');const r=c.getBoundingClientRect();
+        c.dispatchEvent(new WheelEvent('wheel',{deltaY:-120,ctrlKey:true,clientX:r.left+r.width/2,clientY:r.top+r.height/2,bubbles:true,cancelable:true}));return true;})()`);
+      await sleep(120);
+      await cdp.eval(`document.querySelector('#btnTlFit').click()`);
+      await sleep(150);
+      const tl5 = await cdp.eval(`window.PDScope.timeline()`);
+      check('「复位视图」一键回到自适应', tl5.zoom === 1 && tl5.offset === 0, `zoom=${tl5.zoom} offset=${tl5.offset}`);
+
+      // ⑥' deltaMode 归一：Firefox 的滚轮按「行」报数（deltaMode=1，一格约 ±3），不换算等于没反应。
+      // 放在「复位视图」之后跑，跑完再复位一次，免得影响后面依赖视图状态的断言。
+      const zoomBeforeLine = (await cdp.eval(`window.PDScope.timeline()`)).zoom;
+      await cdp.eval(`(()=>{const c=document.querySelector('#busCanvas');const r=c.getBoundingClientRect();for(let i=0;i<3;i++)c.dispatchEvent(new WheelEvent('wheel',{deltaY:-3,deltaMode:1,ctrlKey:true,clientX:r.left+r.width/2,clientY:r.top+r.height/2,bubbles:true,cancelable:true}));return true;})()`);
+      await sleep(150);
+      const zoomLine = (await cdp.eval(`window.PDScope.timeline()`)).zoom;
+      check('按行报数的滚轮（Firefox deltaMode=1）也能正常缩放',
+        zoomLine > zoomBeforeLine * 1.15, `×${zoomBeforeLine.toFixed(2)} → ×${zoomLine.toFixed(2)}`);
+      await cdp.eval(`document.querySelector('#btnTlFit').click()`);
+      await sleep(150);
+
+      // ⑦' 松开按键后还来的移动事件不能再改视图（mouseup 丢了也不该卡在拖动态）
+      const pLost = await cdp.eval(at(0.3, 0.5));
+      const winBefore = await cdp.eval(`({from: document.querySelector('#tFrom').value, to: document.querySelector('#tTo').value})`);
+      await cdp.eval(`(()=>{const c=document.querySelector('#busCanvas');
+        c.dispatchEvent(new MouseEvent('mousedown',{clientX:${pLost.x},clientY:${pLost.y},button:0,buttons:1,bubbles:true,cancelable:true}));
+        window.dispatchEvent(new MouseEvent('mousemove',{clientX:${pLost.x}+200,clientY:${pLost.y},button:0,buttons:0,bubbles:true}));
+        window.dispatchEvent(new MouseEvent('mousemove',{clientX:${pLost.x}+260,clientY:${pLost.y},button:0,buttons:0,bubbles:true}));
+        window.dispatchEvent(new MouseEvent('mouseup',{clientX:${pLost.x}+260,clientY:${pLost.y},button:0,buttons:0,bubbles:true}));return true;})()`);
+      await sleep(200);
+      const winAfter = await cdp.eval(`({from: document.querySelector('#tFrom').value, to: document.querySelector('#tTo').value})`);
+      check('按键已松开的移动事件不会继续改视图（拖拽能自己收尾）',
+        winAfter.from === winBefore.from && winAfter.to === winBefore.to,
+        `时间窗口 ${winBefore.from}~${winBefore.to} → ${winAfter.from}~${winAfter.to}`);
+
+      // ⑦'' 悬停提示框要贴着光标（画布顶上还有表头，算错就会飘高一格表头）
+      const pTip = await cdp.eval(at(0.5, 0.6));
+      await cdp.eval(`(()=>{const c=document.querySelector('#busCanvas');c.dispatchEvent(new MouseEvent('mousemove',{clientX:${pTip.x},clientY:${pTip.y},bubbles:true}));return true;})()`);
+      await sleep(120);
+      const tipBox = await cdp.eval(`(()=>{const t=document.querySelector('#tlTip');const r=t.getBoundingClientRect();return {shown:t.style.display!=='none',bottom:r.bottom,h:r.height,text:t.textContent.slice(0,40)};})()`);
+      check('悬停提示框贴着光标（不飘高一格表头）',
+        tipBox.shown && pTip.y - tipBox.bottom >= 0 && pTip.y - tipBox.bottom < 26,
+        `光标 ${Math.round(pTip.y)} · 提示框底 ${Math.round(tipBox.bottom)}（差 ${Math.round(pTip.y - tipBox.bottom)}px）「${tipBox.text}」`);
+
+      // ⑦ 曲线区里的普通左键拖动仍然是横向刷选（别把老手势抢了）
+      const pBrush = await cdp.eval(at(0.3, 0.5));
+      await cdp.eval(`(()=>{const c=document.querySelector('#busCanvas');const r=c.getBoundingClientRect();
+        c.dispatchEvent(new MouseEvent('mousedown',{clientX:${pBrush.x},clientY:${pBrush.y},button:0,buttons:1,bubbles:true,cancelable:true}));
+        window.dispatchEvent(new MouseEvent('mousemove',{clientX:${pBrush.x}+120,clientY:${pBrush.y},buttons:1,bubbles:true}));
+        window.dispatchEvent(new MouseEvent('mouseup',{clientX:${pBrush.x}+120,clientY:${pBrush.y},bubbles:true}));return true;})()`);
+      await sleep(300);
+      const brushed = await cdp.eval(`({from: document.querySelector('#tFrom').value, to: document.querySelector('#tTo').value})`);
+      check('曲线区普通左键拖动仍是横向刷选时间', Number(brushed.to) - Number(brushed.from) > 0 && Number(brushed.to) - Number(brushed.from) < 1000,
+        `时间窗口 ${brushed.from}~${brushed.to} / 1000`);
+      await cdp.eval(`document.querySelector('#btnTlFit').click()`);
+      await sleep(150);
+    } else {
+      skip('时间轴纵轴可缩放 / 平移', '该样本没有模拟量轨迹');
+    }
+
     /* 6.5 分析仪导出（POWER-Z 的 .sqlite）专属：来源标注 / CRC 口径 / 差分线视图 */
     const isPz = /\.sqlite$/i.test(DROP || '');
     if (isPz) {
@@ -565,6 +747,122 @@ try {
     await sleep(320);
     const w3 = await detailWidth();
     check('双击恢复默认宽度', w3 === 390, `→ ${w3} px`);
+
+    /* 7.7 时间轴（曲线区）高度：整块面板能拖高到半个屏以上 —— 与详情宽度同一套手势，
+       同样用真实鼠标事件走 pointer capture 那条路。 */
+    const paneH = () => cdp.eval(`window.PDScope.timeline().paneH`);
+    const tlLim = () => cdp.eval(`(()=>{const t=window.PDScope.timeline();return {min:t.paneMin,max:t.paneMax,body:Math.round(document.querySelector('#appBody').getBoundingClientRect().height)};})()`);
+    const tlCanvasH = () => cdp.eval(`document.querySelector('#busCanvas').clientHeight`);
+    const spRectTl = () => cdp.eval(`(()=>{const r=document.querySelector('#tlSplitter').getBoundingClientRect();return {x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2)};})()`);
+    /** 竖向拖动：从 from 拖到 toY（真实鼠标事件 + 分步移动，才走得到 pointer capture） */
+    const dragToY = async (from, toY) => {
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: from.x, y: from.y, button: 'left', buttons: 1, clickCount: 1 });
+      for (let i = 1; i <= 6; i++) {
+        const y = Math.round(from.y + (toY - from.y) * (i / 6));
+        await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: from.x, y, button: 'left', buttons: 1 });
+        await sleep(18);
+      }
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: from.x, y: toY, button: 'left', buttons: 0, clickCount: 1 });
+      await sleep(220);
+    };
+
+    const h0 = await paneH();
+    const lim = await tlLim();
+    check('时间轴面板初始为默认高度', h0 === 158, `${h0} px`);
+    check('时间轴最高能拉到半个屏以上（仍留得下报文表）',
+      lim.max >= Math.round(lim.body * 0.5) && lim.max <= lim.body - 90,
+      `上限 ${lim.max} px / 中间栏 ${lim.body} px`);
+
+    // 往上拖 → 曲线区变高，画布跟着长。
+    // 断言写成「拖多少就长多少」而不是「涨了 200 就行」：后者会让「位移被反复累加」这类
+    // bug 溜过去（曾经一拖就顶到上限，正是这条松断言漏掉的）。
+    const cvH0 = await tlCanvasH();
+    const spTl = await spRectTl();
+    const DRAG = 260;
+    await dragToY(spTl, Math.max(60, spTl.y - DRAG));
+    const h1 = await paneH();
+    const cvH1 = await tlCanvasH();
+    check('往上拖 260px，曲线区就长 260px（不多不少）', Math.abs(h1 - (h0 + DRAG)) <= 6,
+      `${h0} → ${h1} px（期望 ${h0 + DRAG}）`);
+    check('画布跟着变高（曲线真的画大了，不是留白）', cvH1 >= cvH0 + 180, `canvas ${cvH0} → ${cvH1} px`);
+    const paintedAfter = await cdp.eval(`(()=>{const c=document.querySelector('#busCanvas');const g=c.getContext('2d');const d=g.getImageData(0,0,c.width,c.height).data;let n=0;for(let i=3;i<d.length;i+=4*97)if(d[i]>0)n++;return n;})()`);
+    check('拉高后曲线区仍然画满', paintedAfter > 20, `${paintedAfter} 个非空采样`);
+
+    // 原地单击不该改变高度（曾经点一下就跳到最大 / 最小）
+    const spClick = await spRectTl();
+    for (const t of ['mousePressed', 'mouseReleased']) {
+      await cdp.send('Input.dispatchMouseEvent', { type: t, x: spClick.x, y: spClick.y, button: 'left', buttons: t === 'mousePressed' ? 1 : 0, clickCount: 1 });
+    }
+    await sleep(200);
+    const hClick = await paneH();
+    check('原地单击不会改变高度', hClick === h1, `${h1} → ${hClick} px`);
+
+    // 往下拖同样按 1:1 走（反向也不能一步跳到最小）
+    const spDown = await spRectTl();
+    await dragToY(spDown, spDown.y + 120);
+    const hDown = await paneH();
+    check('往下拖 120px，就矮 120px（反向也不跳）', Math.abs(hDown - (h1 - 120)) <= 6,
+      `${h1} → ${hDown} px（期望 ${h1 - 120}）`);
+
+    const lsOkTl = await cdp.eval(`(()=>{try{localStorage.setItem('__p','1');localStorage.removeItem('__p');return true;}catch{return false;}})()`);
+    if (lsOkTl) {
+      const savedH = await cdp.eval(`parseInt(localStorage.getItem('pdscope.tlH'),10)`);
+      check('时间轴高度已落盘', savedH === hDown, `localStorage.pdscope.tlH = ${savedH}`);
+    } else {
+      check('时间轴高度已落盘', true, '（本形态无 localStorage，跳过）');
+    }
+
+    // 拖过头 → 夹在上限（报文表至少留得下几行）
+    const sp2 = await spRectTl();
+    await dragToY(sp2, Math.max(40, sp2.y - 4000));
+    const h2 = await paneH();
+    const lim2 = await tlLim();
+    check('拖过头被夹在上限', h2 === lim2.max && h2 < lim2.body, `→ ${h2} px（上限 ${lim2.max}）`);
+
+    // 键盘：聚焦分隔条后 ↑↓ / Home / Enter
+    await cdp.eval(`document.querySelector('#tlSplitter').focus()`);
+    await cdp.eval(`(()=>{const el=document.querySelector('#tlSplitter');el.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true,cancelable:true}));return true;})()`);
+    await sleep(150);
+    const h3 = await paneH();
+    check('聚焦后按 ↓ 可微调高度', h3 === h2 - 24, `${h2} → ${h3} px`);
+    await cdp.eval(`(()=>{const el=document.querySelector('#tlSplitter');el.dispatchEvent(new KeyboardEvent('keydown',{key:'Home',bubbles:true,cancelable:true}));return true;})()`);
+    await sleep(150);
+    const hMin = await paneH();
+    check('Home 到最矮', hMin === lim2.min, `→ ${hMin} px（下限 ${lim2.min}）`);
+
+    // 双击分隔条 → 回默认高度，并落盘
+    const sp3 = await spRectTl();
+    for (const t of ['mousePressed', 'mouseReleased', 'mousePressed', 'mouseReleased']) {
+      await cdp.send('Input.dispatchMouseEvent', { type: t, x: sp3.x, y: sp3.y, button: 'left', buttons: t === 'mousePressed' ? 1 : 0, clickCount: 2 });
+    }
+    await sleep(320);
+    const h4 = await paneH();
+    check('双击分隔条恢复默认高度', h4 === 158, `→ ${h4} px`);
+    check('恢复后也落盘', !lsOkTl || (await cdp.eval(`parseInt(localStorage.getItem('pdscope.tlH'),10)`)) === 158);
+
+    // 窗口临时变小只是渲染上夹一下，**不许**把夹出来的值写回 localStorage（否则缩一下再放大就永久丢了）
+    if (lsOkTl) {
+      const spTall = await spRectTl();
+      await dragToY(spTall, Math.max(60, spTall.y - 200));
+      const hTall = await paneH();
+      const savedTall = await cdp.eval(`parseInt(localStorage.getItem('pdscope.tlH'),10)`);
+      await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1680, height: 430, deviceScaleFactor: 1, mobile: false });
+      await sleep(400);
+      const hSmall = await paneH();
+      const savedSmall = await cdp.eval(`parseInt(localStorage.getItem('pdscope.tlH'),10)`);
+      await cdp.send('Emulation.clearDeviceMetricsOverride');
+      await sleep(400);
+      const hBack = await paneH();
+      check('窗口临时变小：高度被夹住但**不改**用户设置',
+        hSmall < hTall && savedSmall === savedTall,
+        `渲染 ${hTall} → ${hSmall} px，localStorage 仍 ${savedSmall}`);
+      check('窗口变回来：用户调的高度自动还原', hBack === savedTall, `${hSmall} → ${hBack} px（期望 ${savedTall}）`);
+    } else {
+      skip('窗口变小不改用户设置', '本形态无 localStorage');
+      skip('窗口变回来自动还原高度', '本形态无 localStorage');
+    }
+    await cdp.eval(`document.querySelector('#btnReset')?.click()`);
+    await sleep(200);
 
     /* 7.8 多文件：再拖一份 → 新标签、能来回切、各自的筛选互不串、能单独关掉
        这一段要的是「两份不同来源的抓包同时在手」，所以只有传了 --drop2 才跑。 */

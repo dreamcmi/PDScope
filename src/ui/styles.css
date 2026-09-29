@@ -16,6 +16,8 @@
   /* 详情面板宽度。放在变量里而不是写死在 .detail 上，是为了让「拖拽」只改一个变量，
      而 body.detail-collapsed 的 width:0 依然能靠选择器优先级压过去。 */
   --detail-w: 390px;
+  /* 底部曲线区高度：拖它上方那条分隔条改的就是这个变量（与 app.js 的 TL_H_DEF 一致） */
+  --tl-h: 158px;
 }
 
 html[data-theme="light"]{
@@ -493,10 +495,33 @@ body.side-collapsed .sidebar{ width:0; opacity:0; overflow:hidden; border-right:
 
 /* ── 时间轴 ─────────────────────────────────────────── */
 .timeline{
-  flex:none; height:158px; background:var(--panel);
+  flex:none; height:var(--tl-h, 158px); background:var(--panel);
   border-top:1px solid var(--line); display:flex; flex-direction:column;
   position:relative;
 }
+/* 时间轴高度拖拽条：跟详情栏那条竖向分隔条同一套做法（负外边距不占位、::after 撑命中区），
+   只是方向转成横向。默认 158px 高太扁，想看清曲线就把它往上拖。 */
+.tl-splitter{
+  flex:none; height:6px; margin:-3px 0; position:relative; z-index:7;
+  cursor:row-resize; touch-action:none;
+}
+.tl-splitter::after{
+  /* 命中区 11px：向上 7px、向下 4px。刻意少往时间轴里伸展 —— 表头那排按钮紧贴分隔条，
+     命中区压得太深会让「点按钮最上沿」变成「拖高度」。 */
+  content:''; position:absolute; left:0; right:0; top:-4px; bottom:-1px;
+}
+.tl-splitter > i{
+  position:absolute; left:0; right:0; top:2px; bottom:2px;
+  border-radius:2px; background:transparent;
+  transition:background var(--dur);
+}
+.tl-splitter:hover > i{ background:color-mix(in srgb, var(--tx-3) 45%, transparent); }
+.tl-splitter:focus-visible{ outline:none; }
+.tl-splitter:focus-visible > i,
+.tl-splitter.is-drag > i{ background:var(--accent); }
+/* 拖动中：锁住文本选择。cursor 只对没有自己光标规则的区域生效（画布自己是 crosshair、
+   按钮是 pointer），和详情面板那条分隔条的处理方式一致。 */
+body.tl-resizing{ user-select:none; cursor:row-resize; }
 .tl-head{
   height:28px; flex:none; display:flex; align-items:center; gap:8px;
   padding:0 12px; border-bottom:1px solid var(--line-2);
@@ -506,6 +531,12 @@ body.side-collapsed .sidebar{ width:0; opacity:0; overflow:hidden; border-right:
 .tl-head .seg{ padding:1px; }
 .tl-head .seg-item{ height:19px; padding:0 8px; font-size:10.5px; }
 #busCanvas{ flex:1 1 auto; width:100%; display:block; cursor:crosshair; }
+/* 「复位视图」：纵轴被缩放/平移过就点亮 —— 一眼看出「图不是画歪了，是我自己调过」 */
+#btnTlFit.is-dirty{
+  color:var(--accent);
+  border-color:color-mix(in srgb, var(--accent) 45%, var(--line));
+  background:var(--accent-sf);
+}
 .tl-tip{
   position:absolute; pointer-events:none; display:none;
   padding:4px 7px; border-radius:6px; font-size:10.5px; font-family:var(--mono);

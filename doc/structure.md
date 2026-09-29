@@ -49,6 +49,7 @@ PDScope/
 ├─ assets/                品牌图标「源素材」：icon.png（1024² 主源图）+ icon.ico
 ├─ dist/                  前端产物：PDScope.html —— 单文件版与桌面版共用的唯一入口页
 ├─ artifacts/             自检产物：截图 + 报告（不入库，也不进安装包）
+├─ rawdata/               本机私有抓包样本（**不入库**：`.atkcc` 被 .gitignore 忽略，`.sqlite` 靠自觉别提交）
 ├─ doc/                   文档：README 的详细版分册（本目录）
 ├─ .github/workflows/     CI：10 个目标一起构建（build.yml，见 [CI 构建](ci.md)）
 └─ tools/
@@ -58,7 +59,7 @@ PDScope/
    ├─ syntax.mjs          全量语法检查（node --check，几秒）
    ├─ ci-checksum.mjs     给 CI 产物生成 .sha256 校验和（三平台同一套命令）
    ├─ selftest.js         协议层合成用例自检（含手搓最小 SQLite 的 POWER-Z 路径回归）
-   ├─ ackcheck.js         GoodCRC 配对校验（跨全部真实抓包）
+   ├─ ackcheck.js         GoodCRC 配对校验（扫仓库上一级的 `*.atkcc`；`.sqlite` 不在其列）
    ├─ pd-inspect.mjs      PD 解析抽查：线缆链路 plug 信令 + 扩展消息详情 + 全样本体检
    ├─ powerz-inspect.mjs  POWER-Z（.sqlite）全样本体检：拆帧自检 / 连接事件 / 警告 / CRC 口径
    ├─ pd-regress.mjs      与重构前解码器逐包逐字段对比（从 git HEAD 取旧版本）
