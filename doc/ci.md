@@ -137,7 +137,7 @@ GitHub 的 Windows runner 一直是 **Windows Server** 系列，从来没有过 
 ```
 node tools/version-check.mjs   # 版本号一致（外加文档里写的产物名提示项）
 node tools/syntax.mjs          # 全量语法检查（自动带上 tools/ 下的新脚本）
-node tools/selftest.js         # 协议层合成用例（91 项）
+node tools/selftest.js         # 协议层合成用例（99 项，含 .pdStream 容器）
 ```
 
 这三项**在 10 个目标上各跑一遍** —— 顺带验证了解析内核在 Windows / macOS / Linux

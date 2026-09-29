@@ -2,16 +2,17 @@
 
 **USB Power Delivery 抓包解析上位机**
 
-直接打开抓包文件，把 PD 报文还原出来并逐字段溯源。三种来源**按文件内容自动分流**：
+直接打开抓包文件，把 PD 报文还原出来并逐字段溯源。四种来源**按文件内容自动分流**：
 
 | 来源 | 文件 | 存的是什么 | 解析路径 |
 | ---- | ---- | ---------- | -------- |
 | 正点原子 **ATK-C** | `.atkcc` | CC 线的原始电平采样（ZIP + 1bit/采样） | 分块 → 边沿 → BMC → 4B5B → PD 报文 |
 | **POWER-Z**（ChargerLAB） | `.sqlite` | 分析仪**已经解好的逻辑字节** + ADC 采样序列 | SQLite 读表 → Raw blob 拆事件 → 同一套 PD 语义解析 |
 | **POWER-Z**（录制 UFCS） | `.sqlite` | 同上，但录的是 **D+/D- 上的 UFCS**（融合快速充电） | SQLite 读表 → 定位 UFCS 帧 → 独立 UFCS 解析库（UART/消息头/CRC-8） |
+| **POWER-Z**（另一种导出） | `.pdStream` | 同一个抓包的**报文流**（只有 `pd_table`，**没有 ADC 波形**） | 二进制记录流 → 同一套 PD 语义解析（见 [格式](doc/format-pdstream.md)） |
 
 `.sqlite` 再按表名细分：有 `pd_table` 走 USB PD，有 `ufcs_table` 走 UFCS。
-两条路径解出来的报文对象**同形**，所以界面、筛选、详情、时间轴、导出只有「协议相关的那几处」分叉。
+几条路径解出来的报文对象**同形**，所以界面、筛选、详情、时间轴、导出只有「协议相关的那几处」分叉。
 
 解析与界面全部在前端完成 —— **零依赖、零网络、不上传任何数据**。支持 **Windows / macOS / Linux**。
 
@@ -101,9 +102,10 @@ tools/          构建、自检、排查脚本
 ```bash
 node tools/version-check.mjs     # 版本号一致（先跑它，最便宜）
 node tools/syntax.mjs            # 全量语法检查（几秒）
-node tools/selftest.js           # 协议层合成用例 91 项（含 CSV 导出格式 15 项）
+node tools/selftest.js           # 协议层合成用例 99 项（含 CSV 导出 15 项、.pdStream 容器 8 项）
 node tools/ackcheck.js           # GoodCRC 配对（跨真实抓包）
 npm run e2e                      # 界面 66 项（ATK-C，含 1 项跳过）；73 项（.sqlite 放第一份）
+npm run e2e:pdstream             # 界面 56 项：POWER-Z 的 .pdStream（现造样本，无需私有抓包）
 npm run app:csv                  # 桌面版命令行导出：exe 的 CSV 与 node CLI 逐字节比（需先 app:exe）
 npm run perf:worst               # 「打开卡不卡」探针
 npm run check                    # 上面除 perf:worst 外全部（见 doc/testing.md）

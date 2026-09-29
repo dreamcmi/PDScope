@@ -13,6 +13,9 @@ CREATE TABLE pd_table_key(key integer)                                       -- 
 UFCS 抓包（国产快充协议）结构完全一样，只是表名换成 `ufcs_chart` / `ufcs_table` / `ufcs_table_key`，
 模拟量换 `DP` / `DM`。**识别方式**就是看有没有 `pd_table` / `ufcs_table`。
 
+> POWER-Z 还能导出**同一个抓包的另一半容器** `.pdStream`（只有 `pd_table` 那部分，没有 ADC 波形），
+> 见 [`.pdStream` 格式](format-pdstream.md)。
+
 ## Raw blob 里的事件（USB PD）
 
 一行 `Raw` 是**若干事件首尾相接**（样本里恰好每行一个）：

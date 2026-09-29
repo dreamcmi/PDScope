@@ -29,6 +29,8 @@ PDScope/
 │  │   ├─ atkcc.js        .atkcc 容器解析
 │  │   ├─ sqlite.js       只读 SQLite 读取器（POWER-Z 导出用的库格式，零依赖自写）
 │  │   ├─ powerz.js       POWER-Z（.sqlite）适配层：嗅探 / Raw blob 拆事件 / 解码编排
+│  │   ├─ pdstream.js     POWER-Z 的另一种导出（.pdStream）：结构自证嗅探 / 二进制记录流读写，
+│  │   │                  以「虚拟表」接进 powerz.js 的解码流程（报文语义不重写一遍）
 │  │   ├─ bmc.js          游程提取 + BMC 状态机
 │  │   ├─ pd_tables.js    4B5B / SOP 等低层符号表（供旧脚本使用）
 │  │   ├─ pd.js           兼容转发层 → `src/js/pd/`（旧导入路径不破坏）
@@ -53,7 +55,7 @@ PDScope/
 ├─ doc/                   文档：README 的详细版分册（本目录）
 ├─ .github/workflows/     CI：10 个目标一起构建（build.yml，见 [CI 构建](ci.md)）
 └─ tools/
-   ├─ cli.js              命令行解析（.atkcc / .sqlite 自动分流；表格 / --json / --csv / --rate）
+   ├─ cli.js              命令行解析（.atkcc / .sqlite / .pdStream 自动分流；表格 / --json / --csv / --rate）
    │                      `--csv` 走的是 `src/js/core/csv.js`，与桌面版 `--csv`、界面导出的格式完全一致
    ├─ version-check.mjs   版本号一致性检查（外加文档里的产物名提示项；自检链第一步）
    ├─ syntax.mjs          全量语法检查（node --check，几秒）
@@ -71,6 +73,9 @@ PDScope/
    ├─ make-test-atkcc.mjs 造 .atkcc 压力样本（逐位跳变 / 伪随机 / 真实波形重复 N 轮）
    ├─ make-test-ufcs.mjs  造最小 UFCS 的 .sqlite 导出（覆盖控制/数据/自定义 + 1 条坏 CRC），
    │                      供无私有抓包时跑 `npm run e2e:ufcs:synth`
+   ├─ make-test-pdstream.mjs  造最小 POWER-Z `.pdStream`（手搓一段 PD 协商），
+   │                      供无私有抓包时跑 `npm run e2e:pdstream`；带 `--src` 时还能把
+   │                      现成的 `.sqlite` / `.pdStream` 转成 `.pdStream`（体积通常小两个数量级）
    ├─ chunk-cost.mjs      逐块差分解码成本（cost(k) - cost(k-1)），定位贵的那一块
    ├─ serve.mjs           本地静态服务 + 示例文件接口
    ├─ build-standalone.mjs  打包单文件 dist/PDScope.html

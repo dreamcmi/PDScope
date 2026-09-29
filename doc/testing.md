@@ -4,18 +4,20 @@
 # 版本号 / 语法 / 协议层（纯 Node，秒级）
 node tools/version-check.mjs              # 版本号是否一致（最便宜，先跑它）
 node tools/syntax.mjs                     # 全量语法检查（几秒；界面脚本错一个字符就是白屏）
-node tools/selftest.js                    # 合成用例 91 项：4B5B / PD / CRC + 采样率 + plug 信令 + POWER-Z / UFCS 路径 + CSV 导出
+node tools/selftest.js                    # 合成用例 99 项：4B5B / PD / CRC + 采样率 + plug 信令 + POWER-Z / UFCS 路径 + CSV 导出 + .pdStream 容器
 node tools/ackcheck.js                    # GoodCRC 配对（跨 5 份真实抓包）
 node tools/powerz-inspect.mjs             # POWER-Z（.sqlite，PD 与 UFCS）全样本体检（需要样本文件，非 0 退出即异常）
 
 # 界面 66 项（ATK-C，含 1 项跳过）/ 73 项（POWER-Z·PD）/ 75 项（多份抓包，第一份是 .atkcc）/ 73 项 + 1 跳过（UFCS）
+#      / 56 项（POWER-Z .pdStream，样本现造：没有 ADC 波形，纵轴交互那一组显式跳过）
 # （走系统已装的 Chrome/Edge，不下载浏览器）
 npm run e2e                               # 单文件版，自包含（**不重建 dist** —— 改了 src/ui/ 先跑 npm run build）
 npm run e2e:powerz                        # 同上，但拖进去的是 POWER-Z 的 .sqlite（USB PD）
 npm run e2e:ufcs                          # 同上，但拖进去的是真实 UFCS 导出（解出 UFCS 报文）
 npm run e2e:ufcs:synth                    # 同上，但样本现造（make-test-ufcs.mjs），无需私有抓包
+npm run e2e:pdstream                      # 同上，但样本现造（make-test-pdstream.mjs），无需私有抓包
 npm run e2e:multi                         # 连续拖两份（.atkcc + .sqlite），测标签栏与各份状态隔离
-npm run e2e:all                           # 上面四种样本依次跑一遍（npm test 用的就是它；需私有抓包）
+npm run e2e:all                           # 上面几种样本依次跑一遍（npm test 用的就是它；部分需私有抓包）
 npm run e2e:serve                         # 本地服务模式（需另开 node tools/serve.mjs）
 node tools/e2e.mjs --file dist/PDScope.html --drop "../制糖40w-ip18pro.atkcc"
 node tools/e2e.mjs --file dist/PDScope.html --drop "../山泽60w-ip18pro.sqlite"
@@ -61,7 +63,7 @@ npm run check
 
 ## selftest.js
 
-用例共 **91 项**，分七组。
+用例共 **99 项**，分七组。
 
 * **第一组（8 项）** 在合成报文的**字段级**校验 4B5B / PD / CRC 语义。
 * **第二组（4 项）** 把同一串报文按 **1.5 / 2.5 / 4 / 6 MHz** 重新采样一遍，检查：用真实采样率能解出全部报文、
@@ -74,14 +76,30 @@ npm run check
 * **第四组（6 项）** 只测 `channel.ini` 的**采样率声明解析**：多键名（`SamplingFrequency` /
   `SampleRate` / 小写下划线写法）、多单位（裸数字 = kHz、`MHz`、`kHz`）、
   以及「只有 `Resolution` 或整个键都缺」时退回默认值。
-* **第五组（18 项）** 专测 **POWER-Z 的 `.sqlite` 路径（USB PD）**：Raw blob 的插入/拔出/包裹报文拆帧与
+* **第五组（26 项）** 专测 **POWER-Z 的 `.sqlite` 路径（USB PD）**：Raw blob 的插入/拔出/包裹报文拆帧与
   「拼不通要如实标截断」、`decodeWire` 的语义等价与「CRC 未记录 ≠ 通过」、SQLite 页/记录读取、
   `PowerzCapture` 的端到端，以及「不是 POWER-Z 的 SQLite 要判为不支持」。
+  其中 **8 项**专测**同一个抓包的另一半容器 `.pdStream`**（见下）。
 * **第六组（34 项）** 专测 **UFCS**（见下）。
 * **第七组（15 项）** 专测 **CSV 导出格式**（`src/js/core/csv.js`，见下）。
 
 第五、第六两组都用**手搓的最小 SQLite 库**做输入，不依赖任何真实样本，CI 上也能跑；
 第七组连容器都不用，喂的是手搓的报文对象。
+
+### `.pdStream` 那 8 项测什么
+
+`.pdStream` 是 POWER-Z 的另一种导出：**只有 `pd_table` 那四列**，写成二进制记录流
+（无文件头 / 无索引，格式见 [POWER-Z `.pdStream` 格式](format-pdstream.md)）。
+这一组把**同一个手搓库里的同一批行**再走一遍 `.pdStream` 路径，要求：
+
+* 写出来的字节能被 `sniffPdStream` 的**结构自证**认出来，且读回来的字段**一字节不差**；
+* 解出来的报文与 `.sqlite` 路径**逐字段一致**（sop / 类型 / 方向 / 时间 / 数据 / CRC 三态 / 序号）——
+  换容器只该改变「字节怎么摆」，不该改变语义；
+* 统计口径一致（连接事件照收、行数一致、`chartRows` 为 0），容器元信息如实
+  （`container='pdstream'`、`meta.sqlite` 为 null、没有模拟量、总时长取**末条记录时间**，
+  这点与 `.sqlite` 的 `max(chart 末点, 报文末点)` 有意不同，断言里写明了）；
+* **负例**和正例一样重要：截断、多一个字节、伪随机字节、ZIP 头、时间倒退，都必须**判为不是**这个格式；
+  `readPdStream` 认不出时还要**报出卡在哪个偏移**。
 
 ### UFCS 那一组（34 项）测什么
 
@@ -175,6 +193,19 @@ CSV 有**三个出口**（界面「另存为」、桌面版命令行 `--csv`、`
 只有两路，那一档在那边是跳过），共 **73 项**：来源标注为 POWER-Z、
 CRC 统计口径、插拔事件计数、差分线视图可切换（PD 是 CC1/CC2、UFCS 是 DP/DM，档名与标题跟着文件走）
 且切换后重绘并换标题、切回电压/电流。所以 `e2e:powerz` 是 POWER-Z 路径的界面级回归。
+
+拖进去的若是 `.pdStream`（`npm run e2e:pdstream`，样本现造，共 **56 项**），
+另有一组 6 项专门盯「没有 ADC 波形的容器」：来源 chip 必须写明 `POWER-Z · .pdStream`、
+通道卡必须如实写「无 ADC 波形」、时间轴走「没有模拟量轨迹」那条分支（断言读
+`PDScope.timeline().curves === null`）、**横轴仍按事件时间五等分**、报文表照常渲染，
+以及一条反向保护：**没有曲线也要能刷选时间**（拖一下就改时间窗口、且不抛异常）。
+
+> 顺带把一条**既有的真 bug** 钉住了：`TL.xToTime` 原先在 `drawTimeline()` 末尾才赋值，
+> 而「没有曲线」会在那之前 return —— 于是**有报文但没有模拟量轨迹**的抓包
+> （`.pdStream`、没有 `bus.ini` 的 `.atkcc`、没有 `pd_chart` 的 `.sqlite`）在时间轴上按一下
+> 就抛 `TL.xToTime is not a function`。修法是把时间轴坐标换算移到早退之前。
+> 纵轴那一组的门禁也跟着改成看「有没有曲线」，而不是看「画布上有没有像素」——
+> 光网格与时间刻度就有上千像素，后者会把无曲线的容器误判成有曲线。
 
 这份样本是 PD 还是 UFCS 由顶栏「来源」chip 判定，几处断言的措辞跟着换：PD 的 CRC 恒为
 「未记录（分析仪不存）」；**UFCS 存不存 CRC 由容器决定**，断言只要求「未记录 / 全通过 /

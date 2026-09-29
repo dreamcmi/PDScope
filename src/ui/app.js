@@ -28,6 +28,7 @@
 import { AtkccCapture, scanChannelActivity } from '../js/core/atkcc.js';
 import { decodeChannel, buildBusSeries } from '../js/core/pipeline.js';
 import { PowerzCapture, sniffPowerz } from '../js/core/powerz.js';
+import { PdStreamCapture, sniffPdStream } from '../js/core/pdstream.js';
 import { makeBrowserInflator } from '../js/core/inflate.js';
 import { csvClock, csvText, csvExport, csvFileName, fmtRate } from '../js/core/csv.js';
 
@@ -406,12 +407,15 @@ async function loadContainer(file) {
     const buf = new Uint8Array(await file.arrayBuffer());
     setProgress(0.05, `${fmtSize(buf.length)} 已载入，解析容器…`);
 
-    // ── 格式分流：只看文件内容（魔数 + 表名），不看扩展名 ──
-    // POWER-Z 导出的是 SQLite（报文已被分析仪解到逻辑字节），ATK-C 是 ZIP 装的原始采样。
-    // 二者后续的「解码」步骤完全不同，但解出来的报文对象同形，界面只有这一处分叉。
+    // ── 格式分流：只看文件内容（魔数 + 结构自证），不看扩展名 ──
+    // 三种容器：ATK-C 的 ZIP 原始采样、POWER-Z 的 SQLite（`.sqlite`）、
+    // POWER-Z 的二进制记录流（`.pdStream`，本质就是 `.sqlite` 里那张 `pd_table`）。
+    // 后两者的**报文解码流程完全相同**（见 core/pdstream.js），所以这里只是选个对象。
     const cap = sniffPowerz(buf)
       ? PowerzCapture.open(buf)
-      : await AtkccCapture.open(buf, { inflate });
+      : sniffPdStream(buf)
+        ? PdStreamCapture.open(buf)
+        : await AtkccCapture.open(buf, { inflate });
 
     doc.cap = cap;
     doc.meta = cap.meta;
@@ -525,11 +529,12 @@ async function decodeDoc(doc) {
   doc.cancel = false;
   doc.state = 'running';
   const pz = doc.meta?.source === 'powerz';
-  /** 这段解码期间用户可能已经切走 —— 那就只把结果收进文档，一行界面都别动 */
+  const pds = doc.meta?.container === 'pdstream';
+  /** 这段解码期间用户可能已经切走 —— 那就只把结果收进界面，一行界面都别动 */
   const visible = () => S === doc;
   renderTabs();
   showProgress(pz ? `正在解析通道 ${channel}…` : `正在解码通道 ${channel}…`,
-    pz ? 'SQLite 事件流 → PD 报文' : 'BMC 位流 → 4B5B → PD 报文');
+    pz ? `${pds ? '.pdStream' : 'SQLite'} 事件流 → PD 报文` : 'BMC 位流 → 4B5B → PD 报文');
 
   /**
    * 进度有两个去处：界面那根进度条（只在本文档还激活时动），以及
@@ -961,8 +966,12 @@ function renderChannels() {
     $('#chHint').textContent = '单通路';
     const b = el('div', 'chitem static is-on');
     b.innerHTML = `<b>${esc(m.protocol)}</b><span>${(pz?.tableRows ?? m.tableRows)} 行事件</span>`;
-    b.title = `${m.title}｜SQLite ${m.sqlite.pageSize} B/页 · ${m.sqlite.pageCount} 页`
-      + `｜ADC 采样 ${m.chartRows} 点｜时间轴纵轴 ${m.busLabels.join(' / ')}`;
+    // `.pdStream` 不是 SQLite（没有页、也没有 ADC 采样表），别去读那些字段
+    b.title = m.container === 'pdstream'
+      ? `${m.title}｜${m.stream.records} 条记录 · ${fmtSize(m.stream.bytes)}`
+        + `（净荷 ${fmtSize(m.stream.payloadBytes)}）｜无 ADC 波形`
+      : `${m.title}｜SQLite ${m.sqlite.pageSize} B/页 · ${m.sqlite.pageCount} 页`
+        + `｜ADC 采样 ${m.chartRows} 点｜时间轴纵轴 ${m.busLabels.join(' / ')}`;
     box.appendChild(b);
     return;
   }
@@ -1253,7 +1262,8 @@ function setEmptyState(kind, extra) {
   if (kind === 'failed') {
     t.textContent = '这份文件打不开';
     p.textContent = extra || '无法识别它的格式。';
-    n.textContent = '只认 ATK-C 的 .atkcc（ZIP 容器）与 POWER-Z 的 .sqlite（SQLite 库）—— 按文件内容判断，不看扩展名。';
+    n.textContent = '只认 ATK-C 的 .atkcc（ZIP 容器）、POWER-Z 的 .sqlite（SQLite 库）'
+      + '与 .pdStream（同一个抓包的二进制导出）—— 按文件内容与结构判断，不看扩展名。';
     n.hidden = false;
     return;
   }
@@ -1672,6 +1682,12 @@ function drawTimeline(selPkt) {
   // （预览那一步还会读 TL.drag.x 抛异常）。
   TL = { ...TL, x0, y0, w: W, h: H };
   TL.axisBandTop = y0 + H;      // 横轴时间标签所在那条带子的上沿（CSS px）
+  // 归一化坐标 ⇄ 像素的换算，**必须在「没有曲线」早退之前**装好：
+  // 有报文但没有模拟量轨迹的抓包（例如 POWER-Z 的 .pdStream、没有 bus.ini 的 .atkcc）
+  // 照样要能刷选时间、点选报文，而这些交互只用到时间轴坐标、跟曲线无关。
+  // 以前它们放在函数末尾，早退一发生就没被赋值 —— 画布上一按就抛 TL.xToTime is not a function。
+  TL.timeToX = (t) => x0 + t * W;
+  TL.xToTime = (x) => clamp((x - x0) / W, 0, 1);
 
   // 网格（横向：值刻度）
   g.strokeStyle = cLine; g.lineWidth = 1;
@@ -1798,7 +1814,8 @@ function drawTimeline(selPkt) {
   }
 
   TL.timeToX = (t) => x0 + t * W;
-  TL.xToTime = (x) => clamp((x - x0) / W, 0, 1);}
+  TL.xToTime = (x) => clamp((x - x0) / W, 0, 1);
+}
 function hexA(hex, a) {
   hex = (hex || '#888').replace('#', '');
   if (hex.length === 3) hex = hex.split('').map((c) => c + c).join('');

@@ -483,7 +483,11 @@ try {
     }
 
     /* 6.2 时间轴纵轴：滚轮缩放 / 上下拖动平移 / 双击复位（"定死的位置"→ 可调） */
-    if (tlPainted > 20) {
+    // 门禁看的是「有没有曲线」而不是「画布上有没有像素」：画布上光是网格与时间刻度就有上千像素，
+    // 而**没有模拟量轨迹**的容器（例如 POWER-Z 的 .pdStream）一个曲线点都没有 ——
+    // 那一组断言对它没有意义，必须显式跳过而不是判失败。
+    const tlCurves = await cdp.eval(`window.PDScope.timeline().curves`);
+    if (tlPainted > 20 && tlCurves) {
       // 画布内容指纹：用来判断「重绘了，而且画出来的东西真的变了」
       const TLSUM = `(()=>{const c=document.querySelector('#busCanvas');const d=c.getContext('2d').getImageData(0,0,c.width,c.height).data;let h=0;for(let i=0;i<d.length;i+=4*13)h=(h*31+d[i]+d[i+1]*3+d[i+2]*7+d[i+3]*11)>>>0;return h;})()`;
       // 画布内的相对坐标 → 页面坐标（事件里用的是 clientX/clientY）
@@ -616,7 +620,42 @@ try {
       await cdp.eval(`document.querySelector('#btnTlFit').click()`);
       await sleep(150);
     } else {
-      skip('时间轴纵轴可缩放 / 平移', '该样本没有模拟量轨迹');
+      skip('时间轴纵轴可缩放 / 平移', tlCurves ? '该样本没有模拟量轨迹' : '该容器不含 ADC 波形（例如 .pdStream）');
+    }
+
+    /* 6.4 POWER-Z `.pdStream`（同一个抓包的另一半容器）：报文照解、如实说明没有波形 */
+    if (/\.pdstream$/i.test(DROP || '')) {
+      const srcChip = await cdp.eval(`(()=>{const c=[...document.querySelectorAll('#metaChips .mchip')].find(x=>/来源/.test(x.textContent));return c?c.textContent.replace(/\\s+/g,' ').trim():'';})()`);
+      check('.pdStream：来源标注为 POWER-Z 且点明容器', /POWER-Z/.test(srcChip) && /pdStream/.test(srcChip), srcChip);
+
+      const chTitle = await cdp.eval(`(()=>{const b=document.querySelector('#chList .chitem');return b?b.title:'';})()`);
+      check('.pdStream：通道卡如实说明「无 ADC 波形」', /无 ADC 波形/.test(chTitle), chTitle.slice(0, 90));
+
+      check('.pdStream：时间轴没有曲线（走「无模拟量」分支）', tlCurves === null, `curves=${tlCurves}`);
+
+      const ticks = await cdp.eval(`window.PDScope.timeline().xTicks.map((k) => k.label)`);
+      check('.pdStream：横轴仍按事件时间铺开（五等分）',
+        Array.isArray(ticks) && ticks.length === 5 && ticks[4] !== ticks[0], ticks.join(' · '));
+
+      const rowCount = await cdp.eval(`document.querySelectorAll('#vrows .tr').length`);
+      const statLine = await cdp.eval(`document.querySelector('#statLine').textContent.replace(/\\s+/g,' ').trim()`);
+      check('.pdStream：报文表照常渲染、统计行给出条数',
+        rowCount > 0 && /显示 \d+/.test(statLine), `${rowCount} 行可见 · ${statLine.slice(0, 60)}`);
+
+      // 没有曲线也要能刷选时间 —— 刷选跟曲线无关，只跟时间轴坐标有关。
+      // 这条同时守着「TL.xToTime 在无曲线时也必须可用」（曾经在画布上一按就抛异常）。
+      const pBrush2 = await cdp.eval(`(()=>{const r=document.querySelector('#busCanvas').getBoundingClientRect();return {x:r.left+r.width*0.35,y:r.top+r.height*0.5};})()`);
+      const winBefore2 = await cdp.eval(`document.querySelector('#tFrom').value + '~' + document.querySelector('#tTo').value`);
+      await cdp.eval(`(()=>{const c=document.querySelector('#busCanvas');
+        c.dispatchEvent(new MouseEvent('mousedown',{clientX:${pBrush2.x},clientY:${pBrush2.y},button:0,buttons:1,bubbles:true,cancelable:true}));
+        window.dispatchEvent(new MouseEvent('mousemove',{clientX:${pBrush2.x}+120,clientY:${pBrush2.y},buttons:1,bubbles:true}));
+        window.dispatchEvent(new MouseEvent('mouseup',{clientX:${pBrush2.x}+120,clientY:${pBrush2.y},buttons:1,bubbles:true}));return true;})()`);
+      await sleep(250);
+      const winAfter2 = await cdp.eval(`document.querySelector('#tFrom').value + '~' + document.querySelector('#tTo').value`);
+      check('.pdStream：没有曲线也能刷选时间（不抛异常）',
+        winAfter2 !== winBefore2 && winAfter2 !== '0~1000', `${winBefore2} → ${winAfter2}`);
+      await cdp.eval(`document.querySelector('#btnTlFit').click()`);
+      await sleep(150);
     }
 
     /* 6.5 分析仪导出（POWER-Z 的 .sqlite）专属：来源标注 / CRC 口径 / 差分线视图 */

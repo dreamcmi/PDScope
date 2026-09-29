@@ -340,6 +340,17 @@ export class PowerzCapture {
   async readChunk() { return null; }    // 没有采样分块可供读取
 
   /**
+   * 事件行的来源：默认读 SQLite 的表。
+   *
+   * 抽成方法是为了让**别的容器**（`core/pdstream.js` 的 `.pdStream`：二进制记录流，
+   * 里面就是 `pd_table` 那四列）覆写它，从而整套解码流程原样复用 ——
+   * 报文语义、事件拆分、CRC 口径都不必为「同一个抓包的另一种导出」再写一遍。
+   */
+  *_tableRows() {
+    yield* this.db.rows(this.info.table);
+  }
+
+  /**
    * 解析成报文列表。产出与 `core/pipeline.js#decodeChannel()` 同形的 `{packets, stats}`，
    * 因此界面侧两条路径可以共用同一段渲染代码。
    *
@@ -352,7 +363,7 @@ export class PowerzCapture {
     const rows = [];
     const tableRows = this.meta.tableRows || 0;
     let i = 0;
-    for (const r of db.rows(info.table)) {
+    for (const r of this._tableRows()) {
       rows.push({ t: Number(r[0]) || 0, vbus: Number(r[1]) || 0, ibus: Number(r[2]) || 0, raw: r[3] });
       if ((i++ & 2047) === 2047) {
         onProgress?.({ phase: 'read', ratio: tableRows ? i / tableRows : 0, packets: 0 });

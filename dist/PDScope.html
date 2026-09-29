@@ -795,7 +795,7 @@ body.detail-collapsed .detail-rail span{
       打开抓包
     </button>
     <!-- multiple：一次可以选多份，每份各占一个标签页 -->
-    <input type="file" id="fileInput" accept=".atkcc,.sqlite,.db,.bin,.zip" multiple hidden />
+    <input type="file" id="fileInput" accept=".atkcc,.sqlite,.db,.bin,.zip,.pdStream,.pdstream" multiple hidden />
   </header>
 
   <!-- ── 抓包标签栏 ─────────────────────────────────────────
@@ -948,7 +948,7 @@ body.detail-collapsed .detail-rail span{
         <div class="empty" id="emptyState">
           <svg viewBox="0 0 64 64" class="empty-art"><rect x="8" y="14" width="48" height="36" rx="6" fill="none" stroke="currentColor" stroke-width="1.6" opacity=".5"/><path d="M18 32h7l3-7 4 14 3-7h11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
           <h3 id="emptyTitle">打开一份 PD 抓包文件</h3>
-          <p id="emptyText">支持正点原子 ATK-C 的 <b>.atkcc</b> 与 POWER-Z 的 <b>.sqlite</b>，直接解析、可视化、逐字段溯源。</p>
+          <p id="emptyText">支持正点原子 ATK-C 的 <b>.atkcc</b> 与 POWER-Z 的 <b>.sqlite</b> / <b>.pdStream</b>，直接解析、可视化、逐字段溯源。</p>
           <div class="row gap center" id="emptyBtns">
             <button class="btn primary" id="btnOpen2">选择文件</button>
             <button class="btn" id="btnDemo">载入示例</button>
@@ -1012,7 +1012,7 @@ body.detail-collapsed .detail-rail span{
     <div class="drop-inner">
       <svg viewBox="0 0 48 48" class="i"><path d="M24 8v24M14 24l10 10 10-10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
       <b>松开以解析抓包</b>
-      <span>.atkcc · .sqlite · 可一次拖多份</span>
+      <span>.atkcc · .sqlite · .pdStream · 可一次拖多份</span>
     </div>
   </div>
 
@@ -7435,6 +7435,17 @@ class PowerzCapture {
   async readChunk() { return null; }    // 没有采样分块可供读取
 
   /**
+   * 事件行的来源：默认读 SQLite 的表。
+   *
+   * 抽成方法是为了让**别的容器**（`core/pdstream.js` 的 `.pdStream`：二进制记录流，
+   * 里面就是 `pd_table` 那四列）覆写它，从而整套解码流程原样复用 ——
+   * 报文语义、事件拆分、CRC 口径都不必为「同一个抓包的另一种导出」再写一遍。
+   */
+  *_tableRows() {
+    yield* this.db.rows(this.info.table);
+  }
+
+  /**
    * 解析成报文列表。产出与 `core/pipeline.js#decodeChannel()` 同形的 `{packets, stats}`，
    * 因此界面侧两条路径可以共用同一段渲染代码。
    *
@@ -7447,7 +7458,7 @@ class PowerzCapture {
     const rows = [];
     const tableRows = this.meta.tableRows || 0;
     let i = 0;
-    for (const r of db.rows(info.table)) {
+    for (const r of this._tableRows()) {
       rows.push({ t: Number(r[0]) || 0, vbus: Number(r[1]) || 0, ibus: Number(r[2]) || 0, raw: r[3] });
       if ((i++ & 2047) === 2047) {
         onProgress?.({ phase: 'read', ratio: tableRows ? i / tableRows : 0, packets: 0 });
@@ -7621,6 +7632,269 @@ function toU8(raw) {
   if (raw instanceof Uint8Array) return raw;
   if (raw instanceof ArrayBuffer) return new Uint8Array(raw);
   return null;
+}
+
+/* ══════ src/js/core/pdstream.js ══════ */
+/**
+ * pdstream.js — POWER-Z 的 `.pdStream` 容器
+ *
+ * ── 这是什么 ────────────────────────────────────────────────────────
+ * 同一份抓包，POWER-Z 上位机可以导出两种文件：
+ *
+ *   · `.sqlite`   三张表：`pd_chart`（ADC 采样序列）、`pd_table`（事件行 + `Raw` blob）、
+ *                 `pd_table_key`（会话密钥，导出文件里为空）
+ *   · `.pdStream` **只有 `pd_table` 那部分**：二进制、无文件头 / 无索引 / 无校验和
+ *
+ * 所以这里**不是第三种协议**：报文语义照样交给 `PdDecoder`（PD）那一套，
+ * 本文件只负责把「表格」从二进制里读出来，然后交给 `PowerzCapture` 现成的解码流程。
+ * 与 `.sqlite` 的唯一实质差别是**没有 ADC 波形**（没有 `pd_chart`），
+ * 于是时间轴没有曲线可画 —— 界面已有的「这份抓包没有模拟量轨迹数据」分支正好接住。
+ *
+ * ── 字节布局（实测归纳，依据见 doc/format-pdstream.md）────────────────
+ * 文件 = 记录首尾相接，重复 N 次；**没有文件头、没有尾、没有索引**：
+ *
+ *   ┌ u32 BE  payloadLen   payload 的字节数（实测取值 6 / 8 / 12 / 28 / 32）
+ *   ├ u8[]    payload      与同名 `.sqlite` 的 `pd_table.Raw` **逐字节相同**
+ *   ├ f64 BE  Time         秒（相对抓包起点，单调不减）
+ *   ├ f64 BE  Vbus         伏
+ *   └ f64 BE  Ibus         安
+ *
+ * 三个 double 是**大端** IEEE-754 —— SQLite 里的 REAL 同样是大端，两边同源，
+ * 这也是「按大端读出来能和 sqlite 精确相等」的原因。一条记录固定 28 字节开销
+ * （4 字节长度 + 3×8 字节 double）。
+ *
+ * ── 怎么认它（没有魔数可用）─────────────────────────────────────────
+ * 文件开头就是一条普通记录，所以只能**靠结构自证**：按上面的布局走一遍，要求
+ *   ① 每一步长度都落在合理区间；
+ *   ② **结束位置正好等于文件长度**（多一个字节都不认）；
+ *   ③ Time 有限、非负、单调不减；Vbus / Ibus 在物理量程内。
+ * 三条同时成立才认。这个判据很强（随机数据几乎不可能正好走完），
+ * 也顺带排除了 ZIP（首 4 字节 `PK\x03\x04` = 0x504b0304，远超长度上限）与 SQLite
+ * （`SQLite format 3` 同理）。
+ *
+ * 反过来，把行写成流也支持（`writePdStream`）：测试要造样本，用户也可能想把
+ * 手里的 `.sqlite` 转成更小的 `.pdStream`。
+ */
+
+
+
+/** 每条记录的定长开销：4 字节长度 + 3 个 f64 */
+const PDSTREAM_REC_FIXED = 28;
+
+/** payload 的合法上限。实测最大 32 字节（带扩展消息的 PD 帧），留足余量但挡住乱数据 */
+const PDSTREAM_MAX_PAYLOAD = 4096;
+
+/**
+ * 结构自证的额外门槛：至少要能读出这么多条记录才认。
+ * 太短的文件（一两条）走完也可能是巧合，不值得为它改判断逻辑。
+ */
+const MIN_RECORDS = 3;
+
+/** 认容器时最多走多少条记录（防御超大文件：真样本 3677 条，这里给足两个数量级） */
+const SNIFF_MAX_RECORDS = 200000;
+
+/** 物理量程兜底（PD 3.1 EPR 上限 48V / 5A，各留一倍余量） */
+const MAX_VOLT = 120;
+const MAX_AMP = 20;
+
+/**
+ * 把 `.pdStream` 读成记录数组。
+ *
+ * 不做任何猜测：任何一步对不上就抛错并说明**卡在哪里**（偏移 + 原因），
+ * 这样「打不开」时能直接看出是文件被截断、还是根本不是这个格式。
+ *
+ * @param {Uint8Array} u8
+ * @returns {{records:Array<{time:number,vbus:number,ibus:number,raw:Uint8Array}>,
+ *            bytes:number, payloadBytes:number, bytesConsumed:number}}
+ */
+function readPdStream(u8) {
+  const fail = (off, why) => {
+    const e = new Error(`不是 .pdStream：偏移 0x${off.toString(16)} 处${why}`);
+    e.offset = off;
+    throw e;
+  };
+  if (!(u8 instanceof Uint8Array)) throw new Error('不是 .pdStream：入参不是字节');
+  if (u8.length < PDSTREAM_REC_FIXED * MIN_RECORDS) throw new Error('不是 .pdStream：文件太短');
+
+  const view = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  const records = [];
+  let off = 0;
+  let payloadBytes = 0;
+  let lastTime = -Infinity;
+
+  while (off < u8.length) {
+    if (off + PDSTREAM_REC_FIXED > u8.length) fail(off, '剩余字节装不下一条记录');
+    const len = view.getUint32(off, false);                     // BE
+    if (len === 0) fail(off, 'payload 长度为 0');
+    if (len > PDSTREAM_MAX_PAYLOAD) fail(off, `payload 长度 ${len} 超出上限`);
+    const end = off + 4 + len + 24;
+    if (end > u8.length) fail(off, `payload 长度 ${len} 越过了文件末尾`);
+
+    const time = view.getFloat64(off + 4 + len, false);         // BE
+    const vbus = view.getFloat64(off + 12 + len, false);
+    const ibus = view.getFloat64(off + 20 + len, false);
+    if (!Number.isFinite(time) || time < 0) fail(off, `Time 不是有限的非负数（${time}）`);
+    if (time < lastTime) fail(off, `Time 倒退（${time} < ${lastTime}）`);
+    if (!Number.isFinite(vbus) || vbus < 0 || vbus > MAX_VOLT) fail(off, `Vbus 超出量程（${vbus}）`);
+    if (!Number.isFinite(ibus) || Math.abs(ibus) > MAX_AMP) fail(off, `Ibus 超出量程（${ibus}）`);
+
+    // raw 用 subarray 共享底层 buffer：不复制字节，131 KB 的样本读起来是零拷贝
+    records.push({ time, vbus, ibus, raw: u8.subarray(off + 4, off + 4 + len) });
+    payloadBytes += len;
+    lastTime = time;
+    off = end;
+  }
+
+  if (records.length < MIN_RECORDS) fail(0, `只读出 ${records.length} 条记录，不足以确认格式`);
+  return { records, bytes: u8.length, payloadBytes, bytesConsumed: off };
+}
+
+/**
+ * 只看结构，判断是不是 `.pdStream`。不抛错（认不出就 false），不复制字节。
+ *
+ * 调用点：界面/CLI 的格式分流。它排在 `sniffPowerz` 之后，所以正常不会碰到
+ * SQLite 文件；但为了防御「随便丢进来一个大文件」，走满 `SNIFF_MAX_RECORDS`
+ * 就先认下来 —— 真样本不会有那么多条记录，而走到这一步本身已经说明结构自洽。
+ *
+ * @param {Uint8Array} u8
+ * @returns {boolean}
+ */
+function sniffPdStream(u8) {
+  if (!(u8 instanceof Uint8Array)) return false;
+  if (u8.length < PDSTREAM_REC_FIXED * MIN_RECORDS) return false;
+  try {
+    const view = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+    let off = 0;
+    let n = 0;
+    let lastTime = -Infinity;
+    while (off < u8.length && n < SNIFF_MAX_RECORDS) {
+      if (off + PDSTREAM_REC_FIXED > u8.length) return false;
+      const len = view.getUint32(off, false);
+      if (len === 0 || len > PDSTREAM_MAX_PAYLOAD) return false;
+      const end = off + 4 + len + 24;
+      if (end > u8.length) return false;
+      const time = view.getFloat64(off + 4 + len, false);
+      const vbus = view.getFloat64(off + 12 + len, false);
+      const ibus = view.getFloat64(off + 20 + len, false);
+      if (!Number.isFinite(time) || time < 0 || time < lastTime) return false;
+      if (!Number.isFinite(vbus) || vbus < 0 || vbus > MAX_VOLT) return false;
+      if (!Number.isFinite(ibus) || Math.abs(ibus) > MAX_AMP) return false;
+      lastTime = time;
+      off = end;
+      n++;
+    }
+    // 走满上限（超大文件）或正好走完 —— 两种都算认出来；中途对不上早在上面 return false 了
+    return n >= MIN_RECORDS;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 把行写成 `.pdStream` 字节。行的形状与 `pd_table` 一致（`{time, vbus, ibus, raw}`），
+ * 时间必须是非减的（写入前按 Time 排序，与 sqlite 路径的读法保持一致）。
+ *
+ * @param {Array<{time:number, vbus:number, ibus:number, raw:Uint8Array|ArrayBuffer}>} rows
+ * @returns {Uint8Array}
+ */
+function writePdStream(rows) {
+  const list = rows
+    .map((r) => {
+      const raw = r.raw instanceof Uint8Array ? r.raw : new Uint8Array(r.raw);
+      return { time: Number(r.time) || 0, vbus: Number(r.vbus) || 0, ibus: Number(r.ibus) || 0, raw };
+    })
+    .sort((a, b) => a.time - b.time);
+  let total = 0;
+  for (const r of list) total += 4 + r.raw.length + 24;
+
+  const out = new Uint8Array(total);
+  const view = new DataView(out.buffer);
+  let off = 0;
+  for (const r of list) {
+    view.setUint32(off, r.raw.length, false);
+    out.set(r.raw, off + 4);
+    view.setFloat64(off + 4 + r.raw.length, r.time, false);
+    view.setFloat64(off + 12 + r.raw.length, r.vbus, false);
+    view.setFloat64(off + 20 + r.raw.length, r.ibus, false);
+    off += 4 + r.raw.length + 24;
+  }
+  return out;
+}
+
+/* ────────────────────────── 抓包对象 ────────────────────────── */
+
+/**
+ * `.pdStream` 只有一张「表」。这里做一个**只读的虚拟表适配器**，
+ * 形状对齐 `SqliteReader` 的那几个方法，于是 `PowerzCapture` 的构造与解码流程
+ * 一行都不用改（报文语义、事件拆分、CRC 口径全部复用）。
+ */
+class PdStreamTable {
+  constructor(parsed) {
+    this.parsed = parsed;
+    this.name = POWERZ_KINDS.pd.table;
+    this.rows_ = parsed.records;
+  }
+
+  hasTable(name) { return name === this.name; }
+  count(name) { return this.hasTable(name) ? this.rows_.length : 0; }
+  *rows(name) {
+    if (!this.hasTable(name)) return;
+    for (const r of this.rows_) yield [r.time, r.vbus, r.ibus, r.raw];
+  }
+
+  // `PowerzCapture#_buildMeta` 会把这些抄进 `meta.sqlite`；这里如实给 null（不是 SQLite）
+  pageSize = null;
+  pageCount = null;
+  textEncoding = null;
+  writeVersion = null;
+}
+
+class PdStreamCapture extends PowerzCapture {
+  /**
+   * @param {Uint8Array} u8
+   * @param {ReturnType<typeof readPdStream>} parsed
+   */
+  constructor(u8, parsed) {
+    super(new PdStreamTable(parsed), 'pd', u8);
+    this.container = 'pdstream';
+    this.parsed = parsed;
+
+    const m = this.meta;
+    // 时间基准：记录里的 Time 就是秒，按「1 采样点 = 1 ms」映射（与 .sqlite 同一套口径）。
+    // 没有 `pd_chart` 就没有采样序列，但**报文时间照样撑起时间轴** —— 末条记录的时间即总长。
+    const totalSamples = Math.max(m.totalSamples, Math.round(parsed.records[parsed.records.length - 1].time * POWERZ_RATE));
+    m.totalSamples = totalSamples;
+    m.durationSec = totalSamples / POWERZ_RATE;
+    m.channels[0].totalSamples = totalSamples;
+
+    m.title = 'POWER-Z · .pdStream';
+    m.container = 'pdstream';
+    m.sqlite = null;                                  // 不是 SQLite，别让界面去读页大小
+    m.busLabels = [];                                 // 没有第三、第四路模拟量 → 也没有「差分线」档
+    m.stream = {
+      records: parsed.records.length,
+      bytes: parsed.bytes,
+      payloadBytes: parsed.payloadBytes,
+      firstTime: parsed.records[0].time,
+      lastTime: parsed.records[parsed.records.length - 1].time,
+    };
+    m.sampleRateNote = 'POWER-Z 的 .pdStream 只有报文与毫秒时间戳，没有 ADC 波形；'
+      + '时间轴按「1 采样点 = 1 ms」映射（与同名的 .sqlite 一致）';
+  }
+
+  /**
+   * @param {Uint8Array} u8
+   * @returns {PdStreamCapture}
+   */
+  static open(u8) {
+    const parsed = readPdStream(u8);                  // 认不出会抛错并指出卡在哪个偏移
+    return new PdStreamCapture(u8, parsed);
+  }
+
+  /** 覆写取行方式：流程照旧，只是行来自二进制流而不是 SQLite 表 */
+  *_tableRows() {
+    for (const r of this.parsed.records) yield [r.time, r.vbus, r.ibus, r.raw];
+  }
 }
 
 /* ══════ src/js/core/inflate.js ══════ */
@@ -7887,6 +8161,7 @@ function csvExport(doc, { limit = 0, bom = true } = {}) {
  * 换文档时界面必须**整片重画**（见 `renderAll`）——面板只有一副、文档有多份，
  * 只改个标题就会出现「勾着 A 的筛选、筛的是 B 的数据」。
  */
+
 
 
 
@@ -8269,12 +8544,15 @@ async function loadContainer(file) {
     const buf = new Uint8Array(await file.arrayBuffer());
     setProgress(0.05, `${fmtSize(buf.length)} 已载入，解析容器…`);
 
-    // ── 格式分流：只看文件内容（魔数 + 表名），不看扩展名 ──
-    // POWER-Z 导出的是 SQLite（报文已被分析仪解到逻辑字节），ATK-C 是 ZIP 装的原始采样。
-    // 二者后续的「解码」步骤完全不同，但解出来的报文对象同形，界面只有这一处分叉。
+    // ── 格式分流：只看文件内容（魔数 + 结构自证），不看扩展名 ──
+    // 三种容器：ATK-C 的 ZIP 原始采样、POWER-Z 的 SQLite（`.sqlite`）、
+    // POWER-Z 的二进制记录流（`.pdStream`，本质就是 `.sqlite` 里那张 `pd_table`）。
+    // 后两者的**报文解码流程完全相同**（见 core/pdstream.js），所以这里只是选个对象。
     const cap = sniffPowerz(buf)
       ? PowerzCapture.open(buf)
-      : await AtkccCapture.open(buf, { inflate });
+      : sniffPdStream(buf)
+        ? PdStreamCapture.open(buf)
+        : await AtkccCapture.open(buf, { inflate });
 
     doc.cap = cap;
     doc.meta = cap.meta;
@@ -8388,11 +8666,12 @@ async function decodeDoc(doc) {
   doc.cancel = false;
   doc.state = 'running';
   const pz = doc.meta?.source === 'powerz';
-  /** 这段解码期间用户可能已经切走 —— 那就只把结果收进文档，一行界面都别动 */
+  const pds = doc.meta?.container === 'pdstream';
+  /** 这段解码期间用户可能已经切走 —— 那就只把结果收进界面，一行界面都别动 */
   const visible = () => S === doc;
   renderTabs();
   showProgress(pz ? `正在解析通道 ${channel}…` : `正在解码通道 ${channel}…`,
-    pz ? 'SQLite 事件流 → PD 报文' : 'BMC 位流 → 4B5B → PD 报文');
+    pz ? `${pds ? '.pdStream' : 'SQLite'} 事件流 → PD 报文` : 'BMC 位流 → 4B5B → PD 报文');
 
   /**
    * 进度有两个去处：界面那根进度条（只在本文档还激活时动），以及
@@ -8824,8 +9103,12 @@ function renderChannels() {
     $('#chHint').textContent = '单通路';
     const b = el('div', 'chitem static is-on');
     b.innerHTML = `<b>${esc(m.protocol)}</b><span>${(pz?.tableRows ?? m.tableRows)} 行事件</span>`;
-    b.title = `${m.title}｜SQLite ${m.sqlite.pageSize} B/页 · ${m.sqlite.pageCount} 页`
-      + `｜ADC 采样 ${m.chartRows} 点｜时间轴纵轴 ${m.busLabels.join(' / ')}`;
+    // `.pdStream` 不是 SQLite（没有页、也没有 ADC 采样表），别去读那些字段
+    b.title = m.container === 'pdstream'
+      ? `${m.title}｜${m.stream.records} 条记录 · ${fmtSize(m.stream.bytes)}`
+        + `（净荷 ${fmtSize(m.stream.payloadBytes)}）｜无 ADC 波形`
+      : `${m.title}｜SQLite ${m.sqlite.pageSize} B/页 · ${m.sqlite.pageCount} 页`
+        + `｜ADC 采样 ${m.chartRows} 点｜时间轴纵轴 ${m.busLabels.join(' / ')}`;
     box.appendChild(b);
     return;
   }
@@ -9116,7 +9399,8 @@ function setEmptyState(kind, extra) {
   if (kind === 'failed') {
     t.textContent = '这份文件打不开';
     p.textContent = extra || '无法识别它的格式。';
-    n.textContent = '只认 ATK-C 的 .atkcc（ZIP 容器）与 POWER-Z 的 .sqlite（SQLite 库）—— 按文件内容判断，不看扩展名。';
+    n.textContent = '只认 ATK-C 的 .atkcc（ZIP 容器）、POWER-Z 的 .sqlite（SQLite 库）'
+      + '与 .pdStream（同一个抓包的二进制导出）—— 按文件内容与结构判断，不看扩展名。';
     n.hidden = false;
     return;
   }
@@ -9535,6 +9819,12 @@ function drawTimeline(selPkt) {
   // （预览那一步还会读 TL.drag.x 抛异常）。
   TL = { ...TL, x0, y0, w: W, h: H };
   TL.axisBandTop = y0 + H;      // 横轴时间标签所在那条带子的上沿（CSS px）
+  // 归一化坐标 ⇄ 像素的换算，**必须在「没有曲线」早退之前**装好：
+  // 有报文但没有模拟量轨迹的抓包（例如 POWER-Z 的 .pdStream、没有 bus.ini 的 .atkcc）
+  // 照样要能刷选时间、点选报文，而这些交互只用到时间轴坐标、跟曲线无关。
+  // 以前它们放在函数末尾，早退一发生就没被赋值 —— 画布上一按就抛 TL.xToTime is not a function。
+  TL.timeToX = (t) => x0 + t * W;
+  TL.xToTime = (x) => clamp((x - x0) / W, 0, 1);
 
   // 网格（横向：值刻度）
   g.strokeStyle = cLine; g.lineWidth = 1;
@@ -9661,7 +9951,8 @@ function drawTimeline(selPkt) {
   }
 
   TL.timeToX = (t) => x0 + t * W;
-  TL.xToTime = (x) => clamp((x - x0) / W, 0, 1);}
+  TL.xToTime = (x) => clamp((x - x0) / W, 0, 1);
+}
 function hexA(hex, a) {
   hex = (hex || '#888').replace('#', '');
   if (hex.length === 3) hex = hex.split('').map((c) => c + c).join('');

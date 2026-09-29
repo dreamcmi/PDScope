@@ -22,8 +22,9 @@
     "e2e:powerz": "node tools/e2e.mjs --file dist/PDScope.html --drop \"../山泽60w-ip18pro.sqlite\"",
     "e2e:ufcs": "node tools/e2e.mjs --file dist/PDScope.html --drop \"../ufcs_vivo_x300u.sqlite\" --out artifacts/e2e-ufcs.png",
     "e2e:ufcs:synth": "node tools/make-test-ufcs.mjs && node tools/e2e.mjs --file dist/PDScope.html --drop \"artifacts/_ufcs_synth.sqlite\" --out artifacts/e2e-ufcs-synth.png",
+    "e2e:pdstream": "node tools/make-test-pdstream.mjs && node tools/e2e.mjs --file dist/PDScope.html --drop \"artifacts/_pdstream_synth.pdStream\" --out artifacts/e2e-pdstream.png",
     "e2e:multi": "node tools/e2e.mjs --file dist/PDScope.html --drop \"../制糖40w-ip18pro.atkcc\" --drop2 \"../山泽60w-ip18pro.sqlite\" --out artifacts/e2e-multi.png",
-    "e2e:all": "npm run e2e && npm run e2e:powerz && npm run e2e:ufcs && npm run e2e:multi",
+    "e2e:all": "npm run e2e && npm run e2e:powerz && npm run e2e:ufcs && npm run e2e:multi && npm run e2e:pdstream",
     "e2e:serve": "node tools/e2e.mjs",
     "test": "node tools/version-check.mjs && node tools/syntax.mjs && node tools/build-standalone.mjs && node tools/selftest.js && node tools/ackcheck.js && npm run e2e:all",
 

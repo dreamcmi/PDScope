@@ -8,6 +8,7 @@ import { PdDecoder } from '../src/js/core/pd.js';
 import { EdgeExtractor, BmcDecoder, UI_US, collectRunStats, estimateSampleRate } from '../src/js/core/bmc.js';
 import { parseSampleRate, DEFAULT_SAMPLE_RATE } from '../src/js/core/atkcc.js';
 import { SqliteReader, isSqlite } from '../src/js/core/sqlite.js';
+import { PdStreamCapture, sniffPdStream, readPdStream, writePdStream } from '../src/js/core/pdstream.js';
 import { PowerzCapture, sniffPowerz, parsePowerzBlob, POWERZ_RATE } from '../src/js/core/powerz.js';
 import { UfcsDecoder, ufcsCrc8, ufcsLocateFrames, ufcsSplitFrames, ufcsHeaderInfo, ufcsParseRecord, ufcsParseEvent } from '../src/js/ufcs/index.js';
 import { buildBusSeries } from '../src/js/core/pipeline.js';
@@ -584,6 +585,79 @@ function buildSqlite(specs) {
     && stats.badWire === 0 && stats.truncatedRows === 0 && stats.unsupportedMsgs === 0
     && stats.badCrc === 0 && stats.crcUnknown === packets.length && stats.warnings === 0,
     `连接 ${stats.connectCount} · badWire ${stats.badWire} · CRC 未知 ${stats.crcUnknown}`);
+
+  /* ── ⑤.3b 同一个抓包的另一半容器：POWER-Z 的 `.pdStream` ──────────────
+     `.pdStream` 里装的就是 `pd_table` 那四列（二进制记录流，无文件头 / 无索引），
+     所以这里把**同一批行**再走一遍 `.pdStream` 路径：解出来的报文必须与上面
+     SQLite 路径逐字段一致 —— 换容器只能改变「字节怎么摆」，不该改变语义。
+
+     另外这个格式**没有魔数可依**（文件开头就是一条普通记录），全靠结构自证，
+     认错的代价是把垃圾文件当抓包打开，所以「什么不该认」和「什么该认」一样要测。 */
+  {
+    const rows = [];
+    for (const r of new SqliteReader(db).rows('pd_table')) {
+      rows.push({ time: r[0], vbus: r[1], ibus: r[2], raw: r[3] });
+    }
+    const stream = writePdStream(rows);
+    check('.pdStream：写出来的字节能被结构自证认出',
+      sniffPdStream(stream) === true && readPdStream(stream).records.length === rows.length,
+      `${stream.length} 字节 / ${rows.length} 条记录`);
+
+    const back = readPdStream(stream).records;
+    check('.pdStream：读回来的字段一字节不差',
+      back.length === rows.length
+      && back.every((r, i) => r.time === rows[i].time && r.vbus === rows[i].vbus && r.ibus === rows[i].ibus
+        && r.raw.length === rows[i].raw.length && r.raw.every((b, k) => b === rows[i].raw[k])),
+      `${back.length} 条 · 末条 t=${back[back.length - 1]?.time}s`);
+
+    const pds = PdStreamCapture.open(stream);
+    const pdsDecoded = await pds.decode();
+    const key = (p) => [p.sop, p.msgType, p.role, p.startSample, p.dataHex, p.crcOk, p.index].join('|');
+    check('.pdStream：解出来的报文与 SQLite 路径逐字段一致',
+      pdsDecoded.packets.length === packets.length
+      && pdsDecoded.packets.every((p, i) => key(p) === key(packets[i])),
+      pdsDecoded.packets.map((p) => `${p.sop} ${p.msgType}@${p.startSample}`).join(' | '));
+
+    // 时长口径：`.pdStream` 没有 ADC 表，总长只能取「最后一条记录的时间」
+    // （这里 3.0s = pd_table 末行），而 SQLite 那份是 max(chart 末点 2.5s, 报文末点)。
+    // 差别是这两种容器**固有的**：少了采样序列，时间轴就只能按事件画到底。
+    check('.pdStream：统计口径与 SQLite 路径一致（连接事件照收）',
+      pdsDecoded.stats.connectCount === stats.connectCount
+      && pdsDecoded.stats.tableRows === rows.length && pdsDecoded.stats.chartRows === 0
+      && pdsDecoded.stats.durationSec === rows[rows.length - 1].time,
+      `连接 ${pdsDecoded.stats.connectCount} · 行 ${pdsDecoded.stats.tableRows} · `
+      + `时长 ${pdsDecoded.stats.durationSec}s（= 末条记录；SQLite 那份是 ${stats.durationSec}s）`);
+
+    check('.pdStream：容器元信息如实（不是 SQLite、没有 ADC 波形）',
+      pds.meta.source === 'powerz' && pds.meta.container === 'pdstream' && pds.meta.sqlite === null
+      && pds.meta.bus.length === 0 && pds.meta.chartRows === 0 && pds.meta.busLabels.length === 0
+      && pds.meta.totalSamples === rows[rows.length - 1].time * POWERZ_RATE && /\.pdStream/.test(pds.meta.title),
+      `${pds.meta.title} · totalSamples=${pds.meta.totalSamples} · 记录 ${pds.meta.stream.records} 条`);
+
+    // 负例：截断 / 多一个字节 / 伪随机 / ZIP 头，以及「时间倒退」这种结构上说不通的数据
+    const trunc = stream.subarray(0, stream.length - 3);
+    const extra = Uint8Array.from([...stream, 0]);
+    const junk = Uint8Array.from({ length: 4096 }, (_, i) => (i * 37 + 11) & 0xFF);
+    const zipHead = Uint8Array.from([0x50, 0x4b, 0x03, 0x04, ...new Uint8Array(2000)]);
+    check('.pdStream：认不出就明说（截断 / 多字节 / 乱码 / ZIP 头）',
+      !sniffPdStream(trunc) && !sniffPdStream(extra) && !sniffPdStream(junk) && !sniffPdStream(zipHead)
+      && !sniffPdStream(new Uint8Array(8)));
+
+    const backward = Uint8Array.from(stream);
+    const dv = new DataView(backward.buffer);
+    const timeOffs = [];
+    for (let off = 0; off < backward.length;) {
+      const len = dv.getUint32(off, false);
+      timeOffs.push(off + 4 + len);
+      off += 4 + len + 24;
+    }
+    dv.setFloat64(timeOffs[1], dv.getFloat64(timeOffs[0], false) - 1, false);
+    check('.pdStream：时间倒退不算这个格式', !sniffPdStream(backward));
+
+    let msg = '';
+    try { readPdStream(trunc); } catch (e) { msg = e.message; }
+    check('.pdStream：读不动时说明卡在哪个偏移', /不是 \.pdStream/.test(msg) && /偏移/.test(msg), msg);
+  }
 }
 
 /* ── ⑤.4 UFCS：报文语义解析（独立库 src/js/ufcs/ + core/powerz.js 的容器层）──

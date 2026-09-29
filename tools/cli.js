@@ -20,6 +20,7 @@
 import { readFile } from 'node:fs/promises';
 import { AtkccCapture, scanChannelActivity } from '../src/js/core/atkcc.js';
 import { PowerzCapture, sniffPowerz } from '../src/js/core/powerz.js';
+import { PdStreamCapture, sniffPdStream } from '../src/js/core/pdstream.js';
 import { decodeChannel, busAt } from '../src/js/core/pipeline.js';
 import { makeNodeInflator } from '../src/js/core/inflate.js';
 import { csvExport, csvClock } from '../src/js/core/csv.js';
@@ -55,15 +56,20 @@ if (!args.file) {
 const bytes = new Uint8Array(await readFile(args.file));
 const tOpen = Date.now();
 
-// 格式分流：POWER-Z 的 SQLite 与 ATK-C 的 ZIP 靠文件内容区分，扩展名只作参考
+// 格式分流：POWER-Z 的 SQLite / .pdStream 与 ATK-C 的 ZIP 靠文件内容区分，扩展名只作参考
 const inflate = await makeNodeInflator();
 const pzKind = sniffPowerz(bytes);
-const cap = pzKind ? PowerzCapture.open(bytes) : await AtkccCapture.open(bytes, { inflate });
-const pz = !!pzKind;
-console.error(`[open] ${Date.now() - tOpen}ms  ${pz ? `POWER-Z（${cap.meta.protocol}，${cap.meta.tableRows} 行事件）` : 'ATK-C（原始采样）'}`
+const isPds = !pzKind && sniffPdStream(bytes);
+const cap = pzKind ? PowerzCapture.open(bytes)
+  : isPds ? PdStreamCapture.open(bytes)
+    : await AtkccCapture.open(bytes, { inflate });
+const pz = !!pzKind || isPds;
+const container = pzKind ? 'SQLite' : isPds ? '.pdStream' : 'ATK-C';
+console.error(`[open] ${Date.now() - tOpen}ms  ${pz ? `POWER-Z（${cap.meta.protocol}，${cap.meta.tableRows} 行事件，${container}）` : 'ATK-C（原始采样）'}`
   + `  采样率=${cap.meta.sampleRate}Hz`
   + (pz ? '（分析仪毫秒时间戳，按 1 采样点 = 1 ms 映射）' : `${cap.meta.sampleRateRaw ? `（${cap.meta.sampleRateRaw}）` : '（文件未声明）'}`)
-  + `  totalSamples=${cap.meta.totalSamples}  duration=${cap.durationSec.toFixed(3)}s  channels=${cap.meta.channels.length}`);
+  + `  totalSamples=${cap.meta.totalSamples}  duration=${cap.durationSec.toFixed(3)}s  channels=${cap.meta.channels.length}`
+  + (isPds ? `  无 ADC 波形（.pdStream 只含报文）` : ''));
 
 if (args.listChannels) {
   if (pz) console.error('  分析仪导出没有「分块通道」概念（单通路）');

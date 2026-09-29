@@ -47,7 +47,7 @@
       打开抓包
     </button>
     <!-- multiple：一次可以选多份，每份各占一个标签页 -->
-    <input type="file" id="fileInput" accept=".atkcc,.sqlite,.db,.bin,.zip" multiple hidden />
+    <input type="file" id="fileInput" accept=".atkcc,.sqlite,.db,.bin,.zip,.pdStream,.pdstream" multiple hidden />
   </header>
 
   <!-- ── 抓包标签栏 ─────────────────────────────────────────
@@ -200,7 +200,7 @@
         <div class="empty" id="emptyState">
           <svg viewBox="0 0 64 64" class="empty-art"><rect x="8" y="14" width="48" height="36" rx="6" fill="none" stroke="currentColor" stroke-width="1.6" opacity=".5"/><path d="M18 32h7l3-7 4 14 3-7h11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
           <h3 id="emptyTitle">打开一份 PD 抓包文件</h3>
-          <p id="emptyText">支持正点原子 ATK-C 的 <b>.atkcc</b> 与 POWER-Z 的 <b>.sqlite</b>，直接解析、可视化、逐字段溯源。</p>
+          <p id="emptyText">支持正点原子 ATK-C 的 <b>.atkcc</b> 与 POWER-Z 的 <b>.sqlite</b> / <b>.pdStream</b>，直接解析、可视化、逐字段溯源。</p>
           <div class="row gap center" id="emptyBtns">
             <button class="btn primary" id="btnOpen2">选择文件</button>
             <button class="btn" id="btnDemo">载入示例</button>
@@ -264,7 +264,7 @@
     <div class="drop-inner">
       <svg viewBox="0 0 48 48" class="i"><path d="M24 8v24M14 24l10 10 10-10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
       <b>松开以解析抓包</b>
-      <span>.atkcc · .sqlite · 可一次拖多份</span>
+      <span>.atkcc · .sqlite · .pdStream · 可一次拖多份</span>
     </div>
   </div>
 
