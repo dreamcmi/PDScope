@@ -12,12 +12,17 @@
  *
  * 采样率默认取文件声明（channel.ini），文件没声明或声明得离谱时用波形节拍反推；
  * `--rate` 可强制指定，用于排查异常文件（解不出来时先怀疑采样率）。
+ *
+ * `--csv` 与界面「另存为」、桌面版命令行导出走的是**同一个模块**（src/js/core/csv.js），
+ * 三者列名 / 转义 / 行尾完全一致。打到标准输出时**不带 BOM**（管道里那三个字节只会碍事），
+ * 落盘的那两条路带 BOM（Excel 双击不乱码）。
  */
 import { readFile } from 'node:fs/promises';
 import { AtkccCapture, scanChannelActivity } from '../src/js/core/atkcc.js';
 import { PowerzCapture, sniffPowerz } from '../src/js/core/powerz.js';
 import { decodeChannel, busAt } from '../src/js/core/pipeline.js';
 import { makeNodeInflator } from '../src/js/core/inflate.js';
+import { csvExport, csvClock } from '../src/js/core/csv.js';
 
 function parseArgs(argv) {
   const a = { file: null, channel: 0, json: false, csv: false, limit: 0, verbose: false, listChannels: false, scan: 0, rate: 0 };
@@ -36,11 +41,8 @@ function parseArgs(argv) {
   return a;
 }
 
-function fmtMs(ms) {
-  const s = ms / 1000;
-  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${sec.toFixed(3).padStart(6, '0')}`;
-}
+// 时标格式化与 CSV 都来自共享模块，别在这里另写一份（界面 / 桌面版命令行共用同一份）
+const fmtMs = csvClock;
 
 const RATE_SRC = { declared: '文件声明', measured: '波形实测', default: '默认值', override: '手动指定', powerz: '分析仪时间戳' };
 
@@ -117,15 +119,19 @@ if (args.json) {
     packets: list,
   }, null, 2));
 } else if (args.csv) {
-  const head = ['#', 'SOP', 'MsgType', 'ID', 'Direction', 'Elapsed', 'VBUS(V)', 'IBUS(A)', 'Data', 'CRC', 'Note'];
-  console.log(head.join(','));
-  for (const p of list) {
-    console.log([
-      p.index, p.sop, p.msgType, p.msgId ?? '', p.role, fmtMs(p.timeMs),
-      p.vbus.toFixed(3), p.ibus.toFixed(3), `"${p.dataHex}"`,
-      p.crcOk === null ? '' : (p.crcOk ? 'OK' : 'BAD'), `"${p.summary.replace(/"/g, '""')}"`,
-    ].join(','));
-  }
+  // 走的就是桌面版命令行 `--csv` 那条路（`csvExport`）：同一份 CSV、同一套摘要与提示。
+  // 只有 BOM 一项按出口决定 —— 打到标准输出时不要它，落盘时才要，见文件头注释。
+  const res = csvExport({
+    fileName: args.file.replace(/^.*[\\/]/, ''),
+    channel: args.channel,
+    meta: cap.meta,
+    rate: stats.sampleRate,
+    packets,
+    stats,
+    decodedMs: Date.now() - t0,
+  }, { limit: args.limit, bom: false });
+  for (const n of res.notes) console.error(`[note]   ${n}`);
+  process.stdout.write(res.csv + '\n');
 } else {
   console.log('#     SOP     MsgType              ID  Dir    Elapsed         VBUS/IBUS          Data                                     Note');
   for (const p of list) {

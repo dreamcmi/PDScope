@@ -9,6 +9,30 @@
 * **Rust**：用 [rustup](https://rustup.rs) 安装（本机实测 rustc 1.98.1）
 * **Node.js**：装 `@tauri-apps/cli` 用
 
+### 本机已装的 Rust（2026-09-29）
+
+用 rustup 装到了**用户级**（不是系统级、不需要管理员），装完新开的终端里 `cargo` / `rustc` 直接可用：
+
+```powershell
+rustup show                                  # 默认工具链 stable-x86_64-pc-windows-msvc
+cargo --version                              # cargo 1.98.1
+rustup component list --installed            # cargo / rustc / rust-std / clippy / rustfmt
+rustup component add rust-docs               # 想要本地文档再加这个（可选）
+```
+
+| 装在哪 | 路径 |
+| ------ | ---- |
+| 工具链 | `%USERPROFILE%\.rustup\toolchains\stable-x86_64-pc-windows-msvc` |
+| 命令 + registry 缓存 | `%USERPROFILE%\.cargo\`（`bin` 已加入用户 PATH 的第一位） |
+
+装好之后最省事的验收（不需要私有抓包，也不碰图形环境）：
+
+```powershell
+cd src-tauri ; cargo test --release --offline   # 命令行导出的 9 项单元测试
+npm run build ; npm run app:exe                 # 重建前端 + 出可执行文件
+npm run app:csv                                 # 端到端：exe 导出的 CSV 与 node CLI 逐字节比
+```
+
 ## 构建桌面版：各平台额外依赖
 
 | 平台        | 还需要装                                                                       |

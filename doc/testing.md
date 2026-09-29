@@ -4,7 +4,7 @@
 # 版本号 / 语法 / 协议层（纯 Node，秒级）
 node tools/version-check.mjs              # 版本号是否一致（最便宜，先跑它）
 node tools/syntax.mjs                     # 全量语法检查（几秒；界面脚本错一个字符就是白屏）
-node tools/selftest.js                    # 合成用例 76 项：4B5B / PD / CRC + 采样率 + plug 信令 + POWER-Z / UFCS 路径
+node tools/selftest.js                    # 合成用例 91 项：4B5B / PD / CRC + 采样率 + plug 信令 + POWER-Z / UFCS 路径 + CSV 导出
 node tools/ackcheck.js                    # GoodCRC 配对（跨 5 份真实抓包）
 node tools/powerz-inspect.mjs             # POWER-Z（.sqlite，PD 与 UFCS）全样本体检（需要样本文件，非 0 退出即异常）
 
@@ -35,6 +35,10 @@ npm run app:exe                           # 先出可执行文件
 npm run app:test                          # 路径一：页面内注入（≡ 点「打开」选文件）
 npm run app:test:open                     # 路径二：命令行打开（≡ 双击 .atkcc 关联）
 
+# 桌面版命令行导出 CSV（不开窗口；样本现造，无需私有抓包）
+npm run app:csv                           # exe --csv 导出的 CSV 必须与 tools/cli.js --csv 逐字节相同
+npm run app:csv:self                      # 只验参考侧（不跑 exe，没有 Rust 工具链也能跑）
+
 # 一把梭（上面全部）
 npm run check
 ```
@@ -57,7 +61,7 @@ npm run check
 
 ## selftest.js
 
-用例共 **76 项**，分六组。
+用例共 **91 项**，分七组。
 
 * **第一组（8 项）** 在合成报文的**字段级**校验 4B5B / PD / CRC 语义。
 * **第二组（4 项）** 把同一串报文按 **1.5 / 2.5 / 4 / 6 MHz** 重新采样一遍，检查：用真实采样率能解出全部报文、
@@ -74,8 +78,10 @@ npm run check
   「拼不通要如实标截断」、`decodeWire` 的语义等价与「CRC 未记录 ≠ 通过」、SQLite 页/记录读取、
   `PowerzCapture` 的端到端，以及「不是 POWER-Z 的 SQLite 要判为不支持」。
 * **第六组（34 项）** 专测 **UFCS**（见下）。
+* **第七组（15 项）** 专测 **CSV 导出格式**（`src/js/core/csv.js`，见下）。
 
-后两组都用**手搓的最小 SQLite 库**做输入，不依赖任何真实样本，CI 上也能跑。
+第五、第六两组都用**手搓的最小 SQLite 库**做输入，不依赖任何真实样本，CI 上也能跑；
+第七组连容器都不用，喂的是手搓的报文对象。
 
 ### UFCS 那一组（34 项）测什么
 
@@ -95,6 +101,19 @@ CRC-8 与一份**表驱动**参照实现随机比对 400 组（写法不同，�
 **但详情面板里一个字都不出现** —— 有专门一条断言盯着，防止将来又被放回界面）、ACK 与被确认报文配对、
 状态事件单独统计不计入报文、统计口径（`badCrc=1 / crcUnknown=0 / 残行=1`）、
 以及模拟量可用且**不再标注「未实现」**。
+
+### CSV 那一组（15 项）测什么
+
+CSV 有**三个出口**（界面「另存为」、桌面版命令行 `--csv`、`node tools/cli.js --csv`），
+三处都只调 `src/js/core/csv.js`，所以这一组盯的就是「三个出口共同承诺的那点格式」，
+喂的是**手搓的报文对象**（不碰容器与解码，格式回归与解析路径解耦）：
+
+带 BOM / CRLF 行尾 / 结尾不留空行、`bom: false` 时前三个字节干净、字段一律加引号且内部引号翻倍、
+**每行列数与表头一致**（将来加列漏填会立刻发现）、同一列在两种协议下的不同含义
+（第 6 列 PD 是 `Objects`、UFCS 是 `Bytes` 且取 `dataLen`）、**CRC 三态**（`OK` / `BAD` / 空 ——
+「未记录」不许写成 `OK`）、时标两列（`hh:mm:ss.mmm` 与裸毫秒）、默认文件名 `-ch<通道>.csv`、
+零报文时仍输出表头，以及导出件 `csvExport()` 那一整包：建议文件名 / 通道 / 协议 / 来源、
+`limit` 只截行数不动报文总数、摘要里如实报「CRC 未记录 / 自动选道 / 已截断」、采样率按量级取单位。
 
 ## pd-regress.mjs / pd-inspect.mjs
 
@@ -216,12 +235,61 @@ node tools/tauri-e2e.mjs --open "../绿联70w-ip18pro.atkcc" \
 ```bash
 node tools/cli.js "../制糖40w-ip18pro.atkcc"                   # 表格
 node tools/cli.js "../绿联70w-ip18pro.atkcc" --json           # JSON
-node tools/cli.js "../苹果40w-ip18pro.atkcc" --csv            # CSV
+node tools/cli.js "../苹果40w-ip18pro.atkcc" --csv            # CSV（与界面导出同款，无 BOM）
+node tools/cli.js "../苹果40w-ip18pro.atkcc" --csv --limit 20  # 只导前 20 条
 node tools/cli.js "../apple_40w_avs_iphone_air.atkcc" --scan  # 各通道活动度
 node tools/cli.js "../绿联70w-ip18pro.atkcc" --rate 2400000    # 强制指定采样率（排查用）
 node tools/cli.js "../山泽60w-ip18pro.sqlite"                  # POWER-Z 导出，自动识别
 node tools/cli.js "../ufcs_vivo_x300u.sqlite"                  # UFCS：解出 UFCS 报文表（.sqlite 自动分流）
 ```
+
+`--csv` 与桌面版命令行导出走**同一个函数**（`csvExport`），所以它同时是那条路的
+「不装桌面版也能跑的等价物」和「改了 CSV 之后最快的回归手段」：不放心就在两边各导一次对比。
+
+## 桌面版的命令行导出（`--csv`）
+
+解析全在前端，所以这条路的**验证面就是前端的验证面**：它和 `cli.js --csv` 共用
+`src/js/core/csv.js`，差别只在「谁去读文件、谁去写文件」（见 [桌面版](desktop.md)）。
+验证分三层，从便宜到贵：
+
+```bash
+# ① Rust 侧纯逻辑（不需要 WebView、不需要图形环境，CI 也能跑）
+cd src-tauri && cargo test --release          # 9 项：参数解析 / BOM 策略 / 分块落盘 / 帮助文本
+
+# ② exe 的命令行层（不需要 WebView：--help/--version/用法报错都在建窗口之前返回）
+pdscope.exe --help ; pdscope.exe --version ; pdscope.exe 不存在.atkcc --csv   # 退出码 0 / 0 / 2
+
+# ③ 端到端导出（需要 WebView 运行时；这条才是真正的验收）
+npm run app:exe            # 先出可执行文件（桌面版自检都需要它）
+npm run app:csv            # 命令行导出自检：17 项
+npm run app:csv:self       # 只验参考侧（2 项，不跑 exe，没有 Rust 工具链也能跑）
+node tools/tauri-cli-check.mjs --file "../制糖40w-ip18pro.atkcc"     # 换真实抓包
+```
+
+**① 测什么**：`parse` 的各种写法与错误分支（`--csv [路径]` / `--csv=路径` / `--out 路径` /
+`--out -`、开关写在抓包前后的两种顺序、`--limit` `--channel` `--bom` 的取值、
+以及「没给 `--csv` 时这些开关必须报错」）、BOM 策略（落盘带、管道不带、显式开关优先）、
+分块落盘（块序错了要报错、拼出来的字节与页面给的完全一致、头三个字节是 `EF BB BF`、
+`Auto` 时按页面建议名落在输入同目录）、帮助文本里该有的开关与编码说明。
+**这批用例不碰窗口**，所以沙箱里/CI 上都能跑 —— 出问题不用等到有图形环境才发现。
+
+**③ 的判据只有一条，但足够硬**：同一个抓包（同一条通道），exe 导出的 CSV 必须与
+`node tools/cli.js --csv` 的参考结果逐字节相同。围绕它还补了几条边界：
+默认输出名 `<主干>-ch<通道>.csv`（通道从摘要里读回来，单/多通道样本都成立）、
+`--limit 3` 只出表头 + 3 行、`--help` / `--version` 退出码 0、输入不存在退出码 2、
+非抓包文件退出码 1 **且不留半截 CSV**，以及**编码那三条**：`--out -` 接管道不带 BOM、
+`--out -` 被重定向到磁盘文件时**自动补 BOM**（用真实文件句柄当 stdout 来测，
+等价于 `cmd /c "... --out - > 出.csv"`）、`--bom` / `--no-bom` 能强制两种行为。
+产物落在 `artifacts/cli-check/`（留着方便人工翻一眼、也方便直接拿 Excel 打开验编码）。
+
+默认用的是现造的 UFCS 样本（`tools/make-test-ufcs.mjs`），所以**手上没有私有抓包也能跑**。
+`tools/tauri-e2e.mjs` 测的是界面那两条路（`--drop` / `--open`），命令行导出是**不开窗口**的，
+所以它不并进那份自检 —— 这一份就是它的回归。
+
+只想验**页面那一侧**（改了 `csv.js` / `pdscopeExportCsv`，但手边没有 Rust 工具链）也行：
+`tools/e2e.mjs --eval "<js>"` 就是浏览器里的一个 REPL，在里头调 `PDScope.exportCsv(...)` 即可。
+e2e 启动 Chrome 时带了 `--allow-file-access-from-files`，所以页面自己
+`fetch('file:///…/artifacts/_ufcs_synth.sqlite')` 能取到样本字节。
 
 ## 实测样本
 

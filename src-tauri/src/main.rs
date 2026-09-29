@@ -4,16 +4,17 @@
 //! PDScope 的 Tauri 外壳 —— Windows / macOS / Linux 共用这一份代码。
 //!
 //! 设计取舍：解析与界面 100% 跑在前端（`dist/PDScope.html`），Rust 侧刻意保持极薄，
-//! 只做四件事：
+//! 只做五件事：
 //!   1. 开一个原生窗口
 //!   2. 挂一份中文原生菜单，把菜单项翻译成页面里的 DOM 操作
 //!   3. 原生「关于」对话框
 //!   4. 把命令行的 / 文件关联带上来的抓包（`.atkcc` / `.sqlite`）交给页面
+//!   5. `--csv`：不开界面，让页面把抓包导成 CSV 再落盘（见 `cli.rs`）
 //!
 //! 这样换取两个好处：
 //!   · 前端零改动即可复用（浏览器里怎么跑，桌面版就怎么跑）——
 //!     页面里没有一行 `__TAURI__` 调用，所有与外壳的交互都收敛到
-//!     `src/ui/app.js` 末尾「外壳桥」一节的 `pdscopeOpenBytes / pdscopeOpenUrl`。
+//!     `src/ui/app.js` 末尾「外壳桥」一节的 `pdscopeOpenBytes / pdscopeOpenUrl / pdscopeExportCsv`。
 //!   · 不打包浏览器内核 —— Windows 用系统 WebView2、macOS 用 WKWebView、
 //!     Linux 用 WebKitGTK，成品只有几 MB，而不是上百 MB。
 
@@ -23,8 +24,11 @@ use std::sync::Mutex;
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::webview::PageLoadEvent;
+use tauri::WebviewWindowBuilder;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+
+mod cli;
 
 /// 页面里本来就有这些元素，菜单只需「替用户点一下」，避免前端维护两套入口。
 const JS_OPEN: &str = "document.querySelector('#fileInput')?.click();";
@@ -73,7 +77,8 @@ const JS_PUSH_FILE: &str = r#"
 
 /// 把任意字符串安全地嵌进 JS 字符串字面量。
 /// Windows 路径含反斜杠、中文文件名含非 ASCII，都不能直接拼。
-fn js_str(s: &str) -> String {
+/// `cli.rs` 注入导出脚本时也用它，所以是 `pub(crate)`。
+pub(crate) fn js_str(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
     for c in s.chars() {
@@ -232,16 +237,69 @@ fn show_about(app: &AppHandle) {
 }
 
 fn main() {
-    let app = tauri::Builder::default()
+    // ⓪ Windows 上这是 GUI 子系统的 exe：先挂到父进程的控制台，否则 `--csv` 的提示语
+    //    打在空气里。重定向过输出（`> out.csv`）时不动用户的流，见 cli.rs 的 win_console。
+    cli::init_console();
+
+    // ① 命令行分流：`--csv` 走「不开界面、导出完就退出」，`--help/--version` 直接打印，
+    //    其余（含双击 .atkcc、拖到 exe 图标上）照旧开界面。
+    match cli::parse(&std::env::args_os().skip(1).collect::<Vec<_>>()) {
+        Ok(cli::Action::Help) => {
+            cli::print_out(&cli::help_text());
+            cli::restore_console(); // 改过控制台代码页就得还原，这几条路不走 cli_finish
+            std::process::exit(0);
+        }
+        Ok(cli::Action::Version) => {
+            cli::print_out(&format!("{}\n", cli::version_text()));
+            cli::restore_console();
+            std::process::exit(0);
+        }
+        Ok(cli::Action::Export(req)) => {
+            cli::begin(req);
+            // WebView2 的附加参数要在**建第一个 webview 之前**设好（环境是那时才创建的）
+            cli::tune_webview2();
+        }
+        Ok(cli::Action::None) => {}
+        Err(msg) => {
+            cli::say_err(&format!("[PDScope] {msg}\n"));
+            cli::say_err(&cli::help_text());
+            cli::restore_console();
+            std::process::exit(2);
+        }
+    }
+
+    // 建不起来（缺 WebView 运行时 / 没有图形环境…）时给一句人话再退 1 ——
+    // panic 出去只会得到一串栈信息和一个崩溃码，脚本里没法用。
+    let app = match tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![read_capture])
+        .invoke_handler(tauri::generate_handler![
+            read_capture,
+            cli::cli_log,
+            cli::cli_write,
+            cli::cli_finish
+        ])
         .setup(|app| {
+            let mut window = WebviewWindowBuilder::from_config(app, &app.config().app.windows[0])?;
+            #[cfg(windows)]
+            {
+                let data_dir = app.path().app_local_data_dir()?.join("WebView2");
+                window = window.data_directory(data_dir);
+            }
+            window.build()?;
+
             let handle = app.handle().clone();
             let menu = build_menu(&handle)?;
             handle.set_menu(menu)?;
 
-            // 命令行带了抓包就先寄存，等页面加载完由 on_page_load 推过去
-            if let Some(path) = capture_from_args() {
+            // 窗口在 tauri.conf.json 里是 `visible: false`：命令行导出全程不露面，
+            // 界面模式在这里亮出来（晚几十毫秒，换掉「先白屏再出内容」那一下）。
+            cli::reveal_window(&handle);
+
+            if cli::active() {
+                // 命令行模式：没有窗口也就没有取消按钮，给它一条卡死自尽的退路
+                cli::spawn_watchdog(handle.clone());
+            } else if let Some(path) = capture_from_args() {
+                // 命令行带了抓包就先寄存，等页面加载完由 on_page_load 推过去
                 if let Ok(mut slot) = PENDING.lock() {
                     *slot = Some(path);
                 }
@@ -251,6 +309,13 @@ fn main() {
         .on_page_load(|webview, payload| {
             // Started 时文档还没有，注入会被丢掉；Finished 才是能安全 eval 的时机
             if payload.event() != PageLoadEvent::Finished {
+                return;
+            }
+            // 命令行导出：注入的是「导出脚本」，不再推文件给界面（同一个文件，两条路走）
+            if cli::active() {
+                if let Some(js) = cli::export_script() {
+                    let _ = webview.eval(js);
+                }
                 return;
             }
             let pending = PENDING.lock().ok().and_then(|mut slot| slot.take());
@@ -263,13 +328,25 @@ fn main() {
             on_menu(app, id);
         })
         .build(tauri::generate_context!())
-        .expect("PDScope 启动失败");
+    {
+        Ok(app) => app,
+        Err(err) => {
+            cli::say_err(&format!("[PDScope] 启动失败：{err}"));
+            cli::say_err(&format!("  {}", cli::startup_hint()));
+            cli::restore_console();
+            std::process::exit(1);
+        }
+    };
 
     app.run(|_handle, event| {
         // macOS 上「用 PDScope 打开」走的是 Apple Event，不会出现在命令行参数里
         #[cfg(target_os = "macos")]
         {
             if let tauri::RunEvent::Opened { urls } = event {
+                // 命令行导出模式不接这种「再开一份」的事件：页面只用来看一眼算完就走
+                if cli::active() {
+                    return;
+                }
                 for url in urls {
                     match url.to_file_path() {
                         Ok(path) => eval_in_main(_handle, &push_file_js(&path)),

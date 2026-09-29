@@ -37,11 +37,13 @@
     "app:build": "tauri build",
     "app:test": "node tools/tauri-e2e.mjs --drop \"../制糖40w-ip18pro.atkcc\" --shot artifacts/tauri-shot.png --report artifacts/tauri-selftest.txt",
     "app:test:open": "node tools/tauri-e2e.mjs --open \"../绿联70w-ip18pro.atkcc\" --shot artifacts/tauri-open.png --report artifacts/tauri-open-selftest.txt",
+    "app:csv": "node tools/tauri-cli-check.mjs",
+    "app:csv:self": "node tools/tauri-cli-check.mjs --self",
     "app:win": "tauri build --bundles nsis",
     "app:mac": "tauri build --bundles dmg,app",
     "app:linux": "tauri build --bundles appimage,deb",
 
-    "check": "npm test && npm run app:test && npm run app:test:open",
+    "check": "npm test && npm run app:test && npm run app:test:open && npm run app:csv",
 
     "icon": "python tools/make-icon.py",
     "icon:tauri": "python tools/make-tauri-icons.py",

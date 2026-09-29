@@ -25,6 +25,7 @@
 * **CRC 如实报**：分析仪没存 CRC 就写「未记录」，不替对方的数据背书。
 * **底部时间轴**：VBUS / IBUS（分析仪还多一路差分线）可拖拽刷选区间，表格立即联动。
 * **导出**：CSV（当前筛选结果）或 JSON（全部报文，含原始位域与配对序号）。
+  桌面版还能**不开界面**从命令行导 CSV：`pdscope.exe 抓包.atkcc --csv`（见 [桌面版](doc/desktop.md)）。
 
 截图与功能全表见 [doc/ui.md](doc/ui.md)。
 
@@ -48,8 +49,13 @@ npm run app:build  # 出当前平台的安装包（Windows: PDScope_0.3.1_x64-se
 命令行解析（不起界面）：
 
 ```bash
-node tools/cli.js "../制糖40w-ip18pro.atkcc"            # .atkcc
-node tools/cli.js "../山泽60w-ip18pro.sqlite"           # POWER-Z 导出，自动识别
+# 装了桌面版：同一个 exe，不开窗口直接导 CSV（与界面「另存为」逐字节同款）
+pdscope.exe "D:\抓包\绿联70w.atkcc" --csv          # 输出到同目录的 绿联70w-ch0.csv
+pdscope.exe "D:\抓包\山泽60w.sqlite" --csv 出.csv   # 也可以指定输出路径 / --channel / --limit / --out -
+
+# 只有 Node、没装桌面版：
+node tools/cli.js "../制糖40w-ip18pro.atkcc"            # 表格
+node tools/cli.js "../山泽60w-ip18pro.sqlite" --csv     # .sqlite 自动识别，CSV 到标准输出
 node tools/cli.js "../ufcs_vivo_x300u.sqlite"           # UFCS 导出，自动识别
 ```
 
@@ -76,7 +82,7 @@ README 只留入口，细节按主题分在 `doc/` 下：
 ```
 src/js/pd/      USB PD 解析库（零依赖，可整目录复用）
 src/js/ufcs/    UFCS 解析库（零依赖，可整目录复用）
-src/js/core/    容器与波形内核（ZIP / SQLite / BMC / 编排）
+src/js/core/    容器与波形内核（ZIP / SQLite / BMC / 编排 / CSV 导出）
 src/ui/         界面（三种形态共用同一份）
 src-tauri/      Tauri 桌面外壳（三平台同一份 Rust）
 dist/           前端产物：只有 PDScope.html 一个文件
@@ -92,9 +98,10 @@ tools/          构建、自检、排查脚本
 ```bash
 node tools/version-check.mjs     # 版本号一致（先跑它，最便宜）
 node tools/syntax.mjs            # 全量语法检查（几秒）
-node tools/selftest.js           # 协议层合成用例 76 项
+node tools/selftest.js           # 协议层合成用例 91 项（含 CSV 导出格式 15 项）
 node tools/ackcheck.js           # GoodCRC 配对（跨真实抓包）
 npm run e2e                      # 界面 30 项（ATK-C）；36 项（.sqlite）；39 项（多份）
+npm run app:csv                  # 桌面版命令行导出：exe 的 CSV 与 node CLI 逐字节比（需先 app:exe）
 npm run perf:worst               # 「打开卡不卡」探针
 npm run check                    # 上面全部
 ```
@@ -104,7 +111,10 @@ npm run check                    # 上面全部
 ## 已知限制（摘）
 
 * 桌面版**不交叉编译**：哪个系统构建就出哪个系统的包（各平台的包由 [CI](doc/ci.md) 一次出齐）。
-* 桌面版依赖系统自带 WebView；没有就退回单文件版。
+* 桌面版依赖系统自带 WebView；没有就退回单文件版。命令行的 `--csv` 导出同样要它，
+  而且要有图形环境（解析跑在前端）；纯服务器上用 `node tools/cli.js --csv`。
+  导出的 CSV **一律是 UTF-8**（与终端/控制台类型无关，落盘带 BOM 供 Excel 直接打开）；
+  Windows 上 shell 不会等 GUI 程序，脚本里请用 `start /wait`（详见 [桌面版](doc/desktop.md)）。
 * POWER-Z 的 PD 报文**不含 CRC**，界面写「未记录」而不是「全通过」。
 * UFCS 的容器（Raw blob）格式是**从真实抓包逐字节反推**的，没有规范背书；认不出就退回穷举定位。
 * UFCS 状态事件行的语义未确证，界面只报条数，不硬起「插入 / 拔出」这种名字。

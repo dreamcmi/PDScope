@@ -29,6 +29,7 @@ import { AtkccCapture, scanChannelActivity } from '../js/core/atkcc.js';
 import { decodeChannel, buildBusSeries } from '../js/core/pipeline.js';
 import { PowerzCapture, sniffPowerz } from '../js/core/powerz.js';
 import { makeBrowserInflator } from '../js/core/inflate.js';
+import { csvClock, csvText, csvExport, csvFileName, fmtRate } from '../js/core/csv.js';
 
 /* ═══════════════════════ 运行形态探测 ═══════════════════════ */
 /**
@@ -66,11 +67,11 @@ const el = (tag, cls, txt) => {
 };
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
-function fmtTime(ms) {
-  const s = ms / 1000;
-  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${sec.toFixed(3).padStart(6, '0')}`;
-}
+/**
+ * 时标格式化。实现只有一份（`src/js/core/csv.js` 的 `csvClock`），
+ * 界面（表格 / 详情 / 时间轴）与 CSV 导出共用 —— 两处各写一遍迟早会差一位小数。
+ */
+const fmtTime = csvClock;
 const fmtSize = (n) => n > 1048576 ? (n / 1048576).toFixed(2) + ' MB' : (n / 1024).toFixed(1) + ' KB';
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
@@ -224,6 +225,11 @@ function newDoc(file) {
     /** 'blank' 未开文件 | 'ready' 容器就绪待解析 | 'running' 解析中 | 'done' | 'error' 打不开 */
     state: 'blank',
     error: '',
+    /**
+     * 解码进度旁路：命令行导出（无界面）时由外壳挂上来，把进度转成终端里的一行行字。
+     * 界面形态下恒为 null —— 进度照旧只走左下角那根进度条。
+     */
+    progressCb: null,
     /** 已排队等待解析（避免同一份文件被排进队列两次） */
     pending: false,
     filters: newFilters(),
@@ -515,15 +521,24 @@ async function decodeDoc(doc) {
   showProgress(pz ? `正在解析通道 ${channel}…` : `正在解码通道 ${channel}…`,
     pz ? 'SQLite 事件流 → PD 报文' : 'BMC 位流 → 4B5B → PD 报文');
 
+  /**
+   * 进度有两个去处：界面那根进度条（只在本文档还激活时动），以及
+   * `doc.progressCb`（命令行导出挂上来的旁路，把同一句话转成终端里的一行）。
+   * 两者互不干扰，界面形态下 progressCb 是 null。
+   */
+  const report = (ratio, text) => {
+    if (visible()) setProgress(ratio, text);
+    doc.progressCb?.(ratio, text);
+  };
+
   const t0 = performance.now();
   try {
     const { packets, stats } = pz
       ? await doc.cap.decode({
         shouldStop: () => doc.cancel,
         onProgress: (p) => {
-          if (!visible()) return;
-          if (p.phase === 'read') setProgress(0.30 + 0.30 * p.ratio, `读取事件行 ${Math.round(p.ratio * 100)}%`);
-          else setProgress(0.60 + 0.35 * p.ratio, `已解出 ${p.packets} 条`);
+          if (p.phase === 'read') report(0.30 + 0.30 * p.ratio, `读取事件行 ${Math.round(p.ratio * 100)}%`);
+          else report(0.60 + 0.35 * p.ratio, `已解出 ${p.packets} 条`);
         },
       })
       : await decodeChannel(doc.cap, channel, {
@@ -531,8 +546,7 @@ async function decodeDoc(doc) {
         bitOrder: 'lsb',
         shouldStop: () => doc.cancel,
         onProgress: (p) => {
-          if (!visible()) return;
-          setProgress(0.3 + 0.65 * p.ratio, `分块 ${p.chunk}/${p.chunks} · 已解出 ${p.packets} 条`);
+          report(0.3 + 0.65 * p.ratio, `分块 ${p.chunk}/${p.chunks} · 已解出 ${p.packets} 条`);
         },
       });
 
@@ -855,12 +869,8 @@ function syncFilterUI() {
 }
 
 /* ═══════════════════════ 顶栏元信息 / 通道 ═══════════════════════ */
-/** 采样率按量级选单位（ATK-C 是 2.5 MHz，POWER-Z 的 1 ms/采样点只有 1 kHz） */
-function fmtRate(hz) {
-  if (hz >= 1e6) return (hz / 1e6).toFixed(2) + ' MHz';
-  if (hz >= 1e3) return (hz / 1e3).toFixed(2) + ' kHz';
-  return hz + ' Hz';
-}
+// 采样率按量级选单位（ATK-C 是 2.5 MHz，POWER-Z 的 1 ms/采样点只有 1 kHz）——
+// 实现与 CSV 导出摘要共用一份（src/js/core/csv.js），免得顶栏写 2.50 MHz、终端写 2500.00 kHz
 
 function renderMeta() {
   syncAppbarChip();
@@ -1871,21 +1881,15 @@ $('#btnExport').addEventListener('click', () => {
   document.body.appendChild(wrap);
 });
 function exportAs(fmt) {
-  const base = (S.fileName || 'pdscope').replace(/\.(atkcc|sqlite|db)$/i, '');
   let blob, name;
   if (fmt === 'csv') {
-    // UFCS 那一列是「数据字节数」（借 nObjects 存），PD 是「数据对象个数」——表头跟着换
-    const ufcsCsv = S.meta?.protocol === 'UFCS';
-    const head = ['#', 'SOP', 'MsgType', 'ID', 'Direction', ufcsCsv ? 'Bytes' : 'Objects', 'Elapsed', 'Time(ms)', 'VBUS(V)', 'IBUS(A)', 'Data', 'CRC', 'Note'];
-    const rows = S.view.map((p) => [
-      p.index, p.sop, p.msgType, p.msgId ?? '', p.role, (ufcsCsv ? p.dataLen : p.nObjects) ?? '', fmtTime(p.timeMs), p.timeMs.toFixed(4),
-      p.vbus.toFixed(4), p.ibus.toFixed(4), p.dataHex || '',
-      p.crcOk === null ? '' : p.crcOk ? 'OK' : 'BAD', (p.summary || '').replace(/"/g, '""'),
-    ]);
-    const csv = '\uFEFF' + [head, ...rows].map((r) => r.map((c) => `"${c}"`).join(',')).join('\r\n');
+    // 列名 / 转义 / BOM / 行尾 / 文件名统统在 src/js/core/csv.js 里 —— 命令行导出用的是同一份，
+    // 改格式只改那一处（含 UFCS 那一列是「数据字节数」而 PD 是「数据对象个数」的差异）。
+    const csv = csvText(S.view, { protocol: S.meta?.protocol });
     blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-    name = `${base}-ch${S.channel}.csv`;
+    name = csvFileName(S.fileName, S.channel);
   } else {
+    const base = (S.fileName || 'pdscope').replace(/\.(atkcc|sqlite|db)$/i, '');
     blob = new Blob([JSON.stringify({
       file: S.fileName, channel: S.channel,
       // 实际采用的采样率 + 文件里声明的那个（不一致时 stats.sampleRateNote 里有人话解释）
@@ -1999,8 +2003,52 @@ window.pdscopeOpenUrl = async (name, url) => {
 };
 
 /**
+ * 无界面导出 CSV —— 桌面版「命令行导出」走的入口（界面一屏都不用开）。
+ *
+ * 与界面里那条路**共用同一套代码**：容器加载（含多通道自动选道）→ 解码 → CSV 文本，
+ * 所以命令行导出的结果与「打开这个文件，点导出」逐字节一致；唯一的差别是
+ * 命令行导的是**全部报文**（界面导的是当前筛选结果 —— 命令行里没有筛选这个概念）。
+ *
+ * 出口仍是不依赖外壳的：这里只收字节、只吐文本，**不碰文件系统**（写盘由外壳做），
+ * 所以浏览器里也能调它做自动化，见 `tools/e2e.mjs --eval`。
+ *
+ * @param {object} opts
+ * @param {string} opts.name    文件名（只用于展示与默认导出名，格式靠内容嗅探判定）
+ * @param {Uint8Array|ArrayBuffer} opts.bytes 抓包原始字节
+ * @param {number} [opts.channel] 指定通道（多通道 .atkcc）；不给就自动挑
+ * @param {number} [opts.limit]   只导前 N 条（调试/取样用）
+ * @param {boolean} [opts.bom]    是否带 UTF-8 BOM（默认带；写文件要它，走管道不要）
+ * @param {(ratio:number, text:string)=>void} [opts.onProgress] 解码进度旁路
+ * @returns {Promise<object>} `{ csv, fileName, channel, protocol, source, packets, rows, … }`
+ *   —— `csv` 就是可以直接落盘的完整文本；`fileName` 是建议的导出名，
+ *   外壳的默认输出路径用它（命名规则与界面导出一致，只有 csv.js 一处定义）。
+ *   失败一律**抛异常**（不吞），让外壳决定怎么报 —— 命令行里没有 toast 可弹。
+ */
+window.pdscopeExportCsv = async ({ name, bytes, channel, limit, bom = true, onProgress } = {}) => {
+  const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes ?? []);
+  const file = new File([u8], name || 'capture.atkcc');
+
+  // ① 容器 + 选道（与界面同一条队列、同一个函数）
+  const doc = await enqueue(() => loadContainer(file));
+  if (doc.error) throw new Error(doc.error);
+
+  // ② 指定通道优先于自动选道
+  if (channel !== undefined && channel !== null && channel !== '') doc.channel = Number(channel);
+
+  // ③ 解码。进度走 progressCb 旁路（decodeDoc 里 report 的第二站）
+  doc.progressCb = typeof onProgress === 'function' ? onProgress : null;
+  await activateDoc(doc);
+  doc.progressCb = null;
+  if (doc.error) throw new Error(doc.error);
+  if (doc.state !== 'done') throw new Error('解码未完成（文件可能被中途关闭）');
+
+  // ④ 剩下的事（导全部报文、算文件名、攒摘要）与 `node tools/cli.js --csv` 同一份实现
+  return csvExport(doc, { limit, bom });
+};
+
+/**
  * 对外自述：外壳与自动化测试都可以读它，判断「页面是什么形态、就绪没有、加载了什么」。
- * 外壳的启动流程应该是「等 `PDScope.ready === true`，再调 openBytes/openUrl」。
+ * 外壳的启动流程应该是「等 `PDScope.ready === true`，再调 openBytes/openUrl/exportCsv」。
  */
 window.PDScope = {
   version: '0.3.1',
@@ -2008,6 +2056,11 @@ window.PDScope = {
   ready: false,
   openBytes: window.pdscopeOpenBytes,
   openUrl: window.pdscopeOpenUrl,
+  /**
+   * 无界面导出 CSV（桌面版命令行导出用；自动化自检也用它）。
+   * 与界面导出共用 `src/js/core/csv.js`，见该函数的注释。
+   */
+  exportCsv: window.pdscopeExportCsv,
   /** 当前状态快照，供外壳自检 / 调试面板读取 */
   status: () => ({
     env: ENV.name,

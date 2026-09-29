@@ -11,6 +11,7 @@ import { SqliteReader, isSqlite } from '../src/js/core/sqlite.js';
 import { PowerzCapture, sniffPowerz, parsePowerzBlob, POWERZ_RATE } from '../src/js/core/powerz.js';
 import { UfcsDecoder, ufcsCrc8, ufcsLocateFrames, ufcsSplitFrames, ufcsHeaderInfo, ufcsParseRecord, ufcsParseEvent } from '../src/js/ufcs/index.js';
 import { buildBusSeries } from '../src/js/core/pipeline.js';
+import { csvText, csvHead, csvBase, csvFileName, csvExport, CSV_BOM, CSV_EOL } from '../src/js/core/csv.js';
 import {
   DEC4B5B, SOP_SEQUENCES, EOP_SYM,
 } from '../src/js/core/pd_tables.js';
@@ -810,6 +811,96 @@ function buildSqlite(specs) {
   // 不是分析仪导出的库（魔数对但没有我们认识的表）必须判为不支持，而不是勉强当 PD 解
   const alien = buildSqlite([{ name: 'logs', cols: ['ts integer'], rows: [[1]] }]);
   check('非 POWER-Z 的 SQLite 判为不支持', isSqlite(alien) && sniffPowerz(alien) === null);
+}
+
+/* ═══════════ ⑥ CSV 导出（src/js/core/csv.js） ═══════════
+ *  界面「另存为」、桌面版命令行 `--csv`、`node tools/cli.js --csv` 三个出口共用这一份实现，
+ *  所以这里测的是「三个出口共同承诺的那点格式」：列名 / 引号转义 / 行尾 / BOM / CRC 三态。
+ *  只喂**手搓的报文对象**，不碰容器与解码——格式回归就该与解析路径解耦。 */
+{
+  const mk = (over = {}) => ({
+    index: 0, sop: 'SOP', msgType: 'Source_Capabilities', msgId: 1, role: 'SRC',
+    nObjects: 7, dataLen: 28, timeMs: 1234.5, vbus: 5.1, ibus: 2.25,
+    dataHex: 'AA BB', crcOk: true, summary: '固定 5 V / 3 A', ...over,
+  });
+
+  // ① 行尾 / BOM / 结尾不留空行：Excel 与命令行重定向都按这个来
+  const one = csvText([mk()], { protocol: 'USB PD' });
+  check('CSV：带 BOM、CRLF 行尾、结尾无空行',
+    one.startsWith(CSV_BOM) && one.includes('\r\n') && !one.endsWith('\n')
+      && one.split(CSV_EOL).length === 2,
+    `${one.length} 字符`);
+  check('CSV：不要 BOM 时前三个字节不留痕',
+    !csvText([mk()], { bom: false }).startsWith(CSV_BOM));
+
+  // ② 每个字段都加引号；字段里的引号翻倍（RFC 4180），否则摘要一带引号整表就散列了
+  const quoted = csvText([mk({ summary: '他说"5V"' })], { protocol: 'USB PD' });
+  check('CSV：字段一律加引号，内部引号翻倍',
+    quoted.includes('"他说""5V"""') && !/,(?=[^"])/.test(quoted.split(CSV_EOL)[1].slice(1, -1)),
+    quoted.split(CSV_EOL)[1]);
+
+  // ③ 列数：表头几列，每行就得几列（今天 13 列；将来加列时这条会立刻发现漏填）
+  const rows = csvText([mk(), mk({ index: 1 })], { protocol: 'USB PD' }).split(CSV_EOL);
+  check('CSV：每行列数与表头一致', rows.every((r) => r.split('","').length === csvHead('USB PD').length),
+    `${rows[0].split('","').length} 列`);
+
+  // ④ 第 6 列按协议换含义：PD 是数据对象个数，UFCS 是数据字节数
+  check('CSV：列头按协议换第 6 列（Objects / Bytes）',
+    csvHead('USB PD')[5] === 'Objects' && csvHead('UFCS')[5] === 'Bytes');
+  const ufcsRow = csvText([mk({ nObjects: 28, dataLen: 24, role: 'SRC', sop: 'D+' })], { protocol: 'UFCS' })
+    .split(CSV_EOL)[1];
+  check('CSV：UFCS 取 dataLen（不是 nObjects）', ufcsRow.split('","')[5] === '24', ufcsRow.split('","')[5]);
+
+  // ⑤ CRC 是**三态**：通过 / 校验错 / 未记录（POWER-Z 的 PD 报文就是第三种）。
+  //    未记录必须留空，写成 OK 就是替分析仪的数据背书。
+  const crcOf = (v) => csvText([mk({ crcOk: v })], { protocol: 'USB PD' }).split(CSV_EOL)[1].split('","')[11];
+  check('CSV：CRC 三态（OK / BAD / 空）', crcOf(true) === 'OK' && crcOf(false) === 'BAD' && crcOf(null) === '',
+    `${crcOf(true)} / ${crcOf(false)} / "${crcOf(null)}"`);
+
+  // ⑥ 时标两列同源：字符串是给人看的，裸毫秒是给算差值用的
+  const t = csvText([mk({ timeMs: 3661123.4567 })], { protocol: 'USB PD' }).split(CSV_EOL)[1].split('","');
+  check('CSV：时标两列（hh:mm:ss.mmm + 裸毫秒）',
+    t[6] === '01:01:01.123' && t[7] === '3661123.4567', `${t[6]} / ${t[7]}`);
+
+  // ⑦ 默认导出名与界面一致：去扩展名 + 带通道号（多通道文件换个通道不该覆盖上一份）
+  check('CSV：默认文件名 <主干>-ch<通道>.csv',
+    csvFileName('绿联70w.atkcc', 3) === '绿联70w-ch3.csv'
+      && csvFileName('山泽60w.SQLITE', 0) === '山泽60w-ch0.csv'
+      && csvBase('a.db') === 'a' && csvBase('dump') === 'dump' && csvBase('') === 'pdscope',
+    csvFileName('绿联70w.atkcc', 3));
+
+  // ⑧ 空报文表也要出一份只有表头的合法 CSV（命令行导出零报文时不该产出空文件）
+  const empty = csvText([], { protocol: 'USB PD' });
+  check('CSV：零报文时仍输出表头', empty === CSV_BOM + csvHead('USB PD').map((h) => `"${h}"`).join(','));
+
+  // ⑨ 导出件：命令行导出（桌面版与 tools/cli.js）拼出来的这一整包 ——
+  //    文件名、行数、摘要里的那些话都在这里，两个出口共用，所以只测这一处。
+  const doc = {
+    fileName: '山泽60w-ip18pro.sqlite',
+    channel: 2,
+    rate: 1000,
+    meta: { protocol: 'UFCS', source: 'powerz', sampleRateSource: 'powerz' },
+    packets: [mk({ sop: 'D+', role: 'SRC', dataLen: 24 }), mk({ index: 1, crcOk: null, dataLen: 0 })],
+    stats: { sampleRateSource: 'powerz', crcUnknown: 2, badCrc: 0, durationSec: 9.91 },
+    decodedMs: 12,
+    channelPick: { picked: 2, noiseRejected: 1, allNoisy: false },
+  };
+  const limited = csvExport(doc, { limit: 1 });
+  check('CSV：导出件带建议文件名与通道', limited.fileName === '山泽60w-ip18pro-ch2.csv'
+    && limited.channel === 2 && limited.protocol === 'UFCS' && limited.source === 'powerz',
+    `${limited.fileName} ch${limited.channel}`);
+  check('CSV：limit 只截行数，不动报文总数', limited.rows === 1 && limited.packets === 2
+    && limited.csv.split(CSV_EOL).length === 2, `${limited.rows}/${limited.packets}`);
+  check('CSV：摘要里如实报「CRC 未记录 / 自动选道 / 截断」',
+    limited.notes.some((n) => /CRC 未记录/.test(n))
+      && limited.notes.some((n) => /自动选了 ch2/.test(n))
+      && limited.notes.some((n) => /只导了前 1 条/.test(n)),
+    limited.notes.join(' | '));
+  const full = csvExport(doc);
+  check('CSV：不给 limit 就是全部，且默认带 BOM',
+    full.rows === 2 && full.csv.startsWith(CSV_BOM) && full.notes.every((n) => !/只导了前/.test(n)),
+    `${full.rows} 行`);
+  check('CSV：采样率摘要按量级取单位', full.sampleRateText === '1.00 kHz', full.sampleRateText);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

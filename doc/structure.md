@@ -32,12 +32,16 @@ PDScope/
 │  │   ├─ bmc.js          游程提取 + BMC 状态机
 │  │   ├─ pd_tables.js    4B5B / SOP 等低层符号表（供旧脚本使用）
 │  │   ├─ pd.js           兼容转发层 → `src/js/pd/`（旧导入路径不破坏）
-│  │   └─ pipeline.js     串起「分块 → 位流 → 边沿 → BMC → PD 解析 → 报文」
+│  │   ├─ pipeline.js     串起「分块 → 位流 → 边沿 → BMC → PD 解析 → 报文」
+│  │   └─ csv.js          CSV 导出的唯一实现（界面「另存为」/ 桌面版 `--csv` / tools/cli.js 共用）
 │  └─ ui/                 界面（index.html / styles.css / app.js）—— 三种形态共用
-│                         app.js 里「多文档」一节：标签栏 + 每份一份状态 + 串行解码队列
+│                         app.js 里「多文档」一节：标签栏 + 每份一份状态 + 串行解码队列；
+│                         末尾「外壳桥」一节另有 `pdscopeExportCsv()`：无界面导出 CSV，供桌面版 --csv 调用
 ├─ src-tauri/             Tauri 桌面外壳（Rust，Windows / macOS / Linux 同一份）
 │  ├─ src/main.rs         原生窗口 + 中文菜单 + 「关于」+ 命令行/文件关联打开抓包
-│  ├─ tauri.conf.json     窗口尺寸 / 入口页 / 打包目标 / 图标 / .atkcc 文件关联
+│  ├─ src/cli.rs          `--csv` 命令行导出：参数解析 / 注入页面 / 分块落盘 / 摘要与退出码
+│  │                      （解析不在这里做 —— 用的是页面里的 `PDScope.exportCsv`）
+│  ├─ tauri.conf.json     窗口尺寸 / 入口页 / 打包目标 / 图标 / .atkcc 文件关联（窗口配成 `visible: false`，见 desktop.md）
 │  ├─ Cargo.toml          Rust 依赖（tauri 2 + tauri-plugin-dialog）
 │  ├─ build.rs            tauri-build 入口
 │  ├─ .cargo/config.toml  crates 国内镜像（跟仓库走，clone 后直接可用）
@@ -48,7 +52,8 @@ PDScope/
 ├─ doc/                   文档：README 的详细版分册（本目录）
 ├─ .github/workflows/     CI：10 个目标一起构建（build.yml，见 [CI 构建](ci.md)）
 └─ tools/
-   ├─ cli.js              命令行解析（.atkcc / .sqlite 自动分流；table / --json / --csv / --rate）
+   ├─ cli.js              命令行解析（.atkcc / .sqlite 自动分流；表格 / --json / --csv / --rate）
+   │                      `--csv` 走的是 `src/js/core/csv.js`，与桌面版 `--csv`、界面导出的格式完全一致
    ├─ version-check.mjs   版本号一致性检查（外加文档里的产物名提示项；自检链第一步）
    ├─ syntax.mjs          全量语法检查（node --check，几秒）
    ├─ ci-checksum.mjs     给 CI 产物生成 .sha256 校验和（三平台同一套命令）
@@ -59,6 +64,8 @@ PDScope/
    ├─ pd-regress.mjs      与重构前解码器逐包逐字段对比（从 git HEAD 取旧版本）
    ├─ e2e.mjs             无头浏览器端到端自检 + 截图（测单文件版 / 本地服务版 / 多份抓包）
    ├─ tauri-e2e.mjs       真实 Tauri 窗口里的端到端自检 + 截图（测桌面版）
+   ├─ tauri-cli-check.mjs 桌面版命令行导出（`--csv`）自检：exe 导出的 CSV 必须与
+   │                      `node tools/cli.js --csv` 逐字节相同 + 默认名 / limit / 管道 / 两种失败
    ├─ perf-probe.mjs      「打开卡不卡」探针：阻塞间隙 + longtask + 函数级 CPU 占比
    ├─ make-test-atkcc.mjs 造 .atkcc 压力样本（逐位跳变 / 伪随机 / 真实波形重复 N 轮）
    ├─ make-test-ufcs.mjs  造最小 UFCS 的 .sqlite 导出（覆盖控制/数据/自定义 + 1 条坏 CRC），
