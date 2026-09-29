@@ -5,8 +5,8 @@
 # 架构的机器各构建一次。
 #
 # 目标清单（产物名 = PDScope-<目标>）：
-#   windows11-x64      windows-2025      x86_64-pc-windows-msvc      nsis + msi + 绿色版
-#   windows11-arm64    windows-11-arm    aarch64-pc-windows-msvc     nsis + 绿色版
+#   windows11-x64      windows-2025      x86_64-pc-windows-msvc      exe 安装包 + msi + 绿色版
+#   windows11-arm64    windows-11-arm    aarch64-pc-windows-msvc     exe 安装包 + 绿色版
 #   macos15-arm64      macos-15          aarch64-apple-darwin        app + dmg
 #   macos15-x64        macos-15-intel    x86_64-apple-darwin         app + dmg
 #   macos26-arm64      macos-26          aarch64-apple-darwin        app + dmg
@@ -63,7 +63,7 @@ jobs:
             os: windows-11-arm
             target: aarch64-pc-windows-msvc
             bundles: 'nsis'
-            note: '唯一的原生 arm64 Windows 镜像；WiX 的 arm64 MSI 未验证，故只出 NSIS'
+            note: '唯一的原生 arm64 Windows 镜像；WiX 的 arm64 MSI 未验证，故只出 exe 安装包（NSIS）'
 
           # ── macOS ─────────────────────────────────────────────────
           - name: macos15-arm64
@@ -184,6 +184,7 @@ jobs:
           node tools/selftest.js
 
       # bundles 的值必须加引号，否则 PowerShell 会把 nsis,msi 当数组拆成两个参数。
+      # 值只能用 Tauri 的 bundle 名（Windows 是 nsis / msi）；exe 安装包由 nsis 打包器产出。
       # 要签名 macOS 包时在本步补 env，别塞空值 —— Tauri 见到空字符串的
       # APPLE_CERTIFICATE 会当成「有证书」去解析，反而报错。
       - name: 构建可执行文件与安装包
@@ -226,7 +227,7 @@ jobs:
 
       # Windows 产物散着传（不打 zip），每个文件统一重命名成
       #   PDScope-<目标>-<版本段>-<内容>.<ext>
-      # 安装包（NSIS setup.exe / MSI）与绿色版单 exe 各一个文件。
+      # 安装包（exe 安装包，由 NSIS 产出的 setup.exe / MSI）与绿色版单 exe 各一个文件。
       - name: 归置产物（Windows）
         if: runner.os == 'Windows'
         shell: pwsh
@@ -253,7 +254,7 @@ jobs:
       # archive:false 报错。每个产物文件后面紧跟着它的 .sha256，也逐个直传、名字对得上。
       # 用 contains(matrix.bundles, ...) 判断该目标是否产这个文件，缺 MSI 的 arm64 不会误传。
 
-      - name: 上传 NSIS 安装包
+      - name: 上传 exe 安装包
         if: contains(matrix.bundles, 'nsis')
         uses: actions/upload-artifact@v7
         with:
@@ -262,7 +263,7 @@ jobs:
           path: PDScope-${{ matrix.name }}-${{ env.VERSEG }}/PDScope-${{ matrix.name }}-${{ env.VERSEG }}-setup.exe
           archive: false
 
-      - name: 上传 NSIS 校验和
+      - name: 上传 exe 校验和
         if: contains(matrix.bundles, 'nsis')
         uses: actions/upload-artifact@v7
         with:
@@ -365,6 +366,11 @@ jobs:
         if: always()
         shell: bash
         run: |
+          # 摘要里只给人看产物名，所以把 Tauri 的 bundle 名换成产物名的说法：
+          # nsis 产出的就是 exe 安装包（*-setup.exe），写成 nsis 反而不好认。
+          # 仅影响这行展示，构建用的 matrix.bundles 仍是 nsis。
+          bundles_display="${{ matrix.bundles }}"
+          bundles_display="${bundles_display//nsis/exe}"
           {
             echo "### \`${{ matrix.name }}\`"
             echo ""
@@ -372,7 +378,7 @@ jobs:
             echo "| --- | --- |"
             echo "| runner | \`${{ matrix.os }}\` |"
             echo "| Rust target | \`${{ matrix.target }}\` |"
-            echo "| 安装包 | ${{ matrix.bundles }} |"
+            echo "| 安装包 | ${bundles_display} |"
             echo "| 说明 | ${{ matrix.note }} |"
           } >> "$GITHUB_STEP_SUMMARY" || true
 
