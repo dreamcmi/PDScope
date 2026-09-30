@@ -6,9 +6,10 @@
  *   node tools/cli.js <file> [--channel 0] [--json] [--csv] [--limit 50] [--verbose]
  *                            [--rate 2500000]
  *
- * 支持两种格式，按文件内容自动分流（不看扩展名）：
+ * 支持三类容器，按文件内容自动分流（不看扩展名）：
  *   · .atkcc —— 正点原子 ATK-C 抓的原始电平采样，走 BMC → 4B5B；
- *   · .sqlite —— POWER-Z 分析仪导出的库，报文已经是逻辑字节。
+ *   · .sqlite —— POWER-Z 分析仪导出的库；
+ *   · .pdStream / .ufcsStream —— POWER-Z 二进制记录流，报文已经是逻辑字节。
  *
  * 采样率默认取文件声明（channel.ini），文件没声明或声明得离谱时用波形节拍反推；
  * `--rate` 可强制指定，用于排查异常文件（解不出来时先怀疑采样率）。
@@ -56,20 +57,20 @@ if (!args.file) {
 const bytes = new Uint8Array(await readFile(args.file));
 const tOpen = Date.now();
 
-// 格式分流：POWER-Z 的 SQLite / .pdStream 与 ATK-C 的 ZIP 靠文件内容区分，扩展名只作参考
+// 格式分流：POWER-Z 的 SQLite / 二进制流与 ATK-C 的 ZIP 靠文件内容区分，扩展名只作参考
 const inflate = await makeNodeInflator();
 const pzKind = sniffPowerz(bytes);
-const isPds = !pzKind && sniffPdStream(bytes);
+const isStream = !pzKind && sniffPdStream(bytes);
 const cap = pzKind ? PowerzCapture.open(bytes)
-  : isPds ? PdStreamCapture.open(bytes)
+  : isStream ? PdStreamCapture.open(bytes)
     : await AtkccCapture.open(bytes, { inflate });
-const pz = !!pzKind || isPds;
-const container = pzKind ? 'SQLite' : isPds ? '.pdStream' : 'ATK-C';
-console.error(`[open] ${Date.now() - tOpen}ms  ${pz ? `POWER-Z（${cap.meta.protocol}，${cap.meta.tableRows} 行事件，${container}）` : 'ATK-C（原始采样）'}`
+const pz = !!pzKind || isStream;
+const sourceLabel = isStream ? cap.meta.title : pzKind ? 'POWER-Z · SQLite' : 'ATK-C（原始采样）';
+console.error(`[open] ${Date.now() - tOpen}ms  ${pz ? `${sourceLabel}（${cap.meta.protocol}，${cap.meta.tableRows} 行事件）` : sourceLabel}`
   + `  采样率=${cap.meta.sampleRate}Hz`
   + (pz ? '（分析仪毫秒时间戳，按 1 采样点 = 1 ms 映射）' : `${cap.meta.sampleRateRaw ? `（${cap.meta.sampleRateRaw}）` : '（文件未声明）'}`)
   + `  totalSamples=${cap.meta.totalSamples}  duration=${cap.durationSec.toFixed(3)}s  channels=${cap.meta.channels.length}`
-  + (isPds ? `  无 ADC 波形（.pdStream 只含报文）` : ''));
+  + (isStream ? `  无 ADC 波形（${cap.meta.title} 只含报文）` : ''));
 
 if (args.listChannels) {
   if (pz) console.error('  分析仪导出没有「分块通道」概念（单通路）');

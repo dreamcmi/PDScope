@@ -92,9 +92,9 @@ export function csvText(packets, { protocol = 'USB PD', bom = true } = {}) {
   return (bom ? CSV_BOM : '') + lines.join(CSV_EOL);
 }
 
-/** 导出用的文件名主干：去掉抓包扩展名（`.atkcc` / `.sqlite` / `.db`） */
+/** 导出用的文件名主干：去掉抓包扩展名（`.atkcc` / `.sqlite` / `.db` / 流格式） */
 export function csvBase(fileName) {
-  return String(fileName || 'pdscope').replace(/\.(atkcc|sqlite|db)$/i, '');
+  return String(fileName || 'pdscope').replace(/\.(atkcc|sqlite|db|pdstream|ufcsstream)$/i, '');
 }
 
 /**

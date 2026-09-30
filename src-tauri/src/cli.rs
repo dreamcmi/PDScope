@@ -88,7 +88,7 @@ fn looks_like_capture(s: &str) -> bool {
     match Path::new(s).extension().and_then(|e| e.to_str()) {
         Some(ext) => matches!(
             ext.to_ascii_lowercase().as_str(),
-            "atkcc" | "sqlite" | "db" | "bin" | "zip"
+            "atkcc" | "sqlite" | "db" | "bin" | "zip" | "pdstream" | "ufcsstream"
         ),
         None => false,
     }
@@ -128,6 +128,7 @@ pub fn help_text() -> String {
          抓包格式按**文件内容**自动分流，不看扩展名：\n\
          \x20 · 正点原子 ATK-C 的 .atkcc（CC 线原始电平采样 → BMC → 4B5B → PD 报文）\n\
          \x20 · POWER-Z 分析仪导出的 .sqlite（USB PD 或 UFCS，按表名分流）\n\
+         \x20 · POWER-Z 的 .pdStream / .ufcsStream（二进制记录流，按 Raw 内容分流）\n\
          \n\
          退出码：0 成功 · 1 导出失败（文件坏了 / 写不进去） · 2 用法不对\n\
          \n\

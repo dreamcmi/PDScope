@@ -10,8 +10,10 @@
 | **POWER-Z**（ChargerLAB） | `.sqlite` | 分析仪**已经解好的逻辑字节** + ADC 采样序列 | SQLite 读表 → Raw blob 拆事件 → 同一套 PD 语义解析 |
 | **POWER-Z**（录制 UFCS） | `.sqlite` | 同上，但录的是 **D+/D- 上的 UFCS**（融合快速充电） | SQLite 读表 → 定位 UFCS 帧 → 独立 UFCS 解析库（UART/消息头/CRC-8） |
 | **POWER-Z**（另一种导出） | `.pdStream` | 同一个抓包的**报文流**（只有 `pd_table`，**没有 ADC 波形**） | 二进制记录流 → 同一套 PD 语义解析（见 [格式](doc/format-pdstream.md)） |
+| **POWER-Z**（UFCS 记录流） | `.ufcsStream` | UFCS 报文与状态事件（对应 `ufcs_table`，**没有 ADC 波形**） | 二进制记录流 → 独立 UFCS 解析库（见 [格式](doc/format-pdstream.md)） |
 
 `.sqlite` 再按表名细分：有 `pd_table` 走 USB PD，有 `ufcs_table` 走 UFCS。
+两种记录流共用外层布局，按 Raw 内容区分 PD / UFCS，不依赖扩展名。
 几条路径解出来的报文对象**同形**，所以界面、筛选、详情、时间轴、导出只有「协议相关的那几处」分叉。
 
 解析与界面全部在前端完成 —— **零依赖、零网络、不上传任何数据**。支持 **Windows / macOS / Linux**。

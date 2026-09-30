@@ -1,23 +1,24 @@
 /**
- * pdstream.js — POWER-Z 的 `.pdStream` 容器
+ * pdstream.js — POWER-Z 的 `.pdStream` / `.ufcsStream` 记录流容器
  *
  * ── 这是什么 ────────────────────────────────────────────────────────
- * 同一份抓包，POWER-Z 上位机可以导出两种文件：
+ * POWER-Z 上位机支持以下导出容器：
  *
  *   · `.sqlite`   三张表：`pd_chart`（ADC 采样序列）、`pd_table`（事件行 + `Raw` blob）、
  *                 `pd_table_key`（会话密钥，导出文件里为空）
  *   · `.pdStream` **只有 `pd_table` 那部分**：二进制、无文件头 / 无索引 / 无校验和
+ *   · `.ufcsStream` 使用相同外层布局，payload 对应 `ufcs_table.Raw`
  *
- * 所以这里**不是第三种协议**：报文语义照样交给 `PdDecoder`（PD）那一套，
+ * 所以这里**不是新协议**：按 Raw 内容识别 PD / UFCS，再交给各自的解码器，
  * 本文件只负责把「表格」从二进制里读出来，然后交给 `PowerzCapture` 现成的解码流程。
- * 与 `.sqlite` 的唯一实质差别是**没有 ADC 波形**（没有 `pd_chart`），
+ * 与 `.sqlite` 的唯一实质差别是**没有 ADC 波形**（没有 `pd_chart` / `ufcs_chart`），
  * 于是时间轴没有曲线可画 —— 界面已有的「这份抓包没有模拟量轨迹数据」分支正好接住。
  *
  * ── 字节布局（实测归纳，依据见 doc/format-pdstream.md）────────────────
  * 文件 = 记录首尾相接，重复 N 次；**没有文件头、没有尾、没有索引**：
  *
  *   ┌ u32 BE  payloadLen   payload 的字节数（实测取值 6 / 8 / 12 / 28 / 32）
- *   ├ u8[]    payload      与同名 `.sqlite` 的 `pd_table.Raw` **逐字节相同**
+ *   ├ u8[]    payload      对应同名 `.sqlite` 的 `pd_table.Raw` / `ufcs_table.Raw`
  *   ├ f64 BE  Time         秒（相对抓包起点，单调不减）
  *   ├ f64 BE  Vbus         伏
  *   └ f64 BE  Ibus         安
@@ -40,6 +41,7 @@
  */
 
 import { PowerzCapture, POWERZ_KINDS, POWERZ_RATE } from './powerz.js';
+import { ufcsParseRecord, ufcsParseEvent } from '../ufcs/index.js';
 
 /** 每条记录的定长开销：4 字节长度 + 3 个 f64 */
 export const PDSTREAM_REC_FIXED = 28;
@@ -61,7 +63,7 @@ const MAX_VOLT = 120;
 const MAX_AMP = 20;
 
 /**
- * 把 `.pdStream` 读成记录数组。
+ * 把 `.pdStream` / `.ufcsStream` 的共用容器读成记录数组。
  *
  * 不做任何猜测：任何一步对不上就抛错并说明**卡在哪里**（偏移 + 原因），
  * 这样「打不开」时能直接看出是文件被截断、还是根本不是这个格式。
@@ -72,12 +74,12 @@ const MAX_AMP = 20;
  */
 export function readPdStream(u8) {
   const fail = (off, why) => {
-    const e = new Error(`不是 .pdStream：偏移 0x${off.toString(16)} 处${why}`);
+    const e = new Error(`不是 .pdStream/.ufcsStream：偏移 0x${off.toString(16)} 处${why}`);
     e.offset = off;
     throw e;
   };
-  if (!(u8 instanceof Uint8Array)) throw new Error('不是 .pdStream：入参不是字节');
-  if (u8.length < PDSTREAM_REC_FIXED * MIN_RECORDS) throw new Error('不是 .pdStream：文件太短');
+  if (!(u8 instanceof Uint8Array)) throw new Error('不是 .pdStream/.ufcsStream：入参不是字节');
+  if (u8.length < PDSTREAM_REC_FIXED * MIN_RECORDS) throw new Error('不是 .pdStream/.ufcsStream：文件太短');
 
   const view = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
   const records = [];
@@ -113,7 +115,7 @@ export function readPdStream(u8) {
 }
 
 /**
- * 只看结构，判断是不是 `.pdStream`。不抛错（认不出就 false），不复制字节。
+ * 只看结构，判断是不是 PD / UFCS 记录流。不抛错（认不出就 false），不复制字节。
  *
  * 调用点：界面/CLI 的格式分流。它排在 `sniffPowerz` 之后，所以正常不会碰到
  * SQLite 文件；但为了防御「随便丢进来一个大文件」，走满 `SNIFF_MAX_RECORDS`
@@ -154,7 +156,24 @@ export function sniffPdStream(u8) {
 }
 
 /**
- * 把行写成 `.pdStream` 字节。行的形状与 `pd_table` 一致（`{time, vbus, ibus, raw}`），
+ * 按 Raw 内容区分 PD / UFCS，不依赖扩展名，与 NG 的判定规则一致。
+ * PD 数据也可能偶然匹配 UFCS 字节模式，因此要求前 64 条记录中出现重复证据。
+ * @param {ReturnType<typeof readPdStream>} parsed
+ * @returns {'pd'|'ufcs'}
+ */
+export function sniffStreamProtocol(parsed) {
+  let frames = 0;
+  let events = 0;
+  for (let i = 0; i < Math.min(parsed.records.length, 64); i++) {
+    const raw = parsed.records[i].raw;
+    if (ufcsParseRecord(raw)) frames++;
+    else if (ufcsParseEvent(raw)) events++;
+  }
+  return frames >= 2 || (frames >= 1 && events >= 1) || events >= 3 ? 'ufcs' : 'pd';
+}
+
+/**
+ * 把行写成 PD / UFCS 记录流字节（`{time, vbus, ibus, raw}`，保留原始协议 payload），
  * 时间必须是非减的（写入前按 Time 排序，与 sqlite 路径的读法保持一致）。
  *
  * @param {Array<{time:number, vbus:number, ibus:number, raw:Uint8Array|ArrayBuffer}>} rows
@@ -187,14 +206,14 @@ export function writePdStream(rows) {
 /* ────────────────────────── 抓包对象 ────────────────────────── */
 
 /**
- * `.pdStream` 只有一张「表」。这里做一个**只读的虚拟表适配器**，
+ * 记录流只有一张「表」。这里做一个**只读的虚拟表适配器**，
  * 形状对齐 `SqliteReader` 的那几个方法，于是 `PowerzCapture` 的构造与解码流程
  * 一行都不用改（报文语义、事件拆分、CRC 口径全部复用）。
  */
 class PdStreamTable {
-  constructor(parsed) {
+  constructor(parsed, kind) {
     this.parsed = parsed;
-    this.name = POWERZ_KINDS.pd.table;
+    this.name = POWERZ_KINDS[kind].table;
     this.rows_ = parsed.records;
   }
 
@@ -218,11 +237,13 @@ export class PdStreamCapture extends PowerzCapture {
    * @param {ReturnType<typeof readPdStream>} parsed
    */
   constructor(u8, parsed) {
-    super(new PdStreamTable(parsed), 'pd', u8);
-    this.container = 'pdstream';
+    const kind = sniffStreamProtocol(parsed);
+    super(new PdStreamTable(parsed, kind), kind, u8);
+    this.container = kind === 'ufcs' ? 'ufcsstream' : 'pdstream';
     this.parsed = parsed;
 
     const m = this.meta;
+    const extension = kind === 'ufcs' ? '.ufcsStream' : '.pdStream';
     // 时间基准：记录里的 Time 就是秒，按「1 采样点 = 1 ms」映射（与 .sqlite 同一套口径）。
     // 没有 `pd_chart` 就没有采样序列，但**报文时间照样撑起时间轴** —— 末条记录的时间即总长。
     const totalSamples = Math.max(m.totalSamples, Math.round(parsed.records[parsed.records.length - 1].time * POWERZ_RATE));
@@ -230,8 +251,8 @@ export class PdStreamCapture extends PowerzCapture {
     m.durationSec = totalSamples / POWERZ_RATE;
     m.channels[0].totalSamples = totalSamples;
 
-    m.title = 'POWER-Z · .pdStream';
-    m.container = 'pdstream';
+    m.title = `POWER-Z · ${extension}`;
+    m.container = this.container;
     m.sqlite = null;                                  // 不是 SQLite，别让界面去读页大小
     m.busLabels = [];                                 // 没有第三、第四路模拟量 → 也没有「差分线」档
     m.stream = {
@@ -241,7 +262,7 @@ export class PdStreamCapture extends PowerzCapture {
       firstTime: parsed.records[0].time,
       lastTime: parsed.records[parsed.records.length - 1].time,
     };
-    m.sampleRateNote = 'POWER-Z 的 .pdStream 只有报文与毫秒时间戳，没有 ADC 波形；'
+    m.sampleRateNote = `POWER-Z 的 ${extension} 只有报文与毫秒时间戳，没有 ADC 波形；`
       + '时间轴按「1 采样点 = 1 ms」映射（与同名的 .sqlite 一致）';
   }
 

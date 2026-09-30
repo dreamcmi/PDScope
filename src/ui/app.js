@@ -331,9 +331,9 @@ addEventListener('drop', (e) => {
  *
  * 拖进来的东西五花八门：文件夹会变成 0 字节的伪文件、顺手拖进来的图片、.DS_Store…
  * 所以先按「名字像不像抓包」筛一道。但只要**一个都不像**，就把全部放进来交给内容嗅探
- * （`sniffPowerz` / ZIP 魔数）自己判 —— 免得用户把抓包改了个扩展名就再也打不开。
+ * （`sniffPowerz` / 流结构 / ZIP 魔数）自己判 —— 免得用户把抓包改了个扩展名就再也打不开。
  */
-const CAPTURE_EXT = /\.(atkcc|sqlite|db|bin|zip)$/i;
+const CAPTURE_EXT = /\.(atkcc|sqlite|db|bin|zip|pdstream|ufcsstream)$/i;
 function pickCaptureFiles(list) {
   const all = [...list].filter((f) => f && (f.size > 0 || f.name));
   const named = all.filter((f) => CAPTURE_EXT.test(f.name));
@@ -408,8 +408,8 @@ async function loadContainer(file) {
     setProgress(0.05, `${fmtSize(buf.length)} 已载入，解析容器…`);
 
     // ── 格式分流：只看文件内容（魔数 + 结构自证），不看扩展名 ──
-    // 三种容器：ATK-C 的 ZIP 原始采样、POWER-Z 的 SQLite（`.sqlite`）、
-    // POWER-Z 的二进制记录流（`.pdStream`，本质就是 `.sqlite` 里那张 `pd_table`）。
+    // 几种容器：ATK-C 的 ZIP 原始采样、POWER-Z 的 SQLite（`.sqlite`）、
+    // 以及 `.pdStream` / `.ufcsStream` 二进制记录流（由 Raw 内容识别 PD / UFCS）。
     // 后两者的**报文解码流程完全相同**（见 core/pdstream.js），所以这里只是选个对象。
     const cap = sniffPowerz(buf)
       ? PowerzCapture.open(buf)
@@ -529,12 +529,13 @@ async function decodeDoc(doc) {
   doc.cancel = false;
   doc.state = 'running';
   const pz = doc.meta?.source === 'powerz';
-  const pds = doc.meta?.container === 'pdstream';
+  const m = doc.meta;
+  const isStream = m.container === 'pdstream' || m.container === 'ufcsstream';
   /** 这段解码期间用户可能已经切走 —— 那就只把结果收进界面，一行界面都别动 */
   const visible = () => S === doc;
   renderTabs();
   showProgress(pz ? `正在解析通道 ${channel}…` : `正在解码通道 ${channel}…`,
-    pz ? `${pds ? '.pdStream' : 'SQLite'} 事件流 → PD 报文` : 'BMC 位流 → 4B5B → PD 报文');
+    pz ? `${isStream ? m.title : 'SQLite'} 事件流 → ${m.protocol} 报文` : 'BMC 位流 → 4B5B → PD 报文');
 
   /**
    * 进度有两个去处：界面那根进度条（只在本文档还激活时动），以及
@@ -966,8 +967,9 @@ function renderChannels() {
     $('#chHint').textContent = '单通路';
     const b = el('div', 'chitem static is-on');
     b.innerHTML = `<b>${esc(m.protocol)}</b><span>${(pz?.tableRows ?? m.tableRows)} 行事件</span>`;
-    // `.pdStream` 不是 SQLite（没有页、也没有 ADC 采样表），别去读那些字段
-    b.title = m.container === 'pdstream'
+    // `.pdStream` / `.ufcsStream` 不是 SQLite（没有页、也没有 ADC 采样表），别去读那些字段
+    const isStream = m.container === 'pdstream' || m.container === 'ufcsstream';
+    b.title = isStream
       ? `${m.title}｜${m.stream.records} 条记录 · ${fmtSize(m.stream.bytes)}`
         + `（净荷 ${fmtSize(m.stream.payloadBytes)}）｜无 ADC 波形`
       : `${m.title}｜SQLite ${m.sqlite.pageSize} B/页 · ${m.sqlite.pageCount} 页`
@@ -1263,7 +1265,7 @@ function setEmptyState(kind, extra) {
     t.textContent = '这份文件打不开';
     p.textContent = extra || '无法识别它的格式。';
     n.textContent = '只认 ATK-C 的 .atkcc（ZIP 容器）、POWER-Z 的 .sqlite（SQLite 库）'
-      + '与 .pdStream（同一个抓包的二进制导出）—— 按文件内容与结构判断，不看扩展名。';
+      + '与 .pdStream / .ufcsStream（二进制记录流）—— 按文件内容与结构判断，不看扩展名。';
     n.hidden = false;
     return;
   }
@@ -1297,7 +1299,7 @@ function setEmptyState(kind, extra) {
   }
   t.textContent = '打开一份 PD 抓包文件';
   p.innerHTML = '支持正点原子 ATK-C 的 <b>.atkcc</b>（原始电平采样，走 BMC → 4B5B 解码）'
-    + '与 POWER-Z 的 <b>.sqlite</b>（分析仪已解好的逻辑字节），两者解析后逐字段溯源。';
+    + '与 POWER-Z 的 <b>.sqlite</b> / <b>.pdStream</b> / <b>.ufcsStream</b>（分析仪已解好的逻辑字节），解析后逐字段溯源。';
   n.textContent = '也可以把文件直接拖进窗口 —— 一次拖多份，每份各占一个标签页';
   n.hidden = false;
 }
@@ -2231,7 +2233,7 @@ function exportAs(fmt) {
     blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
     name = csvFileName(S.fileName, S.channel);
   } else {
-    const base = (S.fileName || 'pdscope').replace(/\.(atkcc|sqlite|db)$/i, '');
+    const base = (S.fileName || 'pdscope').replace(/\.(atkcc|sqlite|db|pdstream|ufcsstream)$/i, '');
     blob = new Blob([JSON.stringify({
       file: S.fileName, channel: S.channel,
       // 实际采用的采样率 + 文件里声明的那个（不一致时 stats.sampleRateNote 里有人话解释）

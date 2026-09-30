@@ -1,6 +1,6 @@
-# POWER-Z `.pdStream` 格式（逆向结论）
+# POWER-Z `.pdStream` / `.ufcsStream` 格式
 
-同一个抓包，POWER-Z 的上位机可以导出两种文件：
+同一个 PD 抓包，POWER-Z 的上位机可以导出两种文件：
 
 | 容器 | 内容 | 体积（同一份 85 分钟抓包） |
 | ---- | ---- | -------------------------- |
@@ -13,6 +13,10 @@
 
 实现见 `src/js/core/pdstream.js`；造样本 / 互转见 `tools/make-test-pdstream.mjs`。
 
+UFCS 的 `.ufcsStream` 沿用下面的二进制布局，payload 对应 `ufcs_table.Raw`，
+报文语义交给已有的 `src/js/ufcs/` 解码器。它也没有 ADC 采样序列，
+UFCS 消息、CRC、链路方向、ACK/NCK 配对与状态事件统计复用 SQLite 的解析流程。
+
 ---
 
 ## 字节布局
@@ -21,11 +25,11 @@
 
 ```
 ┌ u32 BE  payloadLen   payload 的字节数
-├ u8[]    payload      与同名 .sqlite 的 pd_table.Raw 逐字节相同
+├ u8[]    payload      PD 对应 pd_table.Raw，UFCS 对应 ufcs_table.Raw
 ├ f64 BE  Time         秒（相对抓包起点，单调不减）
 ├ f64 BE  Vbus         伏
 └ f64 BE  Ibus         安
-                  ↑ 重复 payloadLen 条记录，直到文件末尾
+                  ↑ 重复上述记录，直到文件末尾
 ```
 
 | 项 | 结论 | 依据 |
@@ -77,8 +81,12 @@
 `readPdStream()` 认不出时会**报出卡在哪个偏移、为什么**，例如：
 
 ```
-不是 .pdStream：偏移 0x4a 处 payload 长度 12 越过了文件末尾
+不是 .pdStream/.ufcsStream：偏移 0x4a 处 payload 长度 12 越过了文件末尾
 ```
+
+通过外层校验后，`sniffStreamProtocol()` 检查前 64 条记录的 Raw：出现至少两条
+已知 UFCS 帧、一条 UFCS 帧加一条状态事件，或三条状态事件时，选择 UFCS；
+否则保持 PD。该规则与 NG 一致，不依赖文件扩展名，也不把单次字节巧合当作协议证据。
 
 ## 代码里怎么用
 
@@ -86,10 +94,13 @@
 import { sniffPdStream, PdStreamCapture, readPdStream, writePdStream } from './pdstream.js';
 
 if (sniffPdStream(u8)) {
-  const cap = PdStreamCapture.open(u8);        // 与 PowerzCapture 同形
-  const { packets, stats } = await cap.decode();  // 报文语义完全复用 PD 解码器
+  const cap = PdStreamCapture.open(u8);        // 自动区分 PD / UFCS，与 PowerzCapture 同形
+  const { packets, stats } = await cap.decode();  // 复用对应协议的解码器
 }
 ```
+
+为兼容原有调用，读取器和抓包类仍保留 `PdStream` 名称；`cap.kind` 为 `pd` 或 `ufcs`，
+`cap.meta.container` 为 `pdstream` 或 `ufcsstream`，界面据此展示对应的来源名称。
 
 实现上 `PdStreamCapture` 继承 `PowerzCapture`，只做两件事：给一个**只读虚拟表**
 （`hasTable` / `count` / `rows` 三个方法，形状对齐 `SqliteReader`），以及覆写

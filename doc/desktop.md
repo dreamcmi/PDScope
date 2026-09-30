@@ -57,7 +57,7 @@ npm run app:build       # 出当前平台的全部安装包
 
 ## 怎么打开一个抓包文件
 
-四种方式，任选（`.atkcc`、POWER-Z 的 `.sqlite` 与 `.pdStream` 都可以）：
+四种方式，任选（`.atkcc`、POWER-Z 的 `.sqlite`、`.pdStream` 与 `.ufcsStream` 都可以）：
 
 1. **菜单**：文件 → 打开抓包…（`Ctrl/⌘+O`）
 2. **拖拽**：把抓包文件拖进窗口（`dragDropEnabled: false` 就是为这个设的 ——
@@ -67,7 +67,7 @@ npm run app:build       # 出当前平台的全部安装包
    pdscope.exe "D:\抓包\绿联70w.atkcc"
    pdscope.exe "D:\抓包\山泽60w.sqlite"
    ```
-4. **拖到 exe 图标上**，或装了安装包后**双击 `.atkcc`**（`tauri.conf.json` 里声明了 `.atkcc` 文件关联；
+4. **拖到 exe 图标上**，或装了安装包后**双击 `.atkcc` / `.ufcsStream`**（`tauri.conf.json` 里声明了这两种文件关联；
    `.sqlite` / `.pdStream` 是通用或厂商私有扩展名，没有抢来当关联，走前三种方式即可）
 
 第 3、4 种走的是同一条路：外壳读文件字节 → 通过 IPC 交给页面 → 页面交给解析内核。
@@ -92,6 +92,7 @@ pdscope.exe "D:\抓包\山泽60w.sqlite" --csv --out 山泽.csv      # 写法二
 pdscope.exe "D:\抓包\apple_40w.atkcc" --csv --channel 3       # 多通道文件指定通道（默认自动挑）
 pdscope.exe "D:\抓包\ufcs_vivo.sqlite" --csv --limit 500      # 只导前 500 条（取样 / 排查）
 pdscope.exe "D:\抓包\DJIPOWER_PPS.pdStream" --csv            # POWER-Z 的 .pdStream 同样认（只含报文，无波形）
+pdscope.exe "D:\抓包\CTK10UL_X300U_UFCS.ufcsStream" --csv    # UFCS 记录流，沿用 UFCS 解码与状态事件统计
 pdscope.exe "D:\抓包\绿联70w.atkcc" --csv --out - > 出.csv    # CSV 打到标准输出（可接管道）
 pdscope.exe --help                                            # 用法；--version 看版本
 ```
