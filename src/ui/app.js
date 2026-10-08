@@ -26,11 +26,12 @@
  */
 
 import { AtkccCapture, scanChannelActivity } from '../js/core/atkcc.js';
-import { decodeChannel, buildBusSeries } from '../js/core/pipeline.js';
+import { decodeChannel, buildBusSeries, attachBusValues } from '../js/core/pipeline.js';
 import { PowerzCapture, sniffPowerz } from '../js/core/powerz.js';
-import { PdStreamCapture, sniffPdStream } from '../js/core/pdstream.js';
+import { PowerzStreamCapture, sniffPowerzStream } from '../js/core/pdstream.js';
 import { makeBrowserInflator } from '../js/core/inflate.js';
-import { csvClock, csvText, csvExport, csvFileName, fmtRate } from '../js/core/csv.js';
+import { csvClock, csvText, csvExport, csvBase, csvFileName, fmtRate } from '../js/core/csv.js';
+import { PD_SPEC_PROFILES } from '../js/pd/index.js';
 
 /* ═══════════════════════ 运行形态探测 ═══════════════════════ */
 /**
@@ -59,6 +60,7 @@ const ENV = (() => {
 
 /* ═══════════════════════ 小工具 ═══════════════════════ */
 const $  = (s, r = document) => r.querySelector(s);
+const fmtMeasurement = (value) => Number.isFinite(value) ? value.toFixed(3) : '—';
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const el = (tag, cls, txt) => {
   const n = document.createElement(tag);
@@ -84,7 +86,7 @@ function toneOf(p) {
   if (p.msgType === 'VDM') return 'VDM';
   if (p.msgKind === 'custom') return 'Custom';     // UFCS 厂家自定义消息
   if (p.msgKind === 'ext') return 'Extended';
-  if (p.msgKind === 'data') return 'Data';
+  if (p.msgKind === 'data' || p.msgKind === 'test') return 'Data';
   if (p.msgKind === 'special') return 'Error';
   return 'Control';
 }
@@ -112,6 +114,7 @@ const linkTitle = () => (isUfcs() ? '物理链路' : 'SOP 类型');
 const linkValues = () => (isUfcs()
   ? [['D+', 'D+'], ['D-', 'D−'], ['D±', 'D±']]
   : [['SOP', 'SOP'], ["SOP'", 'SOP&prime;'], ["SOP''", 'SOP&Prime;'],
+    ["SOP' Debug", 'SOP&prime; Debug'], ["SOP'' Debug", 'SOP&Prime; Debug'],
     ['Hard Reset', 'Hard Reset'], ['Cable Reset', 'Cable Reset']]);
 /** 报文类别一栏的候选 */
 const catValues = () => (isUfcs()
@@ -174,7 +177,7 @@ function newFilters(protocol = 'pd') {
     roles: new Set(['SRC', 'SNK', 'Plug']),
     sops: new Set(ufcs
       ? ['D+', 'D-', 'D±']
-      : ['SOP', "SOP'", "SOP''", 'Hard Reset', 'Cable Reset']),
+      : ['SOP', "SOP'", "SOP''", "SOP' Debug", "SOP'' Debug", 'Hard Reset', 'Cable Reset']),
     cats: new Set(ufcs
       ? ['Control', 'Data', 'Custom', 'Error']
       : ['Control', 'Data', 'Extended', 'VDM', 'Error']),
@@ -203,6 +206,7 @@ function newDoc(file) {
     cap: null,
     meta: null,
     channel: 0,
+    specRevision: null,
     /** 本文件实际采用的采样率（声明 → 波形自检 → 兜底，见 pipeline.resolveSampleRate） */
     rate: 0,
     packets: [],
@@ -333,7 +337,7 @@ addEventListener('drop', (e) => {
  * 所以先按「名字像不像抓包」筛一道。但只要**一个都不像**，就把全部放进来交给内容嗅探
  * （`sniffPowerz` / ZIP 魔数）自己判 —— 免得用户把抓包改了个扩展名就再也打不开。
  */
-const CAPTURE_EXT = /\.(atkcc|sqlite|db|bin|zip)$/i;
+const CAPTURE_EXT = /\.(atkcc|sqlite|db|bin|zip|pdstream|ufcsstream)$/i;
 function pickCaptureFiles(list) {
   const all = [...list].filter((f) => f && (f.size > 0 || f.name));
   const named = all.filter((f) => CAPTURE_EXT.test(f.name));
@@ -409,12 +413,12 @@ async function loadContainer(file) {
 
     // ── 格式分流：只看文件内容（魔数 + 结构自证），不看扩展名 ──
     // 三种容器：ATK-C 的 ZIP 原始采样、POWER-Z 的 SQLite（`.sqlite`）、
-    // POWER-Z 的二进制记录流（`.pdStream`，本质就是 `.sqlite` 里那张 `pd_table`）。
+    // POWER-Z 的二进制记录流（`.pdStream` / `.ufcsStream`，来自对应协议的表行）。
     // 后两者的**报文解码流程完全相同**（见 core/pdstream.js），所以这里只是选个对象。
     const cap = sniffPowerz(buf)
       ? PowerzCapture.open(buf)
-      : sniffPdStream(buf)
-        ? PdStreamCapture.open(buf)
+      : sniffPowerzStream(buf)
+        ? PowerzStreamCapture.open(buf)
         : await AtkccCapture.open(buf, { inflate });
 
     doc.cap = cap;
@@ -516,6 +520,20 @@ function activateDoc(doc, channel) {
   return enqueue(async () => { doc.pending = false; await decodeDoc(doc); });
 }
 
+/** 精确规范选择跟随文件；报文头中的 2.0 仍按旧编码解释。 */
+function setSpecRevision(value, doc = S) {
+  const profile = value === '' || value === 'auto' || value == null ? null : String(value);
+  if (profile !== null && !PD_SPEC_PROFILES[profile]) throw new RangeError('PD 规范版本必须为 2.0/3.0/3.1/3.2 或 auto');
+  if (!doc?.cap || doc.meta?.protocol === 'UFCS') return Promise.resolve(false);
+  if (doc.specRevision === profile && doc.state === 'done') return Promise.resolve(true);
+  doc.specRevision = profile;
+  return activateDoc(doc, doc.channel).then(() => doc.state === 'done');
+}
+
+$('#specRevision').addEventListener('change', () => {
+  setSpecRevision($('#specRevision').value).catch(err => toast(err.message, 'err'));
+});
+
 /**
  * 解码指定文档（用 `doc.channel` 那个通道），然后把整个界面刷新成它的样子。
  *
@@ -529,12 +547,12 @@ async function decodeDoc(doc) {
   doc.cancel = false;
   doc.state = 'running';
   const pz = doc.meta?.source === 'powerz';
-  const pds = doc.meta?.container === 'pdstream';
+  const streamLabel = doc.meta?.stream ? (doc.meta.protocol === 'UFCS' ? '.ufcsStream' : '.pdStream') : null;
   /** 这段解码期间用户可能已经切走 —— 那就只把结果收进界面，一行界面都别动 */
   const visible = () => S === doc;
   renderTabs();
   showProgress(pz ? `正在解析通道 ${channel}…` : `正在解码通道 ${channel}…`,
-    pz ? `${pds ? '.pdStream' : 'SQLite'} 事件流 → PD 报文` : 'BMC 位流 → 4B5B → PD 报文');
+    pz ? `${streamLabel || 'SQLite'} 事件流 → ${doc.meta.protocol} 报文` : 'BMC 位流 → 4B5B → PD 报文');
 
   /**
    * 进度有两个去处：界面那根进度条（只在本文档还激活时动），以及
@@ -550,6 +568,7 @@ async function decodeDoc(doc) {
   try {
     const { packets, stats } = pz
       ? await doc.cap.decode({
+        specRevision: doc.specRevision,
         shouldStop: () => doc.cancel,
         onProgress: (p) => {
           if (p.phase === 'read') report(0.30 + 0.30 * p.ratio, `读取事件行 ${Math.round(p.ratio * 100)}%`);
@@ -559,6 +578,7 @@ async function decodeDoc(doc) {
       : await decodeChannel(doc.cap, channel, {
         inflate,
         bitOrder: 'lsb',
+        specRevision: doc.specRevision,
         shouldStop: () => doc.cancel,
         onProgress: (p) => {
           report(0.3 + 0.65 * p.ratio, `分块 ${p.chunk}/${p.chunks} · 已解出 ${p.packets} 条`);
@@ -570,14 +590,8 @@ async function decodeDoc(doc) {
 
     // 附上 VBUS / IBUS
     const bus = doc.cap.meta.bus;
+    attachBusValues(packets, bus);
     for (const p of packets) {
-      let v = 0, i = 0;
-      if (bus && bus.length) {
-        let lo = 0, hi = bus.length - 1, ans = 0;
-        while (lo <= hi) { const m = (lo + hi) >> 1; if (bus[m].sample <= p.startSample) { ans = m; lo = m + 1; } else hi = m - 1; }
-        v = bus[ans].vbus; i = bus[ans].ibus;
-      }
-      p.vbus = v; p.ibus = i;
       p.kind = kindOf(p);
     }
     pairAckTone(packets);   // GoodCRC 与它确认的报文同色
@@ -891,6 +905,8 @@ function syncFilterUI() {
 
 function renderMeta() {
   syncAppbarChip();
+  $('#specRevision').value = S.specRevision ?? '';
+  $('#specRevision').disabled = !S.cap || isUfcs() || S.state === 'running';
 
   const box = $('#metaChips');
   box.innerHTML = '';
@@ -910,6 +926,7 @@ function renderMeta() {
   const add = (k, v) => box.appendChild(Object.assign(el('span', 'mchip'), { innerHTML: `${k} <b>${v}</b>` }));
 
   add('来源', pz ? esc(m.title) : 'ATK-C · .atkcc');
+  if (!isUfcs()) add('规范', S.specRevision ? `PD ${S.specRevision}` : '自动');
 
   // 时间基准 / 采样率：数值 + 来源标记。值不是写死的 —— ATK-C 来自 channel.ini 的声明，
   // 也可能由波形自检反推；POWER-Z 只有毫秒时间戳，按「1 采样点 = 1 ms」映射。
@@ -967,7 +984,7 @@ function renderChannels() {
     const b = el('div', 'chitem static is-on');
     b.innerHTML = `<b>${esc(m.protocol)}</b><span>${(pz?.tableRows ?? m.tableRows)} 行事件</span>`;
     // `.pdStream` 不是 SQLite（没有页、也没有 ADC 采样表），别去读那些字段
-    b.title = m.container === 'pdstream'
+    b.title = m.stream
       ? `${m.title}｜${m.stream.records} 条记录 · ${fmtSize(m.stream.bytes)}`
         + `（净荷 ${fmtSize(m.stream.payloadBytes)}）｜无 ADC 波形`
       : `${m.title}｜SQLite ${m.sqlite.pageSize} B/页 · ${m.sqlite.pageCount} 页`
@@ -1143,7 +1160,7 @@ function applyFilters(keepScroll) {
   const q = f.q.toLowerCase();
   const out = [];
   for (const p of S.packets) {
-    if (!f.roles.has(p.role)) continue;
+    if (p.role != null && !f.roles.has(p.role)) continue;
     if (!f.sops.has(p.sop)) continue;
     if (!f.cats.has(p.kind)) continue;
     if (f.types.size && !f.types.has(p.msgType)) continue;
@@ -1263,7 +1280,7 @@ function setEmptyState(kind, extra) {
     t.textContent = '这份文件打不开';
     p.textContent = extra || '无法识别它的格式。';
     n.textContent = '只认 ATK-C 的 .atkcc（ZIP 容器）、POWER-Z 的 .sqlite（SQLite 库）'
-      + '与 .pdStream（同一个抓包的二进制导出）—— 按文件内容与结构判断，不看扩展名。';
+      + '与 .pdStream / .ufcsStream（二进制记录流）—— 按文件内容与结构判断，不看扩展名。';
     n.hidden = false;
     return;
   }
@@ -1357,7 +1374,7 @@ function rowEl(p, i) {
   + `<div class="td"><span class="pill ${p.role}">${esc(p.role)}</span></div>`
   + `<div class="td num">${p.protocol === 'UFCS' ? (p.dataLen ?? '') : (p.nObjects ?? '')}</div>`
   + `<div class="td time">${fmtTime(p.timeMs)}</div>`
-  + `<div class="td bus">${p.vbus.toFixed(3)} V <em>/</em> ${p.ibus.toFixed(3)} A</div>`
+  + `<div class="td bus">${fmtMeasurement(p.vbus)} V <em>/</em> ${fmtMeasurement(p.ibus)} A</div>`
   + `<div class="td mono">${highlightHex(hex)}</div>`
   + `<div class="td note">${note || (p.crcOk === false ? '<span style="color:var(--err)">CRC 校验失败</span>' : '')}</div>`;
   r.addEventListener('click', () => select(i, true));
@@ -1437,7 +1454,7 @@ function renderDetail(p) {
 
   h.push(`<div class="dhero ${p.crcOk === false ? 'dhero-bad' : ''}">
     <div class="t1 ${cls}">${esc(p.msgType)}</div>
-    <div class="t2">#${p.index} · ${esc(p.sop)} · ${esc(p.role)} · ID ${p.msgId ?? '-'} · ${esc(revLabel)} · ${fmtTime(p.timeMs)}`
+    <div class="t2">#${p.index} · ${esc(p.sop)} · ${esc(p.role ?? '未编码角色')} · ID ${p.msgId ?? '-'} · ${esc(revLabel)} · ${fmtTime(p.timeMs)}`
     + (p.synthetic ? '<span class="srcbadge">分析仪逻辑字节</span>' : '') + `</div>
   </div>`);
 
@@ -1447,13 +1464,13 @@ function renderDetail(p) {
 
   // 概览
   h.push(`<div class="dsec"><h5>链路概览</h5><div class="dgrid">
-    ${cell('VBUS', p.vbus.toFixed(3) + ' V')}
-    ${cell('IBUS', p.ibus.toFixed(3) + ' A')}
+    ${cell('VBUS', fmtMeasurement(p.vbus) + ' V')}
+    ${cell('IBUS', fmtMeasurement(p.ibus) + ' A')}
     ${cell('起始时间', fmtTime(p.timeMs))}
-    ${cell(p.bitrateNominal ? '线上时长' : '报文时长', p.durationUs.toFixed(1) + ' µs')}
+    ${cell(p.bitrateNominal ? '估算编码时长' : '报文时长', p.durationUs.toFixed(1) + ' µs')}
     ${cell(ufcs ? '数据长度' : '数据对象', ufcs ? `${p.dataLen ?? 0} B` : String(p.nObjects ?? 0))}
-    ${cell(p.bitrateNominal ? (ufcs ? '标称波特率' : 'BMC 码率') : '实测码率', (p.bitrate / 1000).toFixed(1) + ' kbps')}
-    ${cell('CRC', p.crcOk === null ? '未记录（分析仪不存）' : p.crcOk ? '通过' : '校验失败')}
+    ${cell(p.bitrateNominal ? (ufcs ? '标称波特率' : '标称数据率') : '实测码率', (p.bitrate / 1000).toFixed(1) + ' kbps')}
+    ${cell('CRC', p.header == null ? '本帧格式不含 CRC' : p.crcOk === null ? '未记录' : p.crcOk ? '通过' : '校验失败')}
     ${p.ackOf != null ? cell(ufcs ? '应答的报文' : '确认的报文', `#${p.ackOf} · ${p.ackType || ''}`) : ''}
   </div></div>`);
 
@@ -1466,15 +1483,15 @@ function renderDetail(p) {
       ${bit('B8-3', '协议版本编号', bid(p.header, 3, 8), `UFCS ${p.revText || ''}`)}
       ${bit('B2-0', '消息类型', bid(p.header, 0, 2), `${p.msgKind === 'custom' ? '自定义消息' : p.msgKind === 'data' ? '数据消息' : '控制消息'} · 命令 0x${(p.msgTypeRaw ?? 0).toString(16).toUpperCase().padStart(2, '0')}`)}
     </div></div>`);
-  } else {
+  } else if (p.header != null) {
     h.push(`<div class="dsec"><h5>报文头 (16 bit)</h5><div class="dbits">
-      ${bit('B15', 'Extended', bid(p.header, 15, 15), p.msgKind === 'ext' ? '扩展消息' : '标准消息')}
+      ${bit('B15', p.rev < 3 ? 'Reserved' : 'Extended', bid(p.header, 15, 15), p.rev < 3 ? '接收端忽略' : p.msgKind === 'ext' ? '扩展消息' : '标准消息')}
       ${bit('B14-12', 'Object 数', bid(p.header, 12, 14), String(p.nObjects ?? 0))}
       ${bit('B11-9', 'Message ID', bid(p.header, 9, 11), String(p.msgId ?? 0))}
-      ${bit('B8', 'Power Role', bid(p.header, 8, 8), p.powerRole ? '1 · Source' : '0 · Sink')}
-      ${bit('B7-6', 'Spec Revision', bid(p.header, 6, 7), `${bid(p.header, 6, 7)} · PD ${p.rev === 3 ? '3.x' : '2.0'}`)}
-      ${bit('B5', 'Data Role', bid(p.header, 5, 5), p.dataRole ? '1 · DFP' : '0 · UFP')}
-      ${bit('B4-0', 'Message Type', bid(p.header, 0, 4), `${p.msgTypeRaw ?? 0} · ${p.msgType}`)}
+      ${bit('B8', p.link === 'cable' ? 'Cable Plug' : 'Power Role', bid(p.header, 8, 8), p.link === 'cable' ? (p.powerRole ? '1 · Plug' : '0 · Port') : p.powerRole ? '1 · Source' : '0 · Sink')}
+      ${bit('B7-6', 'Spec Revision', bid(p.header, 6, 7), `${bid(p.header, 6, 7)} · PD ${p.revText || '?'}`)}
+      ${bit('B5', p.link === 'cable' ? 'Reserved' : 'Data Role', bid(p.header, 5, 5), p.link === 'cable' ? '接收端忽略' : p.dataRole ? '1 · DFP' : '0 · UFP')}
+      ${bit(p.rev < 3 ? 'B3-0' : 'B4-0', 'Message Type', bid(p.header, 0, p.rev < 3 ? 3 : 4), `${p.msgTypeRaw ?? 0} · ${p.msgType}`)}
     </div></div>`);
   }
 
@@ -1483,7 +1500,8 @@ function renderDetail(p) {
       ${bit('B15', 'Chunked', bid(p.extHeader, 15, 15), (p.extHeader >> 15) & 1 ? '分块' : '不分块')}
       ${bit('B14-11', 'Chunk Number', bid(p.extHeader, 11, 14), String((p.extHeader >> 11) & 0xf))}
       ${bit('B10', 'Request Chunk', bid(p.extHeader, 10, 10), String((p.extHeader >> 10) & 1))}
-      ${bit('B9-0', 'Data Size', bid(p.extHeader, 0, 9), String(p.extHeader & 0x3ff) + ' B')}
+      ${bit('B9', 'Reserved', bid(p.extHeader, 9, 9), '接收端忽略')}
+      ${bit('B8-0', 'Data Size', bid(p.extHeader, 0, 8), String(p.extHeader & 0x1ff) + ' B')}
     </div></div>`);
   }
 
@@ -2231,7 +2249,7 @@ function exportAs(fmt) {
     blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
     name = csvFileName(S.fileName, S.channel);
   } else {
-    const base = (S.fileName || 'pdscope').replace(/\.(atkcc|sqlite|db)$/i, '');
+    const base = csvBase(S.fileName);
     blob = new Blob([JSON.stringify({
       file: S.fileName, channel: S.channel,
       // 实际采用的采样率 + 文件里声明的那个（不一致时 stats.sampleRateNote 里有人话解释）
@@ -2367,7 +2385,8 @@ window.pdscopeOpenUrl = async (name, url) => {
  *   外壳的默认输出路径用它（命名规则与界面导出一致，只有 csv.js 一处定义）。
  *   失败一律**抛异常**（不吞），让外壳决定怎么报 —— 命令行里没有 toast 可弹。
  */
-window.pdscopeExportCsv = async ({ name, bytes, channel, limit, bom = true, onProgress } = {}) => {
+window.pdscopeExportCsv = async ({ name, bytes, channel, limit, bom = true, onProgress, specRevision = null } = {}) => {
+  if (specRevision !== null && !PD_SPEC_PROFILES[specRevision]) throw new RangeError('PD 规范版本必须为 2.0/3.0/3.1/3.2 或 null');
   const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes ?? []);
   const file = new File([u8], name || 'capture.atkcc');
 
@@ -2377,6 +2396,7 @@ window.pdscopeExportCsv = async ({ name, bytes, channel, limit, bom = true, onPr
 
   // ② 指定通道优先于自动选道
   if (channel !== undefined && channel !== null && channel !== '') doc.channel = Number(channel);
+  doc.specRevision = specRevision;
 
   // ③ 解码。进度走 progressCb 旁路（decodeDoc 里 report 的第二站）
   doc.progressCb = typeof onProgress === 'function' ? onProgress : null;
@@ -2404,12 +2424,14 @@ window.PDScope = {
    * 与界面导出共用 `src/js/core/csv.js`，见该函数的注释。
    */
   exportCsv: window.pdscopeExportCsv,
+  setSpecRevision,
   /** 当前状态快照，供外壳自检 / 调试面板读取 */
   status: () => ({
     env: ENV.name,
     file: S.fileName,
     source: S.meta?.source ?? null,        // 'atkcc'（容器里没有这个字段）| 'powerz'
     protocol: S.meta?.protocol ?? 'USB PD',
+    specRevision: S.meta?.protocol === 'UFCS' ? null : S.specRevision,
     channel: S.channel,
     packets: S.packets?.length ?? 0,
     filtered: S.view?.length ?? 0,
@@ -2428,6 +2450,7 @@ window.PDScope = {
     error: d.error || null,
     source: d.meta?.source ?? null,
     protocol: d.meta?.protocol ?? null,
+    specRevision: d.meta?.protocol === 'UFCS' ? null : d.specRevision,
     channel: d.channel,
     packets: d.packets.length,
     filtered: d.view.length,

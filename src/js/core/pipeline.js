@@ -36,7 +36,7 @@ const YIELD_BUDGET_MS = 20;
 /**
  * @param {AtkccCapture} capture
  * @param {number} channel
- * @param {{inflate:Function, onProgress?:Function, shouldStop?:()=>boolean, sampleRate?:number}} opts
+ * @param {{inflate:Function, onProgress?:Function, shouldStop?:()=>boolean, sampleRate?:number, specRevision?:'2.0'|'3.0'|'3.1'|'3.2'|null}} opts
  * @returns {Promise<{packets:object[], stats:object}>}
  */
 export async function decodeChannel(capture, channel, opts) {
@@ -49,7 +49,7 @@ export async function decodeChannel(capture, channel, opts) {
   const sampleRate = rate.rate;
 
   const bmc = new BmcDecoder({ sampleRate });
-  const pd = new PdDecoder({ sampleRate });
+  const pd = new PdDecoder({ sampleRate, specRevision: opts.specRevision ?? null });
   const ex = new EdgeExtractor({ bitOrder: opts.bitOrder || 'lsb' });
   const packets = [];
 
@@ -137,6 +137,7 @@ export async function decodeChannel(capture, channel, opts) {
     packets,
     stats: {
       channel,
+      specRevision: opts.specRevision ?? null,
       totalSamples: sampleBase,
       durationSec: sampleBase / sampleRate,
       sampleRate,
@@ -250,12 +251,10 @@ export async function resolveSampleRate(capture, channel, inflate, opts = {}) {
  *   p.ackType —— 被确认报文的类型名（便于展示）
  *
  * 判据来源：
- *   ① **紧邻性**——GoodCRC 是对报文的即时应答，必然落在被确认报文之后最近处。
- *      向前找最近一条「非 GoodCRC 且方向相反」的报文，即物理上唯一合理的对象。
- *      这一条也能覆盖 Hard Reset / Cable Reset 这类没有 MessageID 的报文。
+ *   ① 向前找最近一条同 SOP、方向相反的普通报文；复位信令不参与确认配对。
  *   ② **MessageID**——PD 规范要求 GoodCRC 的 MessageID 与被确认报文相同。
- *      用它校验 ①；若邻近报文 CRC 完好却 ID 对不上（说明中间夹了别的方向的报文），
- *      再向后找同 ID 的那条。找不到仍按邻近关系配对。
+ *      邻近报文 CRC 未报错却 ID 对不上时，在窗口内继续向前找同 ID 的报文。
+ *      没有匹配对象时保留未配对状态。
  *
  * 注意不能只用 ②：被确认报文本身是坏包时 MessageID 不可信，若拿它去查
  * 「最近登记的同 ID 报文」，会误配到几十条报文之前的一条陈旧记录上。
@@ -266,18 +265,20 @@ export function linkGoodCrc(packets) {
   const pick = (p, needId) => {
     for (let j = p.index - 1; j >= 0 && j > p.index - ACK_WINDOW; j--) {
       const q = packets[j];
-      if (q.msgType === 'GoodCRC' || q.role === p.role) continue;
+      if (q.msgType === 'GoodCRC' || q.role === p.role || q.sop !== p.sop || q.msgKind === 'special') continue;
       if (needId && q.crcOk !== false && q.msgId !== p.msgId) continue;
       return q;
     }
     return null;
   };
   for (const p of packets) {
+    if (p.msgType === 'GoodCRC') { delete p.ackOf; delete p.ackType; }
     if (p.msgType !== 'GoodCRC' || p.crcOk === false) continue;
     let ref = pick(p, false);
     if (!ref) continue;
     // 邻近报文 CRC 完好但 MessageID 对不上 → 改按 MessageID 精确匹配
-    if (ref.crcOk !== false && ref.msgId !== p.msgId) ref = pick(p, true) || ref;
+    if (ref.crcOk !== false && ref.msgId !== p.msgId) ref = pick(p, true);
+    if (!ref) continue;
     p.ackOf = ref.index;
     p.ackType = ref.msgType;
   }
@@ -287,13 +288,22 @@ export function linkGoodCrc(packets) {
 
 /** 取某个采样点处的 VBUS/IBUS（阶梯保持） */
 export function busAt(bus, sample) {
-  if (!bus || !bus.length) return { vbus: 0, ibus: 0 };
+  if (!bus || !bus.length || sample < bus[0].sample) return { vbus: null, ibus: null };
   let lo = 0, hi = bus.length - 1, ans = 0;
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
     if (bus[mid].sample <= sample) { ans = mid; lo = mid + 1; } else hi = mid - 1;
   }
   return bus[ans];
+}
+
+/** 保留容器逐报文测量；仅在缺失时用 ADC 序列阶梯保持回填。 */
+export function attachBusValues(packets, bus) {
+  for (const p of packets) {
+    const b = busAt(bus, p.startSample);
+    if (!Number.isFinite(p.vbus)) p.vbus = Number.isFinite(b.vbus) ? b.vbus : null;
+    if (!Number.isFinite(p.ibus)) p.ibus = Number.isFinite(b.ibus) ? b.ibus : null;
+  }
 }
 
 /**

@@ -5,7 +5,11 @@
 node tools/version-check.mjs              # 版本号是否一致（最便宜，先跑它）
 node tools/syntax.mjs                     # 全量语法检查（几秒；界面脚本错一个字符就是白屏）
 node tools/selftest.js                    # 合成用例 99 项：4B5B / PD / CRC + 采样率 + plug 信令 + POWER-Z / UFCS 路径 + CSV 导出 + .pdStream 容器
-node tools/ackcheck.js                    # GoodCRC 配对（跨 5 份真实抓包）
+npm run pd:compliance                     # 对照四份 PD 规范的 121 组字段/帧/状态回归
+npm run pd:audit                          # 四版本入口、wire、对象、VDM 和浏览器版本/导出专项
+npm run ackcheck                         # 现造 12 条 PD 报文，验证 6 对 GoodCRC
+npm run regression                       # 8 组缺陷回归（纯 Node、无需私有文件）
+npm run regression:real                  # 附加 CTK6U / CTK10UL 与 DJIPOWER SQLite/流对照（需对应本地样本）
 node tools/powerz-inspect.mjs             # POWER-Z（.sqlite，PD 与 UFCS）全样本体检（需要样本文件，非 0 退出即异常）
 
 # 界面 66 项（ATK-C，含 1 项跳过）/ 73 项（POWER-Z·PD）/ 75 项（多份抓包，第一份是 .atkcc）/ 73 项 + 1 跳过（UFCS）
@@ -13,11 +17,15 @@ node tools/powerz-inspect.mjs             # POWER-Z（.sqlite，PD 与 UFCS）�
 # （走系统已装的 Chrome/Edge，不下载浏览器）
 npm run e2e                               # 单文件版，自包含（**不重建 dist** —— 改了 src/ui/ 先跑 npm run build）
 npm run e2e:powerz                        # 同上，但拖进去的是 POWER-Z 的 .sqlite（USB PD）
-npm run e2e:ufcs                          # 同上，但拖进去的是真实 UFCS 导出（解出 UFCS 报文）
-npm run e2e:ufcs:synth                    # 同上，但样本现造（make-test-ufcs.mjs），无需私有抓包
+npm run e2e:ufcs                          # 现造 UFCS SQLite（make-test-ufcs.mjs），无需私有抓包
+npm run e2e:ufcs:synth                    # e2e:ufcs 的兼容别名
 npm run e2e:pdstream                      # 同上，但样本现造（make-test-pdstream.mjs），无需私有抓包
+npm run e2e:ufcsstream                    # 现造 UFCS 流，校验协议、无 ADC 路径与逐报文测量
+npm run e2e:exports                       # 7 个案例：浏览器/Node CSV 对照，含 EPR/AVS、缺失测量和 BIST
+node tools/ui-regression.mjs --real       # 加上 CTK6U / CTK10UL，共 11 个导出案例
 npm run e2e:multi                         # 连续拖两份（.atkcc + .sqlite），测标签栏与各份状态隔离
-npm run e2e:all                           # 上面几种样本依次跑一遍（npm test 用的就是它；部分需私有抓包）
+npm run e2e:all                           # 7 组默认浏览器检查，无需私有抓包
+npm test                                 # 版本/语法/构建/协议/缺陷/ACK/界面全链
 npm run e2e:serve                         # 本地服务模式（需另开 node tools/serve.mjs）
 node tools/e2e.mjs --file dist/PDScope.html --drop "../制糖40w-ip18pro.atkcc"
 node tools/e2e.mjs --file dist/PDScope.html --drop "../山泽60w-ip18pro.sqlite"
@@ -45,7 +53,9 @@ npm run app:csv:self                      # 只验参考侧（不跑 exe，没�
 npm run check
 ```
 
-> 自检需要根目录上一级存在抓包样本文件（`.atkcc` / `.sqlite`）；`--drop` / `--open` 都是相对 `PDScope/` 的路径。
+> 默认 `npm test` 使用仓库里的 DJIPOWER 样本和现造样本，需要 Node 与已安装的 Chrome/Edge。
+> `--real` 和下文的历史样本抽查需要相应文件；`--drop` / `--open` 都是相对 `PDScope/` 的路径。
+> 界面检查总数随容器和指定的精确断言变化，以运行报告为准；跳过项单独报告。
 
 ## version-check.mjs
 
@@ -56,10 +66,55 @@ npm run check
 
 ## ackcheck.js
 
-校验 `linkGoodCrc()`：配对覆盖率、是否自指、方向是否相反、
+校验 `linkGoodCrc()`：配对覆盖率、是否自指、方向是否相反、SOP 是否相同、
 **双方 CRC 完好时 MessageID 是否相同**（PD 规范的硬约束）、配对距离。
-当前 5 份抓包共 1141 条有效 GoodCRC **100% 配对成功**，1100 条可校验的配对
+默认 `npm run ackcheck` 现造有效 BMC 波形，要求 6 条 GoodCRC 全部正确配对。
+直接运行 `node tools/ackcheck.js` 扫描 `rawdata/`，也可给文件列表或 `--dir`；空输入、文件不存在或未配对都会返回失败。
+历史 5 份抓包共 1141 条有效 GoodCRC **100% 配对成功**，1100 条可校验的配对
 **MessageID 全部一致**，最远距离恒为 1 条报文。
+
+## regression.mjs / ui-regression.mjs
+
+`regression.mjs` 的 8 组检查覆盖此次发现的错误：状态事件时间戳不被当作 UFCS 帧、
+PD / UFCS 流按内容识别、未知/混合/截断流拒绝、逐报文测量优先与真实零值保留、
+GoodCRC 同 SOP 与 MessageID 配对、时间舍入进位、CLI 协议分流，以及空 ACK 输入失败。
+`--real` 再对照 CTK6U、CTK10UL、DJIPOWER 的 SQLite 和流，检查报文、方向、CRC、事件和测量值。
+
+`ui-regression.mjs` 让浏览器调用实际的 `PDScope.exportCsv()`，将结果与 Node CLI 的 CSV 逐字节比较。
+默认覆盖 ATK-C、缺少 bus.ini 的 ATK-C、真实 PD 流与合成 UFCS SQLite/流；
+同时确认协议、报文数、测量值及缺失测量的界面展示。`--real` 增加两组真实 UFCS SQLite/流。
+
+## pd-compliance.mjs
+
+对照 `doc/` 中的 PD 2.0 v1.3、3.0 v1.1、3.1 v1.4、3.2 v1.2 编写的 121 组测试，
+预期位域、单位、4B5B 线路码和 CRC 样例采用独立的固定向量，详见 [PD 规范覆盖表](pd-spec-coverage.md)。
+覆盖全部标准消息族、PDO/RDO、VDM 产品类型、扩展数据块、260 字节十块重组、
+Request Chunk、重传、CRC/EOP/截断负例、链路/通道/发送方状态隔离、插拔复位和各版本差异。
+旧版 BIST 测试从实际 BMC 边沿进入解析器，校验 PRBS 连续性和错误位计数。
+EPR/AVS 专项覆盖进入/失败/退出、合同确认、查询与 DRP 缓存隔离、复位、FRS 双 PS_RDY、
+PDO 副本、SPR 15V 分段、5A/PDP/50mA 限制、有效步长和 Source/Sink PDP 约束。
+
+## 四版本复核与 HTML 报告
+
+`npm run pd:audit` 包含 22 组版本/入口检查（其中消息集合逐一遍历四版的全部 5-bit 编码）、
+7 组 wire 固定向量、27 组对象向量、18 组 VDM 向量，以及构建后的 10 组浏览器版本检查。
+浏览器检查覆盖四版 CSV 对照、真实下拉选择、API、文件间选择隔离、无效参数及 UFCS 禁用。
+默认 `npm test` 也包含这些专项，报告中的通过数与阶段内断言数量分别记录。
+
+[HTML 审计报告](pd-standards-audit.html) 由 `npm run pd:report` 生成；
+输入为 `doc/data/pd-audit-*.json` 的逐项审阅矩阵和 `artifacts/pd-spec-audit/*results.json` 等验证结果。
+`node tools/collect-pd-audit-checks.mjs` 读取该目录已保存的 `npm-test.log`、
+`regression-real.log`、`browser-real.log`，检查成功摘要后生成 `final-checks.json`。
+生成器不会执行测试，也不会把缺失结果当成成功；重新生成前须先保存实际运行的日志与专项结果。
+生成时记录当前 Git 基线、原文及代码 SHA-256，并定位代码片段；
+`doc/data/pd-standards-audit.json` 是报告对应的完整快照。
+生成后运行 `npm run pd:report:qa`，验证全部本地链接/页码、代码指纹、四版本筛选、
+代码展开及 1680px/390px 浏览器布局，结果和截图保存到 `artifacts/pd-spec-audit/`。
+结果写入 `artifacts/pd-spec-audit/compliance-results.json`；`npm test` 必须通过此项。
+
+浏览器导出检查另含 PD 2.0 BIST 波形：两条原始测试帧必须可见，详情显示累计错误位，
+且不显示该帧格式没有的 Header/CRC。测试报告中的分组计数不等于 USB-IF 认证结果。
+EPR/AVS 案例以 `.pdStream` 导入整段流程，检查请求/合同/Keep Alive/退出的详情以及 9–15V SPR AVS 和 EPR AVS 单位。
 
 ## selftest.js
 
@@ -71,7 +126,7 @@ npm run check
   这正是采样率必须动态解析的原因。
 * **第三组（6 项）** 专测 **plug 信令与扩展消息**：SOP' 上 e-Marker 的 Discover Identity 全线缆 VDO、
   端口侧的 UFP + Padding + DFP 三件套、EPR_Source_Capabilities 的 PDO 列表、
-  **分块扩展消息的跨块 PDO 拼接**（拼不回来要标注而不是猜）、BIST 模式在 PD 2.0 与 3.x 下的不同含义、
+  **分块扩展消息的完整重组**（前块缺失时只显示原始数据）、BIST 模式在 PD 2.0 与 3.x 下的不同含义、
   Discover SVIDs 的两两成对。
 * **第四组（6 项）** 只测 `channel.ini` 的**采样率声明解析**：多键名（`SamplingFrequency` /
   `SampleRate` / 小写下划线写法）、多单位（裸数字 = kHz、`MHz`、`kHz`）、
@@ -258,9 +313,11 @@ e2e 只判「结果对不对」，不判「过程卡不卡」，所以单靠 e2e
 
 ## make-test-atkcc.mjs
 
-用来造压力样本，因为**真实抓包复现不出卡顿**：
+可造确定性 PD 回归样本，也可造压力样本：
 
 ```bash
+node tools/make-test-atkcc.mjs --pd --out artifacts/_pd_synth.atkcc
+node tools/make-test-atkcc.mjs --pd --no-bus --out artifacts/_pd_no_bus.atkcc
 node tools/make-test-atkcc.mjs --fill 0x55  --chunks 16   --out artifacts/_worst.atkcc
 node tools/make-test-atkcc.mjs --fill random --chunks 32  --out artifacts/_noise.atkcc
 node tools/make-test-atkcc.mjs --src "../苹果40w-ip18pro.atkcc" --rounds 30 --out artifacts/_long.atkcc
@@ -389,6 +446,13 @@ e2e 启动 Chrome 时带了 `--allow-file-access-from-files`，所以页面自�
 | --------------------- | ---- | ----: | ----: | -------: | -----: | --------- | -------- |
 | ufcs_vivo_x300u       | UFCS | 26099 | 26094 | 5        | 0      | 2493.98 s | 容器链路 26094 / 推断 0 |
 
+本地 CTK6U / CTK10UL 修复后验证：
+
+| 文件 | SQLite / 流报文数 | 状态事件 | CRC 错误 | 推断方向 | 对照 |
+| ---- | ----------------: | -------: | -------: | -------: | ---- |
+| CTK6U_X300U_UFCS | 2754 / 2754 | 21 | 0 | 0 | 报文与测量值逐字段一致 |
+| CTK10UL_X300U_UFCS | 2734 / 2734 | 5 | 0 | 0 | 报文与测量值逐字段一致 |
+
 这份样本的容器是**实测归纳**的那套 9 字节布局（见 [`.sqlite` 格式](format-powerz.md)
 的「UFCS 的 Raw blob 里是什么」），解析器认得它就直取链路字节 ——
 于是 26094 条报文的**方向全部有硬依据、零推断**，CRC-8 也 26094/26094 全通过。
@@ -396,7 +460,7 @@ e2e 启动 Chrome 时带了 `--allow-file-access-from-files`，所以页面自�
 
 ```bash
 npm run powerz:inspect                  # 汇总行给出：报文 / UFCS 帧 / 未定位行 / CRC 口径
-npm run e2e:ufcs                        # 界面级：报文表、详情面板、差分线视图
+node tools/e2e.mjs --file dist/PDScope.html --drop "../ufcs_vivo_x300u.sqlite"  # 历史样本界面抽查
 ```
 
 汇总行里的「UFCS 帧」是容器里定位到的帧数，「未定位行」是既不是 UFCS 报文、

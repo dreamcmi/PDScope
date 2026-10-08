@@ -2,8 +2,8 @@
  * extended.js — 扩展消息数据块解析（PD 3.2 Chapter 6.5）
  *
  * 全部按「数据块内的绝对字节号」寻址，与规范表格一一对应（Byte0、Byte1…）。
- * 分块（Chunked）场景下由调用方给出本包覆盖的字节区间 `off`，
- * 字节不在本包内就如实标注，不猜。
+ * PdDecoder 在完整重组之后调用本模块；off 为低层字段读取接口保留，
+ * 调用方若只提供部分字节，缺失字段会明确标注，不猜。
  *
  * 覆盖：SCEDB / SDB(SOP 与 SOP' 两种格式) / GBCDB / GBSDB / BCDB /
  *       Manufacturer_Info / Security_* / Firmware_Update_* / PPSSDB /
@@ -57,6 +57,7 @@ function f(em, bk, byteIdx, key, value) {
  */
 export function extendedParse(st, em, t, bk, ctx) {
   bk._group = -1;
+  pdValidateExtended(em, t, bk, ctx);
   switch (t) {
     case 1: return scedb(st, em, bk);
     case 2: return statusBlock(em, bk, ctx);
@@ -72,7 +73,7 @@ export function extendedParse(st, em, t, bk, ctx) {
     case 14: return countryCodes(em, bk);
     case 15: return skedb(st, em, bk);
     case 16: return extControl(em, bk);
-    case 17: case 18: return eprCaps(st, em, bk, t === 17 ? 'source' : 'sink');
+    case 17: case 18: return eprCaps(st, em, bk, t === 17 ? 'source' : 'sink', ctx);
     case 30: return vendorDefinedExtended(em, bk);
     default:
       hexDump(em, bk);
@@ -115,9 +116,9 @@ function scedb(st, em, bk) {
   ].filter(Boolean).join(' · ')));
   const nb = b8(bk, 22);
   f(em, bk, 22, `Number of Batteries/Slots [Byte22]`, need(nb, (v) =>
-    `固定电池 ${v & 0xF} 个 · 热插拔电池槽 ${(v >> 4) & 0xF} 个`));
+    pdBatteryCounts(v)));
   f(em, bk, 23, `SPR Source PDP Rating [Byte23]`, need(b8(bk, 23), (v) => (v > 100 ? `${v}（>100 视为无效）` : `${v} W`)));
-  f(em, bk, 24, `EPR Source PDP Rating [Byte24]`, need(b8(bk, 24), (v) => (v > 240 ? `${v}（>240 视为无效）` : `${v} W`)));
+  if (bk.dataSize >= 25) f(em, bk, 24, `EPR Source PDP Rating [Byte24]`, need(b8(bk, 24), (v) => (v > 240 ? `${v}（>240 视为无效）` : `${v} W`)));
 
   const parts = [];
   if (vid !== null) parts.push(`VID 0x${pdHex(vid, 4)}`);
@@ -142,8 +143,13 @@ function peak(em, bk, byteIdx, name, v) {
 
 function statusBlock(em, bk, ctx) {
   // 内容由「发给谁」决定：发给 SOP' / SOP'' 时是线缆插头状态（PD 3.2 Table 6.52，仅 2 字节），
-  // 发给 SOP 时才是端口伙伴状态（Table 6.51，7 字节）。用链路判定，长度只作兜底。
-  if (ctx.link === 'cable' || bk.dataSize <= 2) {
+  // 发给 SOP 时才是端口伙伴状态（Table 6.51，7 字节），不能按截断后的长度猜链路。
+  if (ctx.link === 'cable') {
+    if (!['3.1', '3.2'].includes(ctx.specRevision)) {
+      em.object('Cable Status 数据块（当前版本未定义）');
+      hexDump(em, bk);
+      return `PD ${ctx.specRevision ?? '未指定'} 未定义线缆 Status 数据块`;
+    }
     f(em, bk, 0, 'Internal Temp [Byte0]', need(b8(bk, 0), tempText));
     f(em, bk, 1, 'Flags [Byte1]', need(b8(bk, 1), (v) => {
       if (!(v & 1)) return '正常（未进入热关断）';
@@ -176,15 +182,14 @@ function statusBlock(em, bk, ctx) {
   }));
   const ts = b8(bk, 4);
   f(em, bk, 4, 'Temperature Status [Byte4]', need(ts, (v) => TEMP_STATUS[(v >> 1) & 3]));
-  f(em, bk, 5, 'Power Status [Byte5]', need(b8(bk, 5), (v) => {
+  if (bk.dataSize >= 6) f(em, bk, 5, 'Power Status [Byte5]', need(b8(bk, 5), (v) => {
     if (ctx.link === 'cable') return `0x${v.toString(16).toUpperCase()}`;
     const on = POWER_STATUS_BITS.filter((b) => v & (1 << b.bit)).map((b) => b.name);
     return v === 0 ? '未受限（Sink 恒为 0）' : on.join(' · ');
   }));
   const ps = b8(bk, 6);
-  f(em, bk, 6, 'Power State Change [Byte6]', need(ps, (v) =>
-    `${POWER_STATE[v & 7] ?? '取值无效，按 0 处理'} · 指示灯 ${STATE_INDICATOR[(v >> 3) & 3] ?? '取值无效'}`));
-  f(em, bk, 7, 'Reserved [Byte7]', need(b8(bk, 7), (v) => `0x${v.toString(16).toUpperCase()}`));
+  if (bk.dataSize >= 7) f(em, bk, 6, 'Power State Change [Byte6]', need(ps, (v) =>
+    `${POWER_STATE[v & 7] ?? '取值无效，按 0 处理'} · 指示灯 ${STATE_INDICATOR[(v >> 3) & 7] ?? '取值无效，接收端忽略'}`));
 
   const t = b8(bk, 0);
   const st = b8(bk, 6);
@@ -236,7 +241,7 @@ function getManufacturerInfo(em, bk) {
 function manufacturerInfo(em, bk) {
   const vid = b16(bk, 0), pid = b16(bk, 2);
   const strBytes = [];
-  for (let i = 4; i < bk.dataSize; i++) {
+  for (let i = 4; i < Math.min(bk.dataSize, 26); i++) {
     const b = b8(bk, i);
     if (b === null) break;
     strBytes.push(b);
@@ -297,7 +302,7 @@ function countryInfo(em, bk) {
   f(em, bk, 2, 'Reserved [Byte3-2]', need(b16(bk, 2), (v) => `0x${pdHex(v, 4)}`));
   const data = [];
   for (let i = 4; i < bk.dataSize; i++) { const b = b8(bk, i); if (b === null) break; data.push(b); }
-  f(em, bk, 4, 'Country Specific Data [Byte4…]', data.length ? `"${pdAscii(data)}"` : '（本分块不含该字段）');
+  f(em, bk, 4, 'Country Specific Data [Byte4…]', data.length ? `${data.map(b => pdHex(b, 2)).join(' ')} · ASCII "${pdAscii(data)}"` : '（本分块不含该字段）');
   return `国家码 "${pdCharPair((code ?? 0) & 0xFF, ((code ?? 0) >> 8) & 0xFF)}"`;
 }
 
@@ -306,7 +311,7 @@ function countryCodes(em, bk) {
   f(em, bk, 0, 'Length [Byte0]', need(len, (v) => `${v} 个国家和地区码（有效范围 1~12）`));
   f(em, bk, 1, 'Reserved [Byte1]', need(b8(bk, 1), (v) => `0x${v.toString(16)}`));
   const list = [];
-  for (let n = 0; n < 12; n++) {
+  for (let n = 0; n < Math.min(len ?? 0, 12); n++) {
     const i = 2 + n * 2;
     if (i >= bk.dataSize) break;
     const v = b16(bk, i);
@@ -341,7 +346,7 @@ function skedb(st, em, bk) {
     [v & 1 ? 'LPS' : null, (v >> 1) & 1 ? 'PS1' : null, (v >> 2) & 1 ? 'PS2' : null].filter(Boolean).join(' + ') || '无'));
   f(em, bk, 15, 'Touch Temp [Byte15]', need(b8(bk, 15), (v) => TOUCH_TEMP_SINK[v] ?? '取值无效，按默认处理'));
   const binfo = b8(bk, 16);
-  f(em, bk, 16, 'Battery Info [Byte16]', need(binfo, (v) => `固定电池 ${v & 0xF} 个 · 热插拔电池槽 ${(v >> 4) & 0xF} 个`));
+  f(em, bk, 16, 'Battery Info [Byte16]', need(binfo, pdBatteryCounts));
   const modes = b8(bk, 17);
   f(em, bk, 17, 'Sink Modes [Byte17]', need(modes, (v) =>
     [v & 1 ? '支持 PPS 充电' : null, (v >> 1) & 1 ? '可由 VBUS 供电' : null, (v >> 2) & 1 ? '可由 AC 供电' : null,
@@ -349,13 +354,15 @@ function skedb(st, em, bk) {
       .filter(Boolean).join(' · ') || '无'));
   const sprs = b8(bk, 18), sprOp = b8(bk, 19), sprMax = b8(bk, 20);
   const eprs = b8(bk, 21), eprOp = b8(bk, 22), eprMax = b8(bk, 23);
-  const w = (v) => (v === null ? '（本分块不含该字段）' : (v > 240 ? `${v}（超出有效范围）` : `${v} W`));
-  f(em, bk, 18, 'SPR Sink Minimum PDP [Byte18]', w(sprs));
-  f(em, bk, 19, 'SPR Sink Operational PDP [Byte19]', w(sprOp));
-  f(em, bk, 20, 'SPR Sink Maximum PDP [Byte20]', w(sprMax));
-  f(em, bk, 21, 'EPR Sink Minimum PDP [Byte21]', w(eprs));
-  f(em, bk, 22, 'EPR Sink Operational PDP [Byte22]', w(eprOp));
-  f(em, bk, 23, 'EPR Sink Maximum PDP [Byte23]', w(eprMax));
+  const w = (v, max) => (v === null ? '（本分块不含该字段）' : (v > max ? `${v}（超出有效范围 ${max}W）` : `${v} W`));
+  f(em, bk, 18, 'SPR Sink Minimum PDP [Byte18]', w(sprs, 100));
+  f(em, bk, 19, 'SPR Sink Operational PDP [Byte19]', w(sprOp, 100));
+  f(em, bk, 20, 'SPR Sink Maximum PDP [Byte20]', w(sprMax, 100));
+  if (bk.dataSize >= 24) {
+    f(em, bk, 21, 'EPR Sink Minimum PDP [Byte21]', w(eprs, 240));
+    f(em, bk, 22, 'EPR Sink Operational PDP [Byte22]', w(eprOp, 240));
+    f(em, bk, 23, 'EPR Sink Maximum PDP [Byte23]', w(eprMax, 240));
+  }
 
   return `SPR PDP ${sprs ?? '—'}/${sprOp ?? '—'}/${sprMax ?? '—'} W`
     + (eprMax ? ` · EPR PDP ${eprs ?? '—'}/${eprOp ?? '—'}/${eprMax} W` : '');
@@ -373,7 +380,7 @@ function extControl(em, bk) {
 
 /* ══════════════════ ⑰⑱ EPR 能力（PDO 列表，4 字节对齐）══════════════════ */
 
-function eprCaps(st, em, bk, role) {
+function eprCaps(st, em, bk, role, ctx) {
   const slots = pdoSlots(bk);
   const found = [];
   for (const s of slots) {
@@ -382,7 +389,7 @@ function eprCaps(st, em, bk, role) {
       em.detail('状态', s.note);
       continue;
     }
-    em.detail('对象位置', `${s.index}（Enter/Exit Mode 与 EPR_Request 用该位置引用）`);
+    em.detail('对象位置', `${s.index}（Request/EPR_Request 用该位置引用）`);
     if (s.note) em.detail('分块对齐', s.note);
     const objPos = s.index;
     if (objPos <= 7 && s.value === 0) {
@@ -390,28 +397,16 @@ function eprCaps(st, em, bk, role) {
       found.push(`#${objPos} SPR 填充`);
       continue;
     }
-    const isEpr = isEprPdo(s.value, objPos);
-    const r = pdoParse(st, em, s.value, { role, position: objPos, isEpr, revText: '' });
+    const isEpr = objPos >= 8;
+    const r = pdoParse(st, em, s.value, { ...ctx, role, position: objPos, isEpr });
     found.push(`#${objPos} ${r.summary}`);
   }
   return found.join(' · ') || '（无 PDO）';
 }
 
 /**
- * EPR 能力里的 PDO 是否为 EPR 档：位置 ≥8 直接判定；
- * 位置 ≤7 时按「固定电压 > 20V」或「AVS 型 APDO」判（与 sigrok/ATK 解码器一致）。
- */
-function isEprPdo(pdo, objPos) {
-  if (objPos >= 8) return true;
-  const supplyType = pdField(pdo, 31, 30);
-  if (supplyType === 0) return pdField(pdo, 19, 10) * 0.05 > 20.0;
-  if (supplyType === 3) return pdField(pdo, 29, 28) === 1;
-  return false;
-}
-
-/**
  * 把本分块的字节切成一串「4 字节对齐的 PDO 槽位」。
- * 分块起始若不在 4 字节边界上，会尝试用上一次分块存下的尾巴拼完整（st.extCarry）。
+ * PdDecoder 通常传入完整数据块；低层调用可显式提供 _carry，缺失片段不登记 PDO。
  */
 function pdoSlots(bk) {
   const slots = [];
@@ -448,6 +443,68 @@ const bytesToU32 = (arr) => {
   return v >>> 0;
 };
 
+function pdBatteryCounts(v) {
+  const fixed = v & 15, slots = v >>> 4;
+  const n = x => x <= 4 ? `${x}` : `${x}（无效，接收端按 0 处理）`;
+  return `固定电池 ${n(fixed)} 个 · 热插拔电池槽 ${n(slots)} 个`;
+}
+
+/** Chapter 6.5 的长度和打包字段约束。新版本追加的字节保留在原始数据中。 */
+function pdValidateExtended(em, t, bk, ctx) {
+  const bytes = bk.bytes;
+  const minSizes = { 1: ctx.specRevision === '3.2' || ctx.specRevision === '3.1' ? 25 : 24,
+    2: ctx.link === 'cable' && ['3.1', '3.2'].includes(ctx.specRevision) ? 2 : ['3.1', '3.2'].includes(ctx.specRevision) ? 7 : 5,
+    3: 1, 4: 1, 5: 9, 6: 2, 7: 5, 12: 4, 13: 5, 14: 4,
+    15: ['3.1', '3.2'].includes(ctx.specRevision) ? 24 : 21, 16: 2, 17: 4, 18: 4, 30: 4 };
+  if (bk.off === 0 && bk.dataSize < (minSizes[t] ?? 0)) em.warn?.(`扩展消息 ${t} 的数据块过短：${bk.dataSize} 字节，至少需要 ${minSizes[t]}`, 'EXT_SIZE');
+  if (bk.off === 0 && t === 2 && ctx.link === 'cable' && !['3.1', '3.2'].includes(ctx.specRevision)) {
+    em.warn?.(`PD ${ctx.specRevision ?? '未指定'} 未定义 SOP'/SOP'' Status Data Block`, 'EXT_REVISION');
+  }
+  const masks = ({ 1: [[10, 0xF8], [12, 0xF8], [13, 0xF8], [21, 0xF8]],
+    2: ctx.link === 'cable' ? [[1, 0xFE]] : [[1, 0xE1], [3, 0xE1], [4, 0xF9], [5, 0xC1], [6, 0xC0]],
+    5: [[8, 0xFE]], 12: [[3, 0xF1]], 13: [[2, 0xFF], [3, 0xFF]], 14: [[1, 0xFF]],
+    15: [[11, 0xFC], [14, 0xF8], [17, 0xC0]], 30: [[3, 0x80]] })[t] ?? [];
+  for (const [i, mask] of masks) {
+    const v = b8(bk, i);
+    if (v === null) continue;
+    f(em, bk, i, `Reserved [Byte${i}, mask 0x${pdHex(mask, 2)}]`, `0x${pdHex(v & mask, 2)}`);
+    if (v & mask) em.warn?.(`扩展数据 Byte${i} 的保留位非零，接收端忽略`, 'RESERVED');
+  }
+  if (bk.off !== 0) return;
+  const bad = text => em.warn?.(text, 'EXT_FIELD');
+  if ((t === 3 || t === 4) && bytes[0] > 7) bad('Battery Reference 超出 0~7');
+  if (t === 6 && (bytes[0] > 1 || (bytes[0] === 1 && bytes[1] > 7))) bad('Manufacturer Info Target/Ref 无效');
+  if (t === 7 && bytes.length >= 5 && !bytes.slice(4, 26).includes(0)) bad('Manufacturer String 缺少 NUL 结束符（最多 21 个字符）');
+  if (t === 14 && (bytes[0] < 1 || bytes[0] > 12 || bytes.length < 2 + 2 * bytes[0])) bad('Country Codes 的 Length 无效或列表不完整');
+  if (t === 16 && (bytes[0] < 1 || bytes[0] > 4 || bytes[1] !== 0)) bad('Extended Control Type/Data 无效');
+  if (t === 17 || t === 18) {
+    if (bk.dataSize % 4 || bk.dataSize > (ctx.specRevision ? 44 : 52)) bad('EPR 能力表必须为完整 PDO；所提供的 PD 3.1/3.2 能力消息最多 11 个');
+    let padding = false;
+    const first = b32(bk, 0);
+    if (first !== null && ((first >>> 30) !== 0 || pdField(first, 19, 10) !== 100)) bad('EPR 能力表的首个 PDO 必须为 5V Fixed');
+    for (let i = 0; i < Math.min(bytes.length, 28); i += 4) {
+      const v = b32(bk, i);
+      if (v === 0) padding = true;
+      else if (padding) bad('SPR 能力表的零填充之后又出现非零 PDO');
+    }
+  }
+  if (t === 2 && ctx.link !== 'cable') {
+    if (((bytes[1] >>> 1) & 3) === 2) bad('Present Input 的外部电源编码 10b 无效');
+    if (bytes[6] !== undefined && ((bytes[6] & 7) === 7 || ((bytes[6] >>> 3) & 7) > 3)) bad('Power State/LED Indicator 含无效编码');
+    if (ctx.role === 'SNK' && bytes[5]) bad('Sink 的 Power Status 必须为 0');
+  }
+  if (t === 1 || t === 15) {
+    const batteryByte = t === 1 ? 22 : 16;
+    const count = bytes[batteryByte];
+    if (count !== undefined && ((count & 15) > 4 || (count >>> 4) > 4)) bad('电池数量/槽位数量超出 0~4，接收端按 0 处理');
+    const spr = t === 1 ? [23] : [18, 19, 20];
+    const epr = t === 1 ? [24] : [21, 22, 23];
+    if (spr.some(i => bytes[i] > 100) || epr.some(i => bytes[i] > 240)) bad('SPR/EPR PDP 超出 100W/240W');
+    if (t === 15 && bytes[10] !== undefined && bytes[10] !== 1) bad('SKEDB Version 不为 1，接收端忽略该数据块');
+    if (t === 15 && (bytes[18] > bytes[19] || bytes[19] > bytes[20] || bytes[21] > bytes[22] || bytes[22] > bytes[23])) bad('Sink PDP 必须满足 Minimum ≤ Operational ≤ Maximum');
+  }
+}
+
 /* ══════════════════ ㉚ Vendor_Defined_Extended ══════════════════ */
 
 function vendorDefinedExtended(em, bk) {
@@ -457,7 +514,7 @@ function vendorDefinedExtended(em, bk) {
   const data = [];
   for (let i = 4; i < bk.dataSize; i++) { const b = b8(bk, i); if (b === null) break; data.push(b); }
   f(em, bk, 4, 'Vendor Defined Data [Byte4…]', data.length
-    ? `${data.length} 字节 · ${data.slice(0, 16).map((x) => x.toString(16).padStart(2, '0').toUpperCase()).join(' ')}${data.length > 16 ? ' …' : ''}`
+    ? `${data.length} 字节 · ${data.map((x) => x.toString(16).padStart(2, '0').toUpperCase()).join(' ')}`
     : '（本分块不含该字段）');
   return `厂商扩展消息 SVID 0x${pdHex(svid ?? 0, 4)} · 命令 0x${pdHex(cmd ?? 0, 4)}`;
 }

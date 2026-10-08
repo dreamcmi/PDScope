@@ -13,6 +13,7 @@ PDScope/
 │  │   ├─ data.js         BIST / Battery_Status / Alert / Enter_USB / Source_Info / Revision / EPR_Mode
 │  │   ├─ vdm.js          VDM（含 Discover Identity 的线缆/端口 VDO —— plug 信令）
 │  │   ├─ extended.js     扩展消息数据块（SCEDB/SDB/GBCDB/制造商/安全/固件/EPR 能力…）
+│  │   ├─ epr.js          EPR 被动模式/合同/Keep Alive/复位与交换关联
 │  │   ├─ decoder.js      主解码器 PdDecoder（比特流 → 结构化报文对象）
 │  │   └─ index.js        聚合入口（外部从这里 import）
 │  ├─ js/ufcs/            独立 UFCS 解析库（零依赖、浏览器 + Node 通用，可整目录复用）
@@ -29,7 +30,7 @@ PDScope/
 │  │   ├─ atkcc.js        .atkcc 容器解析
 │  │   ├─ sqlite.js       只读 SQLite 读取器（POWER-Z 导出用的库格式，零依赖自写）
 │  │   ├─ powerz.js       POWER-Z（.sqlite）适配层：嗅探 / Raw blob 拆事件 / 解码编排
-│  │   ├─ pdstream.js     POWER-Z 的另一种导出（.pdStream）：结构自证嗅探 / 二进制记录流读写，
+│  │   ├─ pdstream.js     POWER-Z 流导出（.pdStream / .ufcsStream）：完整结构与协议嗅探 / 流读写，
 │  │   │                  以「虚拟表」接进 powerz.js 的解码流程（报文语义不重写一遍）
 │  │   ├─ bmc.js          游程提取 + BMC 状态机
 │  │   ├─ pd_tables.js    4B5B / SOP 等低层符号表（供旧脚本使用）
@@ -55,13 +56,15 @@ PDScope/
 ├─ doc/                   文档：README 的详细版分册（本目录）
 ├─ .github/workflows/     CI：10 个目标一起构建（build.yml，见 [CI 构建](ci.md)）
 └─ tools/
-   ├─ cli.js              命令行解析（.atkcc / .sqlite / .pdStream 自动分流；表格 / --json / --csv / --rate）
+   ├─ cli.js              命令行解析（.atkcc / .sqlite / .pdStream / .ufcsStream 自动分流；表格 / --json / --csv / --rate）
    │                      `--csv` 走的是 `src/js/core/csv.js`，与桌面版 `--csv`、界面导出的格式完全一致
    ├─ version-check.mjs   版本号一致性检查（外加文档里的产物名提示项；自检链第一步）
    ├─ syntax.mjs          全量语法检查（node --check，几秒）
    ├─ ci-checksum.mjs     给 CI 产物生成 .sha256 校验和（三平台同一套命令）
    ├─ selftest.js         协议层合成用例自检（含手搓最小 SQLite 的 POWER-Z 路径回归）
-   ├─ ackcheck.js         GoodCRC 配对校验（扫仓库上一级的 `*.atkcc`；`.sqlite` 不在其列）
+   ├─ ackcheck.js         GoodCRC 配对校验（默认扫 rawdata/，支持显式文件与 --dir；空输入失败）
+   ├─ regression.mjs     8 组缺陷回归；--real 增加本地真实 SQLite/流逐报文对照
+   ├─ ui-regression.mjs  浏览器与 Node CSV 逐字节对照，检查未知测量与协议分流
    ├─ pd-inspect.mjs      PD 解析抽查：线缆链路 plug 信令 + 扩展消息详情 + 全样本体检
    ├─ powerz-inspect.mjs  POWER-Z（.sqlite）全样本体检：拆帧自检 / 连接事件 / 警告 / CRC 口径
    ├─ pd-regress.mjs      与重构前解码器逐包逐字段对比（从 git HEAD 取旧版本）

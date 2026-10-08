@@ -27,7 +27,8 @@ import { fileURLToPath } from 'node:url';
 
 import { AtkccCapture } from '../src/js/core/atkcc.js';
 import { PowerzCapture, sniffPowerz } from '../src/js/core/powerz.js';
-import { decodeChannel, busAt } from '../src/js/core/pipeline.js';
+import { decodeChannel, attachBusValues } from '../src/js/core/pipeline.js';
+import { PowerzStreamCapture, sniffPowerzStream } from '../src/js/core/pdstream.js';
 import { makeNodeInflator } from '../src/js/core/inflate.js';
 import { csvExport, CSV_BOM } from '../src/js/core/csv.js';
 
@@ -63,15 +64,13 @@ async function reference(file) {
   const bytes = new Uint8Array(await readFile(file));
   const inflate = await makeNodeInflator();
   const pzKind = sniffPowerz(bytes);
-  const cap = pzKind ? PowerzCapture.open(bytes) : await AtkccCapture.open(bytes, { inflate });
+  const streamKind = !pzKind && sniffPowerzStream(bytes);
+  const cap = pzKind ? PowerzCapture.open(bytes) : streamKind ? PowerzStreamCapture.open(bytes) : await AtkccCapture.open(bytes, { inflate });
   const channel = 0;
-  const { packets, stats } = pzKind
+  const { packets, stats } = pzKind || streamKind
     ? await cap.decode()
     : await decodeChannel(cap, channel, { inflate, bitOrder: 'lsb' });
-  for (const p of packets) {
-    const b = busAt(cap.meta.bus, p.startSample);
-    p.vbus = b.vbus; p.ibus = b.ibus;
-  }
+  attachBusValues(packets, cap.meta.bus);
   return csvExport({
     fileName: basename(file),
     channel,

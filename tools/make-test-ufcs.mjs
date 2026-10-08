@@ -29,11 +29,13 @@
 import { writeFile, mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { writePdStream } from '../src/js/core/pdstream.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const argv = process.argv.slice(2);
 const arg = (n, d) => { const i = argv.indexOf(n); return i >= 0 ? argv[i + 1] : d; };
 const OUT = resolve(ROOT, arg('--out', 'artifacts/_ufcs_synth.sqlite'));
+const STREAM_OUT = arg('--stream-out', null);
 
 /* ══════════════ UFCS 组帧（规范 8.2）══════════════ */
 
@@ -315,6 +317,12 @@ const sqlite = buildSqlite([
 
 await mkdir(dirname(OUT), { recursive: true });
 await writeFile(OUT, sqlite);
+if (STREAM_OUT) {
+  const path = resolve(ROOT, STREAM_OUT);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, writePdStream(rows.map(r => ({ time: r.t, vbus: 9.0, ibus: 2.0, raw: r.blob }))));
+  console.log(`已生成  ${path}`);
+}
 
 console.log(`已生成  ${OUT}`);
 console.log(`  ${(sqlite.length / 1024).toFixed(1)} KB · ufcs_table ${rows.length} 行`

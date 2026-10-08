@@ -1,0 +1,509 @@
+{
+  "title": "USB PD PDO/RDO 与数据对象逐版本审计",
+  "auditDate": "2026-10-08",
+  "method": {
+    "scope": "将当前源码逐项对照本地 USB PD 2.0、3.0、3.1、3.2 PDF；用提取文本中的 PDF 页标记定位条款，并对出现规范冲突的关键原页进行核对。",
+    "sources": [
+      { "revision": "2.0", "pdf": "doc/USB_PD_Revision 2.0_Version_1.3_20170112.pdf", "extract": "artifacts/pd-spec-audit/pd-2.0.txt" },
+      { "revision": "3.0", "pdf": "doc/USB_PD_Revision_3.0_Version_1.1_20170112.pdf", "extract": "artifacts/pd-spec-audit/pd-3.0.txt" },
+      { "revision": "3.1", "pdf": "doc/USB_PD_Revision_3.1_Version_1.4_2022-04.pdf", "extract": "artifacts/pd-spec-audit/pd-3.1.txt" },
+      { "revision": "3.2", "pdf": "doc/USB_PD_Revision_3.2_Version_1.2_2026_05_20.pdf", "extract": "artifacts/pd-spec-audit/pd-3.2.txt" }
+    ],
+    "validation": "独立规范字段向量位于 tools/pd-audit-objects.mjs；使用 C:/Language/NodeJS/node.exe 运行，27 组通过。通过结果只证明这些向量，不代表协议整体符合度。机器可读结果见 artifacts/pd-spec-audit/objects-audit-results.json。",
+    "scopeLimit": "本审计覆盖对象解析、部分对象级校验和版本字段差异；不代表已完整实现 USB PD 状态机、电气要求、全部 Power Rules、USBC Auth 或 PDFU。"
+  },
+  "summary": {
+    "complete": "已支持类型的 PDO/RDO 基本位域和单位解析；若干版本字段差异有独立向量验证；所列标准扩展块的大部分外层字段可以解析。",
+    "partial": "能力排序/Power Rules、保留位、decoder 之外的消息数量约束及部分角色/范围组合只完成部分校验。",
+    "notDefined": "早期版本未定义的对象、引入版本之前的 EPR/SPR AVS，以及 PD 2.0/3.0 中不存在的 EPR 能力消息。",
+    "outOfScope": "USBC Auth 和 PDFU 内部数据结构由外部规范定义；厂商扩展载荷语义同样不属于 USB PD 核心解析。"
+  },
+  "features": [
+    {
+      "id": "pdo-fixed",
+      "title": "Fixed Supply PDO 位域、标志和单位",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "partial", "notes": "解析 50mV 电压和 10mA 电流单位、首位设备标志、旧版 Reserved B24:22 及 Source 峰值电流编码。部分规范约束和保留位校验尚未完成。", "refs": [{ "section": "§6.4.1.2", "table": "Tables 6-6, 6-7, 6-10", "page": "PDF pp.154–157" }] },
+        "3.0": { "status": "partial", "notes": "电压/电流单位相同；B24 为 Unchunked Extended Messages，B23/B22 为 Reserved，且 Source/Sink 字段不同。功率、范围和保留位校验仅部分实现。", "refs": [{ "section": "§6.4.1.2", "table": "Tables 6-9, 6-10, 6-14", "page": "PDF pp.117–121" }] },
+        "3.1": { "status": "partial", "notes": "首个 Source PDO 的 B23 定义为 EPR Capable；EPR Fixed PDO 使用不同电压槽位。字段与单位可解析，但角色相关合法性仅部分校验。", "refs": [{ "section": "§6.4.1.2", "table": "Tables 6-9, 6-16", "page": "PDF pp.148–153" }] },
+        "3.2": { "status": "partial", "notes": "5V Source/Sink、>5V Fixed、SPR/EPR 标志和单位均可解析；跨 PDO 的功率与角色约束尚未完整覆盖。", "refs": [{ "section": "§6.4.1.3", "table": "Tables 6.8–6.10, 6.18", "page": "PDF pp.127–129, 136" }] }
+      },
+      "code": [{ "file": "src/js/pd/pdo.js", "start": 94, "end": 137, "symbol": "pdoParse Fixed branch", "anchor": "if (t1 === 0) {" }, { "file": "src/js/pd/pdo.js", "start": 353, "end": 368, "symbol": "pdValidatePdo", "anchor": "function pdValidatePdo(em, m) {" }],
+      "evidence": ["独立 5V/3A 原始字向量在四版中均解析为 5V、3A、15W，且判断有效。", "独立向量分别确认 PD 2.0 B24:22 Reserved、PD 3.0 B24 unchunked/B23 Reserved、PD 3.1/3.2 B23 EPR Capable。"],
+      "limitations": ["尚未穷尽校验所有保留位、广告电压组合、Source/Sink 限制和 Chapter 10 Power Rules。", "PDO 解析器会返回有效性标志，能力集合上下文校验由调用方另行补充。"]
+    },
+    {
+      "id": "pdo-battery",
+      "title": "Battery Supply PDO 位域和单位",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "partial", "notes": "电压步进为 50mV，功率步进为 250mW；会检查 100W 上限，但未完整校验角色和排序规则。", "refs": [{ "section": "§6.4.1.2", "table": "Tables 6-9, 6-12", "page": "PDF pp.156, 159" }] },
+        "3.0": { "status": "partial", "notes": "单位仍为 50mV/250mW；完整 Power Rules 仅部分校验。", "refs": [{ "section": "§6.4.1.2", "table": "Tables 6-12, 6-16", "page": "PDF pp.119, 122" }] },
+        "3.1": { "status": "partial", "notes": "Source 和 Sink 形式使用相同单位；未校验所有允许的电压/功率组合。", "refs": [{ "section": "§6.4.1.2", "table": "Tables 6-12, 6-18", "page": "PDF pp.150, 155" }] },
+        "3.2": { "status": "partial", "notes": "单位仍为 50mV/250mW，具备基本最小/最大值和 100W 上限检查；完整能力集合功率规则尚未覆盖。", "refs": [{ "section": "§6.4.1.3", "table": "Table 6.11", "page": "PDF p.129" }] }
+      },
+      "code": [{ "file": "src/js/pd/pdo.js", "start": 138, "end": 149, "symbol": "pdoParse Battery branch", "anchor": "} else if (t1 === 1) {" }, { "file": "src/js/pd/pdo.js", "start": 353, "end": 368, "symbol": "pdValidatePdo", "anchor": "function pdValidatePdo(em, m) {" }],
+      "evidence": ["独立原始向量根据 50mV/250mW 字段解析出 5V–10V、15W。"],
+      "limitations": ["尚未穷尽测试最大功率、所有边界码、电池 PDO 排序或协商供电行为。"]
+    },
+    {
+      "id": "pdo-variable",
+      "title": "Variable Supply PDO 位域和单位",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "partial", "notes": "最小/最大电压按 50mV、电流按 10mA 解析；Variable 类型的电压和角色约束尚未完整实现。", "refs": [{ "section": "§6.4.1.2", "table": "Tables 6-8, 6-11", "page": "PDF pp.156, 158" }] },
+        "3.0": { "status": "partial", "notes": "单位解析相同；PDO 顺序和功率的完整校验仅部分实现。", "refs": [{ "section": "§6.4.1.2", "table": "Tables 6-11, 6-15", "page": "PDF pp.119, 122" }] },
+        "3.1": { "status": "partial", "notes": "Source/Sink 表使用相同单位；会检查 min/max 关系，但未覆盖所有协议规则。", "refs": [{ "section": "§6.4.1.2", "table": "Tables 6-11, 6-17", "page": "PDF pp.150, 154" }] },
+        "3.2": { "status": "partial", "notes": "解析电压/电流单位并检查 min≤max 和基本电流边界；能力排序及全部电压条件仍未完整校验。", "refs": [{ "section": "§6.4.1.3", "table": "Table 6.12", "page": "PDF p.130" }] }
+      },
+      "code": [{ "file": "src/js/pd/pdo.js", "start": 150, "end": 161, "symbol": "pdoParse Variable branch", "anchor": "} else if (t1 === 2) {" }],
+      "evidence": ["独立原始向量解析出 5V–10V 和 2.5A。"],
+      "limitations": ["Source Variable PDO 的最小电压和能力功率规则尚未穷尽校验。"]
+    },
+    {
+      "id": "pdo-pps",
+      "title": "SPR PPS APDO 字段与版本差异",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "not-defined", "notes": "PD 2.0 未定义 APDO/PPS，所有 APDO 类型位按 Reserved 处理。", "refs": [{ "section": "§6.4.1", "table": "Table 6-4 and Source/Sink PDO tables", "page": "PDF pp.152–159" }] },
+        "3.0": { "status": "partial", "notes": "本版 APDO 定义 PPS：电压 100mV、电流 50mA 步进；B27 PPS Power Limited 仍按 Reserved 显示。完整 PPS 电气和定时行为不在对象解析范围内。", "refs": [{ "section": "§6.4.1.2.5", "table": "Tables 6-13, 6-17, 6-22", "page": "PDF pp.120, 123, 125" }] },
+        "3.1": { "status": "partial", "notes": "Source PDO 的 B27 PPS Power Limited 已解析；PPS 请求继续使用 PDO 100mV/50mA、RDO 20mV/50mA 编码。", "refs": [{ "section": "§6.4.1.2.5, §6.4.2", "table": "Tables 6-13, 6-19, 6-25", "page": "PDF pp.151, 155, 157" }] },
+        "3.2": { "status": "partial", "notes": "SPR PPS Source/Sink 与 RDO 字段可解析：PDO 为 100mV、RDO 为 20mV、电流为 50mA 步长；功率与范围规则仅部分校验。", "refs": [{ "section": "§6.4.1.3, §6.4.2.1", "table": "Tables 6.13, 6.14, 6.21", "page": "PDF pp.131–132, 138" }] }
+      },
+      "code": [{ "file": "src/js/pd/pdo.js", "start": 170, "end": 186, "symbol": "pdoParse PPS APDO branch", "anchor": "if (t2 === 0) {" }, { "file": "src/js/pd/pdo.js", "start": 308, "end": 316, "symbol": "rdoParse PPS branch", "anchor": "if (kind === 'pps') {" }],
+      "evidence": ["独立向量验证 APDO 从 PD 3.0 引入、B27 版本差异、3.3V/11V 字段解析和 PPS RDO 的 20mV/50mA 单位。"],
+      "limitations": ["未校验 PPS 周期通信、定时器、协商状态或全部 Source 电压/电流/功率组合。"]
+    },
+    {
+      "id": "pdo-epr-avs",
+      "title": "EPR AVS APDO 与 AVS RDO 字段",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "not-defined", "notes": "PD 2.0 未定义 EPR/AVS，APDO 按 Reserved 处理。", "refs": [{ "section": "§6.4.1", "table": "Table 6-4", "page": "PDF p.152" }] },
+        "3.0": { "status": "not-defined", "notes": "本版未定义 EPR AVS；非 PPS 的 APDO 类型保留。", "refs": [{ "section": "§6.4.1.2", "table": "Tables 6-8, 6-13", "page": "PDF pp.115, 120" }] },
+        "3.1": { "status": "partial", "notes": "EPR AVS 边界使用 100mV，PDP 单位为 W；AVS RDO 电压使用 25mV 且要求 B10:9=00。已有基本范围/功率检查，但跨对象规则未完整覆盖。", "refs": [{ "section": "§6.4.1.2.5.2, §6.4.2", "table": "Tables 6-14, 6-15, 6-20, 6-26", "page": "PDF pp.151–152, 155, 158" }] },
+        "3.2": { "status": "partial", "notes": "EPR AVS/APDO 与 AVS RDO 的单位按规范区分；已有最高电压/PDP、请求电压/电流和保留步进检查，完整 EPR 规则仍未覆盖。", "refs": [{ "section": "§6.4.1.3, §6.4.2.1", "table": "Tables 6.16, 6.17, 6.22", "page": "PDF pp.134–135, 138–139" }] }
+      },
+      "code": [{ "file": "src/js/pd/pdo.js", "start": 187, "end": 204, "symbol": "pdoParse EPR AVS branch", "anchor": "} else if (t2 === 1) {" }, { "file": "src/js/pd/pdo.js", "start": 317, "end": 328, "symbol": "rdoParse AVS branch", "anchor": "} else if (kind === 'spr_avs' || kind === 'epr_avs') {" }, { "file": "src/js/pd/pdo.js", "start": 353, "end": 387, "symbol": "PDO/RDO range validation", "anchor": "function pdValidatePdo(em, m) {" }, { "file": "src/js/pd/decoder.js", "start": 644, "end": 650, "symbol": "_validateCapabilities EPR AVS count/max-voltage check (read-only)", "anchor": "const eprEntries = entries.filter(m => m.isEpr);" }],
+      "evidence": ["独立向量解析出 15V–28V/140W、28V/5A AVS 请求，并拒绝 AVS RDO 的 B10:9 非零值。"],
+      "limitations": ["Source AVS 最高电压匹配和 EPR AVS 数量由 decoder 能力集合逻辑校验；其他 EPR 顺序/功率条件尚未穷尽。"]
+    },
+    {
+      "id": "pdo-spr-avs",
+      "title": "SPR AVS APDO 引入版本和字段",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "not-defined", "notes": "PD 2.0 未定义 APDO。", "refs": [{ "section": "§6.4.1", "table": "Table 6-4", "page": "PDF p.152" }] },
+        "3.0": { "status": "not-defined", "notes": "本版未定义 SPR AVS；除 PPS 之外的 APDO 类型位均保留。", "refs": [{ "section": "§6.4.1", "table": "Table 6-8", "page": "PDF p.115" }] },
+        "3.1": { "status": "not-defined", "notes": "PD 3.1 中 APDO type 10b 仍为 Reserved，解析器会归为 Reserved_APDO。", "refs": [{ "section": "§6.4.1.2", "table": "Table 6-8", "page": "PDF p.145" }] },
+        "3.2": { "status": "partial", "notes": "PD 3.2 定义 SPR AVS；解析 9–15V 与 15–20V 两段 10mA 电流字段。decoder 会将其与对应 Fixed PDO 电流比对；其余保留位/范围规则未完整覆盖。", "refs": [{ "section": "§6.4.1.3", "table": "Table 6.15", "page": "PDF p.133" }] }
+      },
+      "code": [{ "file": "src/js/pd/pdo.js", "start": 83, "end": 85, "symbol": "APDO version classification", "anchor": "const reservedApdo =" }, { "file": "src/js/pd/pdo.js", "start": 205, "end": 219, "symbol": "pdoParse SPR AVS branch", "anchor": "} else if (t2 === 2) {" }, { "file": "src/js/pd/decoder.js", "start": 636, "end": 641, "symbol": "_validateCapabilities SPR AVS matching (read-only)", "anchor": "for (const m of entries.filter(m => m.kind === 'spr_avs')) {" }],
+      "evidence": ["独立向量确认 type 10b 在 3.1 作为 Reserved_APDO 拒绝，在 3.2 解码为 3.00A/0A 两段电流。"],
+      "limitations": ["decoder 能力集合匹配属于本次委派编辑范围之外，本次只读检查。"]
+    },
+    {
+      "id": "rdo-fixed-variable",
+      "title": "Fixed/Variable RDO 字段、GiveBack 和请求校验",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "partial", "notes": "对象位置占 B30:28；电流步进为 10mA；解析 GiveBack 请求格式，引用位置限定为 1–7。", "refs": [{ "section": "§6.4.2", "table": "Tables 6-13, 6-14", "page": "PDF p.159" }] },
+        "3.0": { "status": "partial", "notes": "解析 B31:28 对象位置、10mA 工作/限制电流和 GiveBack 格式；完整合约规则不属于对象解析层。", "refs": [{ "section": "§6.4.2", "table": "Tables 6-18, 6-19", "page": "PDF p.123" }] },
+        "3.1": { "status": "partial", "notes": "Fixed/Variable 请求中的 GiveBack 仍有意义。EPR 请求上下文的对象位置编码允许 8–13，但 §6.5.15 能力消息结构最多 11 项；decoder 会检查引用位置是否实际存在。", "refs": [{ "section": "§6.4.2", "table": "Tables 6-21, 6-22", "page": "PDF p.156" }] },
+        "3.2": { "status": "partial", "notes": "B27 已废弃，保留显示但不参与请求语义；B9:0 作为废弃最大值字段处理，并检查它等于工作值。SPR/EPR 的对象位置上限不同。", "refs": [{ "section": "§6.4.2.1", "table": "Table 6.19", "page": "PDF p.137" }] }
+      },
+      "code": [{ "file": "src/js/pd/pdo.js", "start": 252, "end": 303, "symbol": "rdoParse common fields and GiveBack", "anchor": "export function rdoParse(st, em, rdo, o = {}) {" }, { "file": "src/js/pd/pdo.js", "start": 337, "end": 345, "symbol": "rdoParse Fixed/Variable current branch", "anchor": "} else {" }, { "file": "src/js/pd/pdo.js", "start": 371, "end": 387, "symbol": "pdValidateRequest", "anchor": "function pdValidateRequest(em, r, m, latest) {" }],
+      "evidence": ["独立向量验证 PD 2.0 旧位置/电流单位、PD 3.1 GiveBack 最小电流语义，以及 PD 3.2 置位 B27 后仍不启用 GiveBack 的负向行为。"],
+      "limitations": ["规范请求时序、合约建立、消息角色/状态规则和全部 mismatch 行为，需要超出本对象模块的 decoder/状态机测试。"]
+    },
+    {
+      "id": "rdo-battery",
+      "title": "Battery RDO 字段、单位和 GiveBack 版本行为",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "partial", "notes": "工作/最大电池功率步进为 250mW；GiveBack 表用于区分最小值与最大值语义。", "refs": [{ "section": "§6.4.2", "table": "Tables 6-15, 6-16", "page": "PDF p.160" }] },
+        "3.0": { "status": "partial", "notes": "仍为 250mW 单位并沿用 GiveBack 语义；与完整能力表的交叉校验只部分实现。", "refs": [{ "section": "§6.4.2", "table": "Tables 6-20, 6-21", "page": "PDF pp.124–125" }] },
+        "3.1": { "status": "partial", "notes": "B27 选择最小/最大值语义，工作和限制功率字段步进为 250mW。", "refs": [{ "section": "§6.4.2", "table": "Tables 6-23, 6-24", "page": "PDF p.157" }] },
+        "3.2": { "status": "partial", "notes": "B27 按废弃位忽略；工作功率与废弃最大功率字段必须一致，并检查请求是否超出所引 Battery PDO。", "refs": [{ "section": "§6.4.2.1", "table": "Table 6.20", "page": "PDF p.137" }] }
+      },
+      "code": [{ "file": "src/js/pd/pdo.js", "start": 329, "end": 336, "symbol": "rdoParse Battery branch", "anchor": "} else if (kind === 'battery') {" }, { "file": "src/js/pd/pdo.js", "start": 371, "end": 387, "symbol": "pdValidateRequest", "anchor": "function pdValidateRequest(em, r, m, latest) {" }],
+      "evidence": ["独立 PD 3.2 负向向量置位 B27，验证不会采用最小功率语义；废弃字段相等时不产生 RDO 告警。"],
+      "limitations": ["向量集未覆盖所有 250mW 边界或全部 Capability Mismatch 情况。"]
+    },
+    {
+      "id": "rdo-pps-avs",
+      "title": "PPS/AVS RDO 单位和编码限制",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "not-defined", "notes": "PD 2.0 未定义 PPS/AVS 请求格式，因为该版没有 APDO。", "refs": [{ "section": "§6.4.2", "table": "Tables 6-13–6-16", "page": "PDF pp.159–160" }] },
+        "3.0": { "status": "partial", "notes": "PPS RDO 电压步进为 20mV、电流为 50mA；本版没有 AVS RDO。", "refs": [{ "section": "§6.4.2", "table": "Table 6-22", "page": "PDF p.125" }] },
+        "3.1": { "status": "partial", "notes": "解析 PPS 20mV/50mA、AVS 25mV/50mA 编码，并校验 AVS 低位保留码。", "refs": [{ "section": "§6.4.2", "table": "Tables 6-25, 6-26", "page": "PDF pp.157–158" }] },
+        "3.2": { "status": "partial", "notes": "PPS 与 AVS 请求单位分别解析；AVS 的 B10:9 非零会被拒绝。此处不校验完整 AVS 合约协商规则。", "refs": [{ "section": "§6.4.2.1", "table": "Tables 6.21, 6.22", "page": "PDF pp.138–139" }] }
+      },
+      "code": [{ "file": "src/js/pd/pdo.js", "start": 308, "end": 316, "symbol": "rdoParse PPS branch", "anchor": "if (kind === 'pps') {" }, { "file": "src/js/pd/pdo.js", "start": 317, "end": 328, "symbol": "rdoParse AVS branch", "anchor": "} else if (kind === 'spr_avs' || kind === 'epr_avs') {" }],
+      "evidence": ["向量覆盖 11V/2A PPS 请求、28V/5A AVS 请求和非法 AVS 保留步进位。"],
+      "limitations": ["没有覆盖所有请求字段上限或 PDO/RDO 跨消息校验的完整协议向量。"]
+    },
+    {
+      "id": "epr-capability-count-conflict",
+      "title": "PD 3.1 EPR 能力数量与 RDO 位置编码冲突",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "not-defined", "notes": "PD 2.0 不存在 EPR 能力消息。", "refs": [{ "section": "§6.4", "table": "Table 6-3", "page": "PDF p.151" }] },
+        "3.0": { "status": "not-defined", "notes": "PD 3.0 不存在 EPR 能力消息。", "refs": [{ "section": "§6.4", "table": "Table 6-6", "page": "PDF p.113" }] },
+        "3.1": { "status": "partial", "notes": "§6.5.15 规定首个 5V PDO 后最多再有 10 项（共 11 项）；§6.5.15.1 映射七个 SPR 槽位并从位置 8 开始放 EPR，Figure 6-54 画出位置 8–11。但 §10.2.3.2.2 又称七个 SPR 后最多另有六个 EPR PDO（共 13 项）。§1.4.1 规定 Table 优先于 Figure、Figure 优先于正文，且具体规则优先于通用规则，因此实现保留更具体的 11 项构造上限，同时按 Tables 6-21…26 允许 RDO 编码位置 8–13。位置 12/13 可以编码，但若最新能力表没有该 PDO，引用即无效。规范文本本身仍存在矛盾。", "refs": [{ "section": "§1.4.1", "table": "Precedence", "page": "PDF p.59" }, { "section": "§6.4.2", "table": "Tables 6-21…26", "page": "PDF pp.156–158" }, { "section": "§6.5.15–6.5.15.1", "table": "Figure 6-54", "page": "PDF pp.229–230" }, { "section": "§10.2.3.2.2", "table": "描述 EPR PDO 数量的段落", "page": "PDF p.745" }] },
+        "3.2": { "status": "partial", "notes": "EPR_Source_Capabilities/EPR_Sink_Capabilities 携带 1–11 个 PDO，最多七个 SPR 加四个 EPR 位置；RDO 位置大于 11 无效。", "refs": [{ "section": "§6.5.18–6.5.19", "table": "Figure 6.8 / capability message construction", "page": "PDF pp.191–192" }] }
+      },
+      "code": [{ "file": "src/js/pd/extended.js", "start": 480, "end": 489, "symbol": "pdValidateExtended EPR capability size and padding checks", "anchor": "if (t === 17 || t === 18) {" }, { "file": "src/js/pd/pdo.js", "start": 252, "end": 271, "symbol": "rdoParse position ceiling and capability lookup", "anchor": "export function rdoParse(st, em, rdo, o = {}) {" }, { "file": "src/js/pd/decoder.js", "start": 688, "end": 705, "symbol": "EPR_Request copy-to-capability validation (read-only)", "anchor": "} else if (t === 9) {" }],
+      "evidence": ["已依据 PDF 页标记并检查 §1.4.1、§6.5.15/Figure 6-54 与 §10.2.3.2.2 原页。", "独立向量确认 PD 3.1 RDO 位域接受位置 13、PD 3.2 拒绝位置 12，且 PD 3.1 EPR 能力块超过 11 项会告警。"],
+      "limitations": ["PDF Chapter 10 的数量句与更具体的能力构造条款/Figure 冲突。实现依 §1.4.1 的优先级处理，但规范文本本身不一致。", "只有 decoder 状态中已有最近一条 EPR 能力消息时，才能完整判定所引槽位缺失。"]
+    },
+    {
+      "id": "power-rules-and-set-validation",
+      "title": "PDO 顺序、数量上限和规范 Power Rules",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "partial", "notes": "规范规定首个 PDO 为 5V Fixed、后续最多六项并要求类型/电压排序。解析器检查首项 5V 和粗略范围；decoder 会检查重复和顺序级别，但未覆盖所有数量、电气及功率规则。", "refs": [{ "section": "§6.4.1", "table": "Figure 6-3 and PDO tables", "page": "PDF pp.151–152" }] },
+        "3.0": { "status": "partial", "notes": "Fixed/Battery/Variable/PPS 顺序和 ≤100W 功率行为只部分校验；对象解码器未实现 Chapter 10 的全部组合规则。", "refs": [{ "section": "§6.4.1, Chapter 10", "table": "PDO tables and power-range tables", "page": "PDF pp.113–125, 400+" }] },
+        "3.1": { "status": "partial", "notes": "EPR 增加独立范围、AVS 数量/匹配规则及上文所述能力数量冲突。decoder 校验部分 AVS 关系，但未实现完整 Chapter 10 Power Rules。", "refs": [{ "section": "§6.4.1, §6.5.15, §10.2.3", "table": "Tables 6-9…26; Figure 6-54; Tables 10-9…", "page": "PDF pp.148–158, 229–230, 745–749" }] },
+        "3.2": { "status": "partial", "notes": "已实现能力排序级别、重复检查、SPR AVS 电流匹配、EPR AVS 数量和最高电压匹配；尚不能据此证明符合 §7 全部 Power Rules 或完整 Source/Sink 能力边界。", "refs": [{ "section": "§6.4.1.1–6.4.2.1, §7, Chapter 10", "table": "PDO/RDO tables and power rules", "page": "PDF pp.125–139 and Chapter 10" }] }
+      },
+      "code": [{ "file": "src/js/pd/pdo.js", "start": 353, "end": 387, "symbol": "pdValidatePdo/pdValidateRequest", "anchor": "function pdValidatePdo(em, m) {" }, { "file": "src/js/pd/decoder.js", "start": 616, "end": 652, "symbol": "_validateCapabilities partial cross-PDO checks (read-only)", "anchor": "_validateCapabilities(role) {" }],
+      "evidence": ["直接检查代码可见对象范围与部分跨 PDO 顺序/匹配校验，但没有实现规范中全部 Power Rules 表。"],
+      "limitations": ["有状态协商和电气供电规则超出本次三文件编辑范围；不能依据对象向量宣称协议已完整支持。"]
+    },
+    {
+      "id": "data-bist",
+      "title": "BIST Data Object 的版本化模式映射",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "partial", "notes": "使用旧版 BIST 模式表；旧版错误计数器布局单独处理。", "refs": [{ "section": "§6.4.3", "table": "Table 6-17", "page": "PDF p.164" }] },
+        "3.0": { "status": "partial", "notes": "使用更新后的 BIST 模式表；显示无效值，并在本地拒绝多余数据对象。", "refs": [{ "section": "§6.4.3", "table": "Table 6-23", "page": "PDF p.129" }] },
+        "3.1": { "status": "partial", "notes": "沿用 PD 3.x BIST 模式映射；解析器不执行 BIST PHY 或状态行为。", "refs": [{ "section": "§6.4.3", "table": "Table 6-27", "page": "PDF pp.161–162" }] },
+        "3.2": { "status": "partial", "notes": "使用当前 BIST 模式表解析；此解析器只描述字段，不执行 PHY 测试。", "refs": [{ "section": "§6.4.3", "table": "BIST Modes", "page": "PDF p.140" }] }
+      },
+      "code": [{ "file": "src/js/pd/data.js", "start": 22, "end": 41, "symbol": "bistParse" }],
+      "evidence": ["独立向量区分 PD 2.0 mode 0 Receiver 与 PD 3.x mode 5 Carrier。"],
+      "limitations": ["不执行 BIST 发送、接收、计数、定时或 PHY 行为。"]
+    },
+    {
+      "id": "data-battery-status",
+      "title": "Battery_Status Data Object（BSDO）",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "not-defined", "notes": "PD 2.0 Data Message Type 表中没有 Battery_Status。", "refs": [{ "section": "§6.4", "table": "Table 6-3", "page": "PDF p.151" }] },
+        "3.0": { "status": "partial", "notes": "解析 0.1Wh 容量单位、未知值哨兵、充电状态、电池存在和引用字段。", "refs": [{ "section": "§6.4.5", "table": "Table 6-39", "page": "PDF p.152" }] },
+        "3.1": { "status": "partial", "notes": "Battery_Status 字段布局和单位不变；对象边界由上层解析。", "refs": [{ "section": "§6.4.5", "table": "Table 6-46", "page": "PDF p.193" }] },
+        "3.2": { "status": "partial", "notes": "可解析当前 BSDO 字段，包括电池缺席和无效引用状态。", "refs": [{ "section": "§6.4.4", "table": "Table 6.24", "page": "PDF pp.141–142 (Table 6.24 p.142)" }] }
+      },
+      "code": [{ "file": "src/js/pd/data.js", "start": 45, "end": 65, "symbol": "batteryStatusParse" }],
+      "evidence": ["代码检查确认容量按 0.1Wh 换算并识别哨兵值。"],
+      "limitations": ["目前没有独立向量覆盖所有状态/在位/保留位组合。"]
+    },
+    {
+      "id": "data-alert",
+      "title": "Alert Data Object 与扩展事件版本差异",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "not-defined", "notes": "PD 2.0 数据消息定义中没有 Alert Data Object。", "refs": [{ "section": "§6.4", "table": "Table 6-3", "page": "PDF p.151" }] },
+        "3.0": { "status": "partial", "notes": "解析基本告警位；本版 B31 和扩展事件位均为 Reserved。", "refs": [{ "section": "§6.4.6", "table": "Table 6-40", "page": "PDF p.153" }] },
+        "3.1": { "status": "partial", "notes": "解释扩展告警类型 1–4；type 5 及更高值显示为 Reserved。B31 表示扩展告警。", "refs": [{ "section": "§6.4.6", "table": "Table 6-47", "page": "PDF p.194" }] },
+        "3.2": { "status": "partial", "notes": "Type 5 表示 Source 即将降低 Source_Capabilities；解码器已按版本启用此含义，其余未知值仍显示为自定义/保留事件。", "refs": [{ "section": "§6.4.5", "table": "Table 6.25", "page": "PDF p.142" }] }
+      },
+      "code": [{ "file": "src/js/pd/data.js", "start": 69, "end": 113, "symbol": "alertParse" }],
+      "evidence": ["独立向量确认 event type 5 在 3.1 为 Reserved，在 3.2 才表示 Source_Capabilities 即将降低。"],
+      "limitations": ["此对象解析器不实现告警事件的完整后果或状态机行为。"]
+    },
+    {
+      "id": "data-enter-usb",
+      "title": "Enter_USB Data Object 与线缆字段版本差异",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "not-defined", "notes": "未定义 Enter_USB 消息/对象。", "refs": [{ "section": "§6.4", "table": "Table 6-3", "page": "PDF p.151" }] },
+        "3.0": { "status": "not-defined", "notes": "PD 3.0 Data Message Type 定义中没有 Enter_USB。", "refs": [{ "section": "§6.4", "table": "Table 6-6", "page": "PDF p.113" }] },
+        "3.1": { "status": "partial", "notes": "解析 EUDO 字段；按审计的 PD 3.1 v1.4，USB mode 3 和 speed 4 及以上显示为 Reserved。", "refs": [{ "section": "§6.4.8", "table": "Table 6-49", "page": "PDF pp.197–198" }] },
+        "3.2": { "status": "partial", "notes": "Mode 3 显示为 USB4 回退取值，speed 4 显示为 Gen4；标明线缆端需忽略的字段。完整 USB4 进入流程不属于此对象解析器范围。", "refs": [{ "section": "§6.4.7", "table": "Table 6.27", "page": "PDF pp.145–147" }] }
+      },
+      "code": [{ "file": "src/js/pd/data.js", "start": 124, "end": 152, "symbol": "enterUsbParse" }],
+      "evidence": ["独立向量验证 mode 3、speed 4 在 3.1 为 Reserved，在 3.2 映射为 USB4/Gen4。"],
+      "limitations": ["这里只解析字段，不模拟 USB4/USB3 控制、隧道协商或线缆/设备行为。"]
+    },
+    {
+      "id": "data-source-info",
+      "title": "Source_Info SIDO1/SIDO2 与 PDP 单位",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "not-defined", "notes": "未定义 Source_Info。", "refs": [{ "section": "§6.4", "table": "Table 6-3", "page": "PDF p.151" }] },
+        "3.0": { "status": "not-defined", "notes": "本版没有 Source_Info。", "refs": [{ "section": "§6.4", "table": "Table 6-6", "page": "PDF p.113" }] },
+        "3.1": { "status": "partial", "notes": "仅定义 SIDO1，Maximum/Present/Reported PDP 字段单位为 1W；出现第二对象会告警，保留位也会检查。", "refs": [{ "section": "§6.4.11", "table": "Table 6-51", "page": "PDF pp.203–205 (Table 6-51 p.204)" }] },
+        "3.2": { "status": "partial", "notes": "SIDO1 仍以 1W 计；SIDO2 增加 0.5W Maximum/Guaranteed PDP 字段及 DPS/Port Type 规则。decoder 的消息数量校验负责检查对象个数。", "refs": [{ "section": "§6.4.10", "table": "Tables 6.29, 6.30", "page": "PDF pp.148–149 (Tables 6.29/6.30 p.149)" }] }
+      },
+      "code": [{ "file": "src/js/pd/data.js", "start": 156, "end": 201, "symbol": "sourceInfoParse", "anchor": "export function sourceInfoParse(em, data, idx, ctx = {}) {" }, { "file": "src/js/pd/decoder.js", "start": 725, "end": 725, "symbol": "Source_Info ctx dispatch (read-only)", "anchor": "summary = sourceInfoParse(em, data, idx, ctx);" }],
+      "evidence": ["独立向量检查 SIDO1 整数瓦字段、3.1 额外对象拒绝和 SIDO2 半瓦换算。", "当前 decoder 调用会向 sourceInfoParse 传入 ctx；消息数量依版本限制为 3.1 一个、3.2 两个对象。"],
+      "limitations": ["此解析器未完整建模 Source_Info 与已广告 PDO 的会话级一致性。"]
+    },
+    {
+      "id": "data-revision",
+      "title": "Revision Message Data Object（RMDO）",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "not-defined", "notes": "未定义 RMDO。", "refs": [{ "section": "§6.4", "table": "Table 6-3", "page": "PDF p.151" }] },
+        "3.0": { "status": "not-defined", "notes": "未定义 RMDO。", "refs": [{ "section": "§6.4", "table": "Table 6-6", "page": "PDF p.113" }] },
+        "3.1": { "status": "partial", "notes": "解析四个 Revision/Version 半字节；显示低 16 位保留字段但不告警。", "refs": [{ "section": "§6.4.12", "table": "Table 6-52", "page": "PDF p.205" }] },
+        "3.2": { "status": "partial", "notes": "可解析 RMDO 的四个版本半字节；保留位会显示，但尚不据此判无效。", "refs": [{ "section": "§6.4.11", "table": "Table 6.31", "page": "PDF pp.149–150 (Table 6.31 p.150)" }] }
+      },
+      "code": [{ "file": "src/js/pd/data.js", "start": 205, "end": 215, "symbol": "revisionParse" }],
+      "evidence": ["独立向量确认 Revision 3.2 / Version 1.2 半字节解析。"],
+      "limitations": ["不处理版本协商兼容语义，也未强制校验保留位。"]
+    },
+    {
+      "id": "data-epr-mode",
+      "title": "EPR_Mode Data Object",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "not-defined", "notes": "未定义 EPR_Mode。", "refs": [{ "section": "§6.4", "table": "Table 6-3", "page": "PDF p.151" }] },
+        "3.0": { "status": "not-defined", "notes": "未定义 EPR_Mode。", "refs": [{ "section": "§6.4", "table": "Table 6-6", "page": "PDF p.113" }] },
+        "3.1": { "status": "partial", "notes": "解析 Action/Data 字段和失败原因码；非法原因、角色冲突和保留位会告警。此处不实现 EPR 进入/退出状态机。", "refs": [{ "section": "§6.4.10", "table": "Table 6-50", "page": "PDF pp.199–200 (Table 6-50 p.200)" }] },
+        "3.2": { "status": "partial", "notes": "沿用 EPR_Mode 字段与失败原因校验；状态迁移不在此对象层实现。", "refs": [{ "section": "§6.4.9", "table": "Table 6.28", "page": "PDF pp.147–148 (Table 6.28 p.148)" }] }
+      },
+      "code": [{ "file": "src/js/pd/data.js", "start": 220, "end": 240, "symbol": "eprModeParse" }],
+      "evidence": ["代码检查确认 Action 查表、角色相关告警、保留字段告警和原因码范围检查。"],
+      "limitations": ["正确的 EPR 进出流程依赖状态和时序；对象解析测试无法证明流程行为。"]
+    },
+    {
+      "id": "data-country-code",
+      "title": "Country Code Data Object（CCDO）",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "not-defined", "notes": "PD 2.0 Data Message Types 中没有 CCDO。", "refs": [{ "section": "§6.4", "table": "Table 6-3", "page": "PDF p.151" }] },
+        "3.0": { "status": "partial", "notes": "按 first/second character 顺序解析高位两个字节；显示低 16 位保留字段。", "refs": [{ "section": "§6.4.7", "table": "Table 6-41", "page": "PDF p.155" }] },
+        "3.1": { "status": "partial", "notes": "沿用相同的双字符顺序和保留字段布局。", "refs": [{ "section": "§6.4.7", "table": "Table 6-48", "page": "PDF p.197" }] },
+        "3.2": { "status": "partial", "notes": "按规范顺序解析两个字符；Country-Specific Data 位于独立的 CIDB 扩展消息。", "refs": [{ "section": "§6.4.6", "table": "Table 6.26", "page": "PDF pp.144–145 (Table 6.26 p.145)" }] }
+      },
+      "code": [{ "file": "src/js/pd/data.js", "start": 244, "end": 254, "symbol": "countryCodeParse" }],
+      "evidence": ["独立向量 0x434E0000 解析为国家码 CN。"],
+      "limitations": ["未校验字符集范围或国家/地区政策行为。"]
+    },
+    {
+      "id": "extended-scedb",
+      "title": "Source_Capabilities_Extended 数据块（SCEDB）",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "not-defined", "notes": "PD 2.0 未定义扩展消息。", "refs": [{ "section": "§6.4", "table": "Table 6-3", "page": "PDF p.151" }] },
+        "3.0": { "status": "partial", "notes": "解析 24 字节 SCEDB 基本格式；没有 EPR rating 字节。", "refs": [{ "section": "§6.5.1", "table": "Table 6-43", "page": "PDF p.156" }] },
+        "3.1": { "status": "partial", "notes": "25 字节 SCEDB 在 Byte24 增加 EPR Source PDP Rating；已有基本 PDP 上限和部分保留位检查。", "refs": [{ "section": "§6.5.1", "table": "Table 6-54", "page": "PDF p.206" }] },
+        "3.2": { "status": "partial", "notes": "25 字节 SCEDB 包含 Byte24 EPR rating；实现检查 SPR≤100W、EPR≤240W，但未校验所有枚举值和字段关系。", "refs": [{ "section": "§6.5.2", "table": "Table 6.50", "page": "PDF pp.172–175 (Table 6.50 p.173)" }] }
+      },
+      "code": [{ "file": "src/js/pd/extended.js", "start": 86, "end": 128, "symbol": "scedb" }, { "file": "src/js/pd/extended.js", "start": 453, "end": 506, "symbol": "pdValidateExtended" }],
+      "evidence": ["独立向量确认 3.0 没有 Byte24，而 3.1/3.2 在该字节增加 EPR rating。"],
+      "limitations": ["未穷尽验证字段组合语义和所有非法枚举值。"]
+    },
+    {
+      "id": "extended-status",
+      "title": "Status Data Block（SDB）的 SOP/线缆插头格式",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "not-defined", "notes": "没有扩展 Status 数据块。", "refs": [{ "section": "§6.4", "table": "Table 6-3", "page": "PDF p.151" }] },
+        "3.0": { "status": "partial", "notes": "SOP Status 基本长度为 5 字节。PD 3.0 没有独立的 SOP'/SOP'' 两字节线缆格式；解析器现在将意外的线缆块保留为原始数据并告警。", "refs": [{ "section": "§6.5.2", "table": "Table 6-44", "page": "PDF p.160" }] },
+        "3.1": { "status": "partial", "notes": "SOP 格式增加到 7 字节尾部；线缆 Status 按版本和链路区分。已有部分保留位掩码和状态值检查。", "refs": [{ "section": "§6.5.2", "table": "Tables 6-55, 6-56", "page": "PDF pp.211–215" }] },
+        "3.2": { "status": "partial", "notes": "根据链路上下文选择 SOP 7 字节或 SOP'/SOP'' 2 字节格式，不从截断长度猜格式；字段和部分保留位/状态校验已实现。", "refs": [{ "section": "§6.5.3", "table": "Tables 6.51, 6.52", "page": "PDF pp.176–181" }] }
+      },
+      "code": [{ "file": "src/js/pd/extended.js", "start": 144, "end": 198, "symbol": "statusBlock" }, { "file": "src/js/pd/extended.js", "start": 453, "end": 462, "symbol": "pdValidateExtended Status minimum length/revision guard" }, { "file": "src/js/pd/extended.js", "start": 491, "end": 495, "symbol": "pdValidateExtended Status field validation" }],
+      "evidence": ["独立向量验证 PD 3.0 的 5 字节 SOP 格式与 PD 3.1/3.2 的 7 字节 SOP 格式差异。", "独立负向向量确认 PD 3.0 的两字节线缆块保持原始形式并报告 EXT_REVISION，而 3.1/3.2 会解析 Thermal Shutdown 字段。"],
+      "limitations": ["未穷尽测试所有标志交互、保留字段、无效温度编码或状态事件后果。"]
+    },
+    {
+      "id": "extended-battery-blocks",
+      "title": "Get Battery Cap/Status 与 Battery_Capabilities 数据块",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "not-defined", "notes": "PD 2.0 未定义扩展电池数据块。", "refs": [{ "section": "§6.4", "table": "Table 6-3", "page": "PDF p.151" }] },
+        "3.0": { "status": "partial", "notes": "解析 GBCDB、GBSDB 和 BCDB 外层/字段；容量使用 0.1Wh，并识别哨兵值。", "refs": [{ "section": "§6.5.3–6.5.5", "table": "Tables 6-45…47", "page": "PDF pp.162–163" }] },
+        "3.1": { "status": "partial", "notes": "电池引用/容量块的基本解析相同；只检查部分保留字段。", "refs": [{ "section": "§6.5.3–6.5.5", "table": "Tables 6-57…59", "page": "PDF pp.215–216" }] },
+        "3.2": { "status": "partial", "notes": "解析电池引用、容量/状态请求和 BCDB；显示 0/FFFF 容量哨兵值及 0–7 引用范围。", "refs": [{ "section": "§6.5.4–6.5.6", "table": "Tables 6.53–6.55", "page": "PDF pp.181–182" }] }
+      },
+      "code": [{ "file": "src/js/pd/extended.js", "start": 204, "end": 209, "symbol": "batteryRef" }, { "file": "src/js/pd/extended.js", "start": 213, "end": 225, "symbol": "bcdb" }, { "file": "src/js/pd/extended.js", "start": 475, "end": 475, "symbol": "battery reference validation" }],
+      "evidence": ["代码检查确认容量按 0.1Wh 换算，并处理电池引用范围。"],
+      "limitations": ["独立向量尚未覆盖所有电池哨兵值、缺字节/分块交互和 Battery Type 组合。"]
+    },
+    {
+      "id": "extended-manufacturer",
+      "title": "Get_Manufacturer_Info 与 Manufacturer_Info 数据块",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "not-defined", "notes": "未定义扩展 Manufacturer Info。", "refs": [{ "section": "§6.4", "table": "Table 6-3", "page": "PDF p.151" }] },
+        "3.0": { "status": "partial", "notes": "解析 Target/Ref、VID/PID 和字符串字段；字符串按 ASCII 显示并检查 NUL 终止符。", "refs": [{ "section": "§6.5.6–6.5.7", "table": "Tables 6-48, 6-49", "page": "PDF pp.164–165" }] },
+        "3.1": { "status": "partial", "notes": "Target/Ref 和字符串的基本处理相同。", "refs": [{ "section": "§6.5.6–6.5.7", "table": "Tables 6-60, 6-61", "page": "PDF p.218" }] },
+        "3.2": { "status": "partial", "notes": "解析 Target/Ref 与最多 21 字节厂商字符串；非法目标/引用和缺少 NUL 终止符会告警。", "refs": [{ "section": "§6.5.7–6.5.8", "table": "Manufacturer_Info message definitions", "page": "PDF p.183" }] }
+      },
+      "code": [{ "file": "src/js/pd/extended.js", "start": 229, "end": 239, "symbol": "getManufacturerInfo" }, { "file": "src/js/pd/extended.js", "start": 241, "end": 254, "symbol": "manufacturerInfo" }, { "file": "src/js/pd/extended.js", "start": 476, "end": 477, "symbol": "manufacturer target/string validation" }, { "file": "src/js/pd/data.js", "start": 259, "end": 264, "symbol": "manufacturerString" }],
+      "evidence": ["代码检查确认载荷被限制在 Byte4–25，并检查 NUL 终止符。"],
+      "limitations": ["向量没有覆盖 Battery target 的所有引用值，也没有覆盖非 ASCII/非法字符串行为。"]
+    },
+    {
+      "id": "extended-auth",
+      "title": "Security_Request/Response 与 USBC Auth 载荷",
+      "status": "out-of-scope",
+      "versions": {
+        "2.0": { "status": "not-defined", "notes": "未定义 Security 扩展消息。", "refs": [{ "section": "§6.4", "table": "Table 6-3", "page": "PDF p.151" }] },
+        "3.0": { "status": "out-of-scope", "notes": "识别消息类型/外层并转储十六进制载荷；认证内部结构委托给 USBC Auth。", "refs": [{ "section": "§6.5.8", "table": "Table 6-42", "page": "PDF pp.155, 165" }] },
+        "3.1": { "status": "out-of-scope", "notes": "识别消息类型/外层；USB PD 未定义 USBC Auth 内部结构，因此不解析。", "refs": [{ "section": "§6.5.8", "table": "Table 6-53", "page": "PDF pp.205, 219–220" }] },
+        "3.2": { "status": "out-of-scope", "notes": "识别消息类型/外层并保留原始字节；USBC Auth 内部格式属于外部规范。", "refs": [{ "section": "§6.5.9–6.5.10", "table": "Table 6.47", "page": "PDF pp.171, 183" }] }
+      },
+      "code": [{ "file": "src/js/pd/extended.js", "start": 258, "end": 264, "symbol": "security" }, { "file": "src/js/pd/extended.js", "start": 69, "end": 70, "symbol": "extendedParse Security type cases" }],
+      "evidence": ["代码检查确认载荷以原始十六进制转储，并明确提示外部格式；独立测试检查了该提示。"],
+      "limitations": ["不校验证书、签名、transcript、密码学、信任链或 USBC Auth 数据结构。"]
+    },
+    {
+      "id": "extended-pdfu",
+      "title": "Firmware_Update_Request/Response 与 PDFU 载荷",
+      "status": "out-of-scope",
+      "versions": {
+        "2.0": { "status": "not-defined", "notes": "未定义 Firmware Update 扩展消息。", "refs": [{ "section": "§6.4", "table": "Table 6-3", "page": "PDF p.151" }] },
+        "3.0": { "status": "out-of-scope", "notes": "识别消息外层；固件升级数据结构委托给 PDFU。", "refs": [{ "section": "§6.5.9", "table": "Table 6-42", "page": "PDF pp.155, 166" }] },
+        "3.1": { "status": "out-of-scope", "notes": "仅处理消息外层/原始字节；PDFU 内部消息格式不属于 PD 对象解析范围。", "refs": [{ "section": "§6.5.9", "table": "Table 6-53", "page": "PDF pp.205, 220" }] },
+        "3.2": { "status": "out-of-scope", "notes": "仅解析外层并保留原始字节；不解析 PDFU 数据结构。", "refs": [{ "section": "§6.5.11–6.5.12", "table": "Table 6.47", "page": "PDF pp.171, 184" }] }
+      },
+      "code": [{ "file": "src/js/pd/extended.js", "start": 266, "end": 272, "symbol": "firmware" }, { "file": "src/js/pd/extended.js", "start": 70, "end": 71, "symbol": "extendedParse Firmware Update type cases" }],
+      "evidence": ["代码检查确认原始转储并注明 PDFU 委托；独立测试检查了该说明。"],
+      "limitations": ["不校验 PDFU 请求/响应子命令、镜像传输、认证或升级状态。"]
+    },
+    {
+      "id": "extended-pps-status",
+      "title": "PPS_Status 数据块（PPSSDB）",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "not-defined", "notes": "未定义扩展 PPS Status。", "refs": [{ "section": "§6.4", "table": "Table 6-3", "page": "PDF p.151" }] },
+        "3.0": { "status": "partial", "notes": "电压步进 20mV、电流步进 50mA，且可解析实时标志。", "refs": [{ "section": "§6.5.10", "table": "Table 6-50", "page": "PDF pp.166–167 (Table 6-50 p.167)" }] },
+        "3.1": { "status": "partial", "notes": "字段单位相同，并检查部分保留位掩码。", "refs": [{ "section": "§6.5.10", "table": "Table 6-62", "page": "PDF p.221" }] },
+        "3.2": { "status": "partial", "notes": "解析 20mV 电压、50mA 电流及 CV/CL、温度标志；显示不支持哨兵值。", "refs": [{ "section": "§6.5.13", "table": "Table 6.58", "page": "PDF pp.184–185 (Table 6.58 p.185)" }] }
+      },
+      "code": [{ "file": "src/js/pd/extended.js", "start": 286, "end": 295, "symbol": "ppsStatus" }, { "file": "src/js/pd/extended.js", "start": 465, "end": 472, "symbol": "PPSSDB reserved-bit validation" }],
+      "evidence": ["独立向量按 500×20mV 得到 10.00V、按 50×50mA 得到 2.5A，并检查 Current Limit 标志。"],
+      "limitations": ["独立向量只覆盖部分实时标志值和哨兵值。"]
+    },
+    {
+      "id": "extended-country",
+      "title": "Country_Info（CIDB）与 Country_Codes（CCDB）",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "not-defined", "notes": "未定义扩展国家信息数据块。", "refs": [{ "section": "§6.4", "table": "Table 6-3", "page": "PDF p.151" }] },
+        "3.0": { "status": "partial", "notes": "解析 CIDB/CCDB 国家码字节顺序；Reserved 和长度只做基本检查。", "refs": [{ "section": "§6.5.11–6.5.12", "table": "Tables 6-51, 6-52", "page": "PDF p.168" }] },
+        "3.1": { "status": "partial", "notes": "解析 CIDB/CCDB 国家码和地区数据；未穷尽检查全部载荷字段。", "refs": [{ "section": "§6.5.11–6.5.12", "table": "Tables 6-63, 6-64", "page": "PDF pp.222–223" }] },
+        "3.2": { "status": "partial", "notes": "解析 CIDB 与国家码列表 CCDB；检查数量 1–12、列表完整性和保留字节。", "refs": [{ "section": "§6.5.14–6.5.15", "table": "Tables 6.59, 6.60", "page": "PDF pp.185–187" }] }
+      },
+      "code": [{ "file": "src/js/pd/extended.js", "start": 299, "end": 307, "symbol": "countryInfo" }, { "file": "src/js/pd/extended.js", "start": 309, "end": 324, "symbol": "countryCodes" }, { "file": "src/js/pd/extended.js", "start": 478, "end": 478, "symbol": "Country Codes length validation" }],
+      "evidence": ["代码检查确认 CIDB 先取低字节字符，且 CCDB 会解析码表并检查数量。"],
+      "limitations": ["尚无独立国家信息块向量；不检查字符是否合法或国家数据策略。"]
+    },
+    {
+      "id": "extended-skedb",
+      "title": "Sink_Capabilities_Extended 数据块（SKEDB）",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "not-defined", "notes": "未定义扩展 Sink Capabilities。", "refs": [{ "section": "§6.4", "table": "Table 6-3", "page": "PDF p.151" }] },
+        "3.0": { "status": "not-defined", "notes": "PD 3.0 未定义 SKEDB。", "refs": [{ "section": "§6.5", "table": "Table 6-42", "page": "PDF p.155" }] },
+        "3.1": { "status": "partial", "notes": "解析 24 字节 SKEDB；三项 SPR 和三项 EPR PDP 以 1W 为单位，并检查顺序/范围和版本。", "refs": [{ "section": "§6.5.13", "table": "Table 6-65", "page": "PDF p.223" }] },
+        "3.2": { "status": "partial", "notes": "实现 Version 1、电池数量、Sink mode 标志、SPR/EPR PDP 及 Minimum≤Operational≤Maximum 检查；其他字段关系未穷尽。", "refs": [{ "section": "§6.5.16", "table": "Table 6.61", "page": "PDF pp.186–190" }] }
+      },
+      "code": [{ "file": "src/js/pd/extended.js", "start": 328, "end": 369, "symbol": "skedb" }, { "file": "src/js/pd/extended.js", "start": 503, "end": 504, "symbol": "SKEDB version/PDP validation" }],
+      "evidence": ["代码检查确认 3.0 不适用 21 字节最小长度；24 字节最小长度仅用于 3.1/3.2，且 EPR PDP 字段只在块长达到 24 字节时解析。"],
+      "limitations": ["尚无独立向量覆盖完整 SKEDB、版本错误或 PDP 排序边界。"]
+    },
+    {
+      "id": "extended-control",
+      "title": "Extended_Control 数据块与消息类型值",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "not-defined", "notes": "未定义 Extended Control。", "refs": [{ "section": "§6.4", "table": "Table 6-3", "page": "PDF p.151" }] },
+        "3.0": { "status": "not-defined", "notes": "PD 3.0 扩展消息类型列表中没有 Extended Control。", "refs": [{ "section": "§6.5", "table": "Table 6-42", "page": "PDF p.155" }] },
+        "3.1": { "status": "partial", "notes": "解析 Type 和 Data；检查 Type 范围，并显示 Data 按规范必须为零。", "refs": [{ "section": "§6.5.14", "table": "Tables 6-66, 6-67", "page": "PDF p.228" }] },
+        "3.2": { "status": "partial", "notes": "校验 Type 1–4 和 Data=0；不支持的类型会标记为应回复 Not_Supported。", "refs": [{ "section": "§6.5.17", "table": "Tables 6.62, 6.63", "page": "PDF p.190" }] }
+      },
+      "code": [{ "file": "src/js/pd/extended.js", "start": 373, "end": 379, "symbol": "extControl" }, { "file": "src/js/pd/extended.js", "start": 479, "end": 479, "symbol": "Extended Control Type/Data validation" }],
+      "evidence": ["代码校验要求 Type 为 1–4 且 Data 字节为零。"],
+      "limitations": ["此处未测试各控制类型的响应和状态变化。"]
+    },
+    {
+      "id": "extended-epr-caps",
+      "title": "EPR_Source_Capabilities / EPR_Sink_Capabilities 对象列表",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "not-defined", "notes": "未定义 EPR 扩展能力消息。", "refs": [{ "section": "§6.4", "table": "Table 6-3", "page": "PDF p.151" }] },
+        "3.0": { "status": "not-defined", "notes": "未定义 EPR 扩展能力消息。", "refs": [{ "section": "§6.5", "table": "Table 6-42", "page": "PDF p.155" }] },
+        "3.1": { "status": "partial", "notes": "解析对齐的 PDO 槽位和七个 SPR 槽位填充，并从位置 8 起解析 EPR 槽位；按具体构造条款限制为 11 项，同时保留 RDO 可编码到位置 13 的独立规则。", "refs": [{ "section": "§6.5.15–6.5.15.2", "table": "Figure 6-54", "page": "PDF pp.229–230" }] },
+        "3.2": { "status": "partial", "notes": "解析对齐槽位，校验 1–11 项长度和填充；Source 的 EPR AVS 数量/最高电压由能力集合逻辑交叉检查。", "refs": [{ "section": "§6.5.18–6.5.19", "table": "Figure 6.8", "page": "PDF pp.191–192" }] }
+      },
+      "code": [{ "file": "src/js/pd/extended.js", "start": 383, "end": 404, "symbol": "eprCaps" }, { "file": "src/js/pd/extended.js", "start": 411, "end": 438, "symbol": "pdoSlots alignment/carry handling" }, { "file": "src/js/pd/extended.js", "start": 480, "end": 489, "symbol": "EPR list structure checks" }, { "file": "src/js/pd/decoder.js", "start": 644, "end": 650, "symbol": "EPR AVS capability cross-check (read-only)" }],
+      "evidence": ["独立向量测试 PD 3.1 的 11 项上限和 PD 3.2 对 11 项能力表的接受。"],
+      "limitations": ["PD 3.1 原文的对象数量句相互冲突；此模块不执行完整 EPR 协商/状态校验。"]
+    },
+    {
+      "id": "extended-vendor-defined",
+      "title": "Vendor_Defined_Extended 消息外层",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "not-defined", "notes": "PD 2.0 没有 Vendor_Defined_Extended，只有 VDM 数据对象。", "refs": [{ "section": "§6.4", "table": "Table 6-3", "page": "PDF p.151" }] },
+        "3.0": { "status": "partial", "notes": "识别厂商扩展消息外层并显示厂商数据字节；厂商语义由外部定义。", "refs": [{ "section": "§6.5", "table": "Table 6-42", "page": "PDF p.155" }] },
+        "3.1": { "status": "partial", "notes": "识别消息外层；厂商载荷仍按不透明数据处理。", "refs": [{ "section": "§6.5.16", "table": "Table 6-53", "page": "PDF pp.205, 230" }] },
+        "3.2": { "status": "partial", "notes": "显示 SVID、command space 和不透明厂商字节；不解释厂商自定义语义。", "refs": [{ "section": "§6.5.20", "table": "Vendor_Defined_Extended message", "page": "PDF p.192" }] }
+      },
+      "code": [{ "file": "src/js/pd/extended.js", "start": 510, "end": 520, "symbol": "vendorDefinedExtended" }],
+      "evidence": ["代码检查确认 type 30 包含 SVID/command 头部和原始数据字节。"],
+      "limitations": ["厂商载荷格式、SVID 策略和应用特定语义不属于 USB PD 核心解析。"]
+    },
+    {
+      "id": "extended-framing-and-limits",
+      "title": "扩展块长度、保留位掩码、分块衔接和填充",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "not-defined", "notes": "本版没有扩展消息分块格式。", "refs": [{ "section": "§6.4", "table": "Table 6-3", "page": "PDF p.151" }] },
+        "3.0": { "status": "partial", "notes": "对象层对部分类型检查最小长度和保留位掩码；完整分块重组由 decoder 处理，未包含在本独立对象向量集。", "refs": [{ "section": "§6.2.1, §6.5.1–6.5.12", "table": "Table 6-3 and Tables 6-42…52", "page": "PDF pp.100, 155–168" }] },
+        "3.1": { "status": "partial", "notes": "检查按版本变化的最小长度、保留位掩码和 EPR 块对齐；分块顺序/错误恢复由 decoder 层负责。", "refs": [{ "section": "§6.2.1, §6.5.1–6.5.16", "table": "Tables 6-3, 6-53…66", "page": "PDF pp.128, 205–230" }] },
+        "3.2": { "status": "partial", "notes": "按类型检查最小长度、部分保留位、Country_Codes 长度、厂商字符串 NUL、EPR 对齐/数量/填充；分块重组和状态由 decoder 负责。", "refs": [{ "section": "§6.5.1, §6.5.2–6.5.20", "table": "Tables 6.47–6.64", "page": "PDF pp.171–192" }] }
+      },
+      "code": [{ "file": "src/js/pd/extended.js", "start": 23, "end": 25, "symbol": "b8/b16/b32 byte access helpers" }, { "file": "src/js/pd/extended.js", "start": 411, "end": 438, "symbol": "pdoSlots alignment/carry handling" }, { "file": "src/js/pd/extended.js", "start": 453, "end": 506, "symbol": "pdValidateExtended" }],
+      "evidence": ["独立测试覆盖 SCEDB 版本长度、Status 长度、EPR 对齐/数量边界和部分保留位行为。"],
+      "limitations": ["本对象审计没有独立分块序列向量覆盖缺失、重复、乱序、重叠或截断分块。"]
+    }
+  ],
+  "findings": [
+    {
+      "id": "bug-giveback-pd32",
+      "title": "PD 3.2 RDO 错误应用了 B27 GiveBack 语义",
+      "before": "解析器曾依据 B27 选择最小/最大 RDO 语义，并警告该位必须为零；这与 PD 3.2 将其废弃并要求忽略的规定冲突。",
+      "after": "现已修复：B27 仍显示为 Deprecated，但不改变实际 GiveBack 语义；Fixed/Variable/Battery RDO 的废弃 B9:0 字段按最大值显示，并要求等于工作值。",
+      "code": [{ "file": "src/js/pd/pdo.js", "start": 277, "end": 303, "symbol": "rdoParse GiveBack version branch", "anchor": "const augmented = ['pps', 'spr_avs', 'epr_avs'].includes(kind);" }, { "file": "src/js/pd/pdo.js", "start": 329, "end": 345, "symbol": "RDO deprecated limit display", "anchor": "} else if (kind === 'battery') {" }, { "file": "src/js/pd/pdo.js", "start": 381, "end": 386, "symbol": "pdValidateRequest", "anchor": "if (latest && r.limit !== undefined" }],
+      "refs": [{ "version": "3.1", "section": "§6.4.2", "table": "Tables 6-21…26", "page": "PD 3.1 PDF pp.156–158" }, { "version": "3.2", "section": "§6.4.2.1", "table": "Tables 6.19…6.22", "page": "PD 3.2 PDF pp.137–139" }],
+      "tests": [{ "file": "tools/pd-audit-objects.mjs", "start": 184, "end": 203, "name": "PD 3.2 GiveBack negative vectors" }]
+    },
+    {
+      "id": "bug-alert-type5-version",
+      "title": "PD 3.2 之前错误解释了 Extended Alert type 5",
+      "before": "全局事件名称表曾将当前版本的 type 5 含义套用到 PD 3.1 Alert，导致旧版本出现其规范中未定义的语义。",
+      "after": "现已修复：PD 3.1 的 type 5 及以上显示为 Reserved；PD 3.2 才启用该版本引入的事件含义。",
+      "code": [{ "file": "src/js/pd/data.js", "start": 98, "end": 108, "symbol": "alertParse event version gate", "anchor": "const extType = pdField(data, 3, 0);" }],
+      "refs": [{ "version": "3.1", "section": "§6.4.6", "table": "Table 6-47", "page": "PD 3.1 PDF p.194" }, { "version": "3.2", "section": "§6.4.5", "table": "Table 6.25", "page": "PD 3.2 PDF p.142" }],
+      "tests": [{ "file": "tools/pd-audit-objects.mjs", "start": 241, "end": 249, "name": "Alert type 5 revision split" }]
+    },
+    {
+      "id": "bug-source-info-revision-shape",
+      "title": "PD 3.1 不应将 SIDO2 解码为有效对象",
+      "before": "解析器没有版本上下文时，会把索引 1 按较新版本的 SIDO2 布局解码，并当作有效对象。",
+      "after": "现已修复：Source_Info 解析器接收 ctx，在 PD 3.1 遇到第二个对象时告警并停止解析；同时检查 SIDO1/SIDO2 的 Reserved 位及部分字段关系。decoder 调用传入 ctx，并按规范版本检查对象数量。",
+      "code": [{ "file": "src/js/pd/data.js", "start": 156, "end": 201, "symbol": "sourceInfoParse", "anchor": "export function sourceInfoParse(em, data, idx, ctx = {}) {" }, { "file": "src/js/pd/decoder.js", "start": 725, "end": 725, "symbol": "Source_Info dispatch (read-only)", "anchor": "summary = sourceInfoParse(em, data, idx, ctx);" }],
+      "refs": [{ "version": "3.1", "section": "§6.4.11", "table": "Table 6-51", "page": "PD 3.1 PDF pp.203–205 (Table 6-51 p.204)" }, { "version": "3.2", "section": "§6.4.10", "table": "Tables 6.29, 6.30", "page": "PD 3.2 PDF pp.148–149 (Tables 6.29/6.30 p.149)" }],
+      "tests": [{ "file": "tools/pd-audit-objects.mjs", "start": 263, "end": 274, "name": "SIDO1/SIDO2 revision and scale vectors" }]
+    },
+    {
+      "id": "bug-status-cable-layout-version",
+      "title": "PD 3.0 错误选择了两字节线缆 Status 格式",
+      "before": "先前只要链路上下文是 cable，就会按 SOP'/SOP'' 温度与热关断布局解码；PD 3.0 也错误地使用两字节最小长度。",
+      "after": "两字节线缆布局及其最小长度只适用于 PD 3.1/3.2。遇到 PD 3.0 的线缆 Status 时，保留原始字节并报告该版本未定义此布局。",
+      "code": [{ "file": "src/js/pd/extended.js", "start": 144, "end": 162, "symbol": "statusBlock cable revision gate", "anchor": "function statusBlock(em, bk, ctx) {" }, { "file": "src/js/pd/extended.js", "start": 453, "end": 462, "symbol": "versioned Status minimum length", "anchor": "function pdValidateExtended(em, t, bk, ctx) {" }],
+      "refs": [{ "version": "3.0", "section": "§6.5.2", "table": "Table 6-44 (5-byte SOP Status)", "page": "PD 3.0 PDF p.160" }, { "version": "3.1", "section": "§6.5.2.2", "table": "Table 6-56 (2-byte SOP'/SOP'' Status)", "page": "PD 3.1 PDF p.215" }, { "version": "3.2", "section": "§6.5.3", "table": "Tables 6.51–6.52", "page": "PD 3.2 PDF pp.176–181" }],
+      "tests": [{ "file": "tools/pd-audit-objects.mjs", "start": 316, "end": 326, "name": "Cable Status revision guard" }]
+    }
+  ]
+}

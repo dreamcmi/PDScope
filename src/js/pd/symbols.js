@@ -91,6 +91,7 @@ export function matchOrderedSet(symbols) {
       if (symbols[i] === s.sequence[i]) same++;
     }
     if (!best || same > best.matched) best = { set: s, matched: same, total: s.sequence.length };
+    else if (same === best.matched) best.set = null; // 3/4 匹配有歧义时不可任选一种 SOP
   }
   return best;
 }

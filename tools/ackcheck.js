@@ -3,16 +3,16 @@
  * GoodCRC 配对校验 —— 跨全部真实抓包验证 `linkGoodCrc()` 的配对是否正确。
  *
  * 校验项：
- *   ① 被确认对象不能是 GoodCRC 自己，方向必须相反（linkGoodCrc 的构造约束）；
+ *   ① 被确认对象不能是 GoodCRC 自己，方向必须相反，SOP 必须相同；
  *   ② 双方 CRC 都通过时，MessageID 必须相同（PD 规范的强约束）——这是真正的正确性判据；
  *   ③ 配对距离必须很近（GoodCRC 是即时应答，实测恒为 1 条）；
  *   ④ 统计「继承配色」后多少条 GoodCRC 会呈现 Control 以外的新颜色。
  *
  * 用法：node tools/ackcheck.js [文件.atkcc ...]
- *       不带参数则扫描上级目录里的全部 .atkcc
+ *       不带参数则扫描 rawdata/；--dir 可指定样本目录。
+ *       npm run ackcheck 自动生成确定性合成样本，无需私有文件。
  */
 import { readFile, readdir } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
 import { join, dirname, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { makeNodeInflator } from '../src/js/core/inflate.js';
@@ -20,7 +20,6 @@ import { AtkccCapture, scanChannelActivity } from '../src/js/core/atkcc.js';
 import { decodeChannel } from '../src/js/core/pipeline.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const PARENT = resolve(ROOT, '..');
 const inflate = await makeNodeInflator();
 
 /** 与界面 `toneOf()` 保持一致：只取报文自身的语义类别，不看 CRC */
@@ -31,8 +30,6 @@ function toneOf(p) {
   if (p.msgKind === 'special') return 'Error';
   return 'Control';
 }
-const OPPOSITE = { SRC: 'SNK', SNK: 'SRC' };
-
 async function bestChannel(cap) {
   if (cap.meta.channels.length === 1) return cap.meta.channels[0].channel;
   let best = cap.meta.channels[0].channel, bestA = -1;
@@ -53,13 +50,14 @@ async function check(file) {
   const okGc = gc.filter((p) => p.crcOk !== false);
   const paired = okGc.filter((p) => p.ackOf != null);
 
-  let badSelf = 0, badDir = 0, badId = 0, badDist = 0, maxDist = 0, idChecked = 0;
+  let badSelf = 0, badDir = 0, badSop = 0, badId = 0, badDist = 0, maxDist = 0, idChecked = 0;
   let inhControl = 0, inhOther = 0;
   const samples = [];
   for (const p of paired) {
     const ref = packets[p.ackOf];
     if (!ref || ref.msgType === 'GoodCRC') { badSelf++; continue; }
     if (ref.role === p.role) badDir++;
+    if (ref.sop !== p.sop) badSop++;
     if (ref.crcOk !== false) { idChecked++; if (ref.msgId !== p.msgId) badId++; }
     const dist = p.index - ref.index;
     if (dist > maxDist) maxDist = dist;
@@ -69,25 +67,31 @@ async function check(file) {
     if (samples.length < 4) samples.push(`#${p.index} GoodCRC(${p.role}) ⟵ #${ref.index} ${ref.msgType}(${ref.role})` + `${ref.crcOk === false ? ' [坏包]' : ''} → 取 ${t} 色`);
   }
 
-  const errs = badSelf + badDir + badId + badDist;
+  const errs = badSelf + badDir + badSop + badId + badDist;
   const name = basename(file).replace(/\.atkcc$/i, '');
   console.log(`\n── ${name}  (通道 ${ch}, ${packets.length} 条报文)`);
   console.log(`   GoodCRC ${gc.length} 条 · 有效 ${okGc.length} · 已配对 ${paired.length} · 未配对 ${okGc.length - paired.length}`);
-  console.log(`   配对正确性: 自指 ${badSelf} · 同向 ${badDir} · ID 不符 ${badId}/${idChecked} · 距离>4 ${badDist}  → ${errs ? '✗ 存在错误' : '✓ 全部正确'}`);
+  console.log(`   配对正确性: 自指 ${badSelf} · 同向 ${badDir} · 跨 SOP ${badSop} · ID 不符 ${badId}/${idChecked} · 距离>4 ${badDist}  → ${errs ? '✗ 存在错误' : '✓ 全部正确'}`);
   console.log(`   最远配对距离: ${maxDist} 条报文`);
   console.log(`   继承配色: 沿用 Control(青) ${inhControl} 条 · 变成其他色 ${inhOther} 条`);
   for (const s of samples) console.log(`     ${s}`);
-  return errs === 0 && paired.length > 0;
+  return errs === 0 && paired.length > 0 && paired.length === okGc.length;
 }
 
 let files = process.argv.slice(2);
+const dirArg = files.indexOf('--dir');
+const sampleDir = dirArg >= 0 ? resolve(files[dirArg + 1] || 'rawdata') : join(ROOT, 'rawdata');
+if (dirArg >= 0) files.splice(dirArg, 2);
 if (!files.length) {
-  const names = (await readdir(PARENT)).filter((n) => n.toLowerCase().endsWith('.atkcc'));
-  files = names.map((n) => join(PARENT, n));
+  const names = (await readdir(sampleDir)).filter((n) => n.toLowerCase().endsWith('.atkcc'));
+  files = names.map((n) => join(sampleDir, n));
 }
-files = files.filter((f) => existsSync(f));
 
 console.log('═══ GoodCRC 配对校验 ═══');
+if (!files.length) {
+  console.error('没有找到 .atkcc 样本，未执行任何校验。请指定文件或运行 npm run ackcheck 生成合成样本。');
+  process.exit(1);
+}
 let allOk = true;
 for (const f of files) {
   try { if (!(await check(f))) allOk = false; }

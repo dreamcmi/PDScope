@@ -1,0 +1,616 @@
+{
+  "auditDate": "2026-10-08",
+  "features": [
+    {
+      "id": "system-architecture",
+      "title": "系统架构：Policy Engine / Device Policy Manager",
+      "status": "范围外",
+      "versions": {
+        "2.0": {
+          "status": "范围外",
+          "notes": "参见项目实际实现边界；本条按整章功能评估。",
+          "refs": [
+            {
+              "section": "§2.6 / Ch.8",
+              "page": 45
+            }
+          ]
+        },
+        "3.0": {
+          "status": "范围外",
+          "notes": "参见项目实际实现边界；本条按整章功能评估。",
+          "refs": [
+            {
+              "section": "§2.6 / Ch.8",
+              "page": 47
+            }
+          ]
+        },
+        "3.1": {
+          "status": "范围外",
+          "notes": "参见项目实际实现边界；本条按整章功能评估。",
+          "refs": [
+            {
+              "section": "§2.7 / Ch.8",
+              "page": 72
+            }
+          ]
+        },
+        "3.2": {
+          "status": "范围外",
+          "notes": "参见项目实际实现边界；本条按整章功能评估。",
+          "refs": [
+            {
+              "section": "§1.7 / Ch.9",
+              "page": 24
+            }
+          ]
+        }
+      },
+      "code": [
+        {
+          "file": "src/js/pd/decoder.js",
+          "symbol": "export class PdDecoder"
+        }
+      ],
+      "evidence": [
+        "项目输入是抓包文件，输出报文/诊断/关联快照；没有 PD 发包硬件或电源执行器接口。"
+      ],
+      "limitations": [
+        "未实现 Source/Sink/VCONN 主动策略引擎、DPM 决策、发包调度或电源控制。"
+      ]
+    },
+    {
+      "id": "chapter-power-rules",
+      "title": "整章 Power Rules / Port Power Requirements",
+      "status": "部分实现",
+      "versions": {
+        "2.0": {
+          "status": "部分实现",
+          "notes": "参见项目实际实现边界；本条按整章功能评估。",
+          "refs": [
+            {
+              "section": "Ch.10",
+              "page": 485
+            }
+          ]
+        },
+        "3.0": {
+          "status": "部分实现",
+          "notes": "参见项目实际实现边界；本条按整章功能评估。",
+          "refs": [
+            {
+              "section": "Ch.10",
+              "page": 528
+            }
+          ]
+        },
+        "3.1": {
+          "status": "部分实现",
+          "notes": "参见项目实际实现边界；本条按整章功能评估。",
+          "refs": [
+            {
+              "section": "Ch.10",
+              "page": 739
+            }
+          ]
+        },
+        "3.2": {
+          "status": "部分实现",
+          "notes": "参见项目实际实现边界；本条按整章功能评估。",
+          "refs": [
+            {
+              "section": "Ch.3",
+              "page": 37
+            }
+          ]
+        }
+      },
+      "code": [
+        {
+          "file": "src/js/pd/pdo.js",
+          "symbol": "function pdValidatePdo"
+        },
+        {
+          "file": "src/js/pd/decoder.js",
+          "symbol": "_validateCapabilities(role)"
+        }
+      ],
+      "evidence": [
+        "已检查 PDO 电压/电流/PDP 字段范围、排序、SPR AVS 对应 Fixed 电流、EPR AVS 与最高 EPR Fixed 的匹配。"
+      ],
+      "limitations": [
+        "未建立整章 Power Rules 校验器：Guaranteed/Managed Capability、多端口共享功率、按 PDP 强制全部电压电流组合和动态供电约束仍需专门规则。",
+        "报文数字字段正确，不足以证明电源实际满足其广告能力。"
+      ]
+    },
+    {
+      "id": "chapter-electrical",
+      "title": "供电电气：VBUS/VCONN、转换/保护/放电/负载",
+      "status": "范围外",
+      "versions": {
+        "2.0": {
+          "status": "范围外",
+          "notes": "参见项目实际实现边界；本条按整章功能评估。",
+          "refs": [
+            {
+              "section": "Ch.4 / Ch.7",
+              "page": 94
+            }
+          ]
+        },
+        "3.0": {
+          "status": "范围外",
+          "notes": "参见项目实际实现边界；本条按整章功能评估。",
+          "refs": [
+            {
+              "section": "Ch.4 / Ch.7",
+              "page": 65
+            }
+          ]
+        },
+        "3.1": {
+          "status": "范围外",
+          "notes": "参见项目实际实现边界；本条按整章功能评估。",
+          "refs": [
+            {
+              "section": "Ch.4 / Ch.7",
+              "page": 93
+            }
+          ]
+        },
+        "3.2": {
+          "status": "范围外",
+          "notes": "参见项目实际实现边界；本条按整章功能评估。",
+          "refs": [
+            {
+              "section": "Ch.4",
+              "page": 48
+            }
+          ]
+        }
+      },
+      "code": [
+        {
+          "file": "src/js/core/pipeline.js",
+          "symbol": "export function attachBusValues"
+        },
+        {
+          "file": "src/js/core/powerz.js",
+          "symbol": "async decode"
+        }
+      ],
+      "evidence": [
+        "保存和显示抓包中的 VBUS/IBUS；测量缺失保留未知，未用协议请求值伪造实测值。"
+      ],
+      "limitations": [
+        "没有模拟电气阈值测量、保护/容性负载测试、阻抗或转换斜率认证；采样值和消息时序不构成硬件合规结论。"
+      ]
+    },
+    {
+      "id": "chapter-connectors",
+      "title": "连接器/线缆组件的物理结构要求",
+      "status": "范围外",
+      "versions": {
+        "2.0": {
+          "status": "范围外",
+          "notes": "参见项目实际实现边界；本条按整章功能评估。",
+          "refs": [
+            {
+              "section": "Ch.3",
+              "page": 62
+            }
+          ]
+        },
+        "3.0": {
+          "status": "范围外",
+          "notes": "参见项目实际实现边界；本条按整章功能评估。",
+          "refs": [
+            {
+              "section": "Ch.3",
+              "page": 64
+            }
+          ]
+        },
+        "3.1": {
+          "status": "范围外",
+          "notes": "参见项目实际实现边界；本条按整章功能评估。",
+          "refs": [
+            {
+              "section": "Ch.3",
+              "page": 92
+            }
+          ]
+        },
+        "3.2": {
+          "status": "范围外",
+          "notes": "参见项目实际实现边界；本条按整章功能评估。",
+          "refs": [
+            {
+              "section": "§1.1 / §2.2",
+              "page": 21
+            }
+          ]
+        }
+      },
+      "code": [
+        {
+          "file": "src/js/pd/vdm.js",
+          "symbol": "function decodeDiscoverIdentity"
+        }
+      ],
+      "evidence": [
+        "Discover Identity 可描述线缆声明；产品结构、电缆实体和连接器机械属性没有检查接口。"
+      ],
+      "limitations": [
+        "旧版 Type-A/B 机械和额定要求、外部 USB Type-C 机械/电气要求未实现。"
+      ]
+    },
+    {
+      "id": "chapter-timers",
+      "title": "协议/供电计时器、计数器和超时诊断总集",
+      "status": "未实现",
+      "versions": {
+        "2.0": {
+          "status": "未实现",
+          "notes": "参见项目实际实现边界；本条按整章功能评估。",
+          "refs": [
+            {
+              "section": "§6.5 / §6.6",
+              "page": 188
+            }
+          ]
+        },
+        "3.0": {
+          "status": "未实现",
+          "notes": "参见项目实际实现边界；本条按整章功能评估。",
+          "refs": [
+            {
+              "section": "§6.6 / §6.7",
+              "page": 169
+            }
+          ]
+        },
+        "3.1": {
+          "status": "未实现",
+          "notes": "参见项目实际实现边界；本条按整章功能评估。",
+          "refs": [
+            {
+              "section": "§6.6 / §6.7",
+              "page": 231
+            }
+          ]
+        },
+        "3.2": {
+          "status": "未实现",
+          "notes": "参见项目实际实现边界；本条按整章功能评估。",
+          "refs": [
+            {
+              "section": "§7.31 / §7.32",
+              "page": 222
+            }
+          ]
+        }
+      },
+      "code": [
+        {
+          "file": "src/js/pd/epr.js",
+          "symbol": "export function pdTrackEpr"
+        }
+      ],
+      "evidence": [
+        "已有消息时间戳、Keep Alive 请求与 Ack 记录；没有统一计时器引擎及全部 t*/n* 参数表驱动校验。"
+      ],
+      "limitations": [
+        "GoodCRC、SenderResponse、PPS 周期、EPR Keep Alive、功率转换和交换超时没有自动诊断。",
+        "被动计时诊断应先声明连续抓包/缺包边界，并按协议层起止事件计算，避免用孤立时间戳误报。"
+      ]
+    },
+    {
+      "id": "chapter-bfsk",
+      "title": "旧 PD 2.0 BFSK 物理信号输入",
+      "status": "未实现",
+      "versions": {
+        "2.0": {
+          "status": "未实现",
+          "notes": "文档包含通过 VBUS 的 BFSK 通信；项目仅原始 CC 数字 BMC 路径。",
+          "refs": [
+            {
+              "section": "§5.8.2",
+              "page": 116
+            }
+          ]
+        },
+        "3.0": {
+          "status": "不适用",
+          "notes": "该基线已面向 CC 上的 BMC。",
+          "refs": [
+            {
+              "section": "Ch.5",
+              "page": 66
+            }
+          ]
+        },
+        "3.1": {
+          "status": "不适用",
+          "notes": "该基线面向 CC 上的 BMC。",
+          "refs": [
+            {
+              "section": "Ch.5",
+              "page": 94
+            }
+          ]
+        },
+        "3.2": {
+          "status": "不适用",
+          "notes": "该基线面向 CC 上的 BMC。",
+          "refs": [
+            {
+              "section": "Ch.5",
+              "page": 85
+            }
+          ]
+        }
+      },
+      "code": [
+        {
+          "file": "src/js/core/bmc.js",
+          "symbol": "export class BmcDecoder"
+        }
+      ],
+      "evidence": [
+        "当前采样输入为单比特电平，BmcDecoder 以边沿恢复 CC BMC。"
+      ],
+      "limitations": [
+        "未提供模拟 VBUS BFSK 解调，无法用当前接口恢复该类旧抓包。"
+      ]
+    },
+    {
+      "id": "baseline-selection",
+      "title": "四份具体 PDF 基线选择及未知 3.x 兼容模式",
+      "status": "已实现",
+      "versions": {
+        "2.0": {
+          "status": "已实现",
+          "notes": "配置 2.0 对应本地 PDF 的具体 Version；Header 的 2.0 仍按旧编码处理。",
+          "refs": [
+            {
+              "section": "§6.2.1",
+              "page": 143
+            }
+          ]
+        },
+        "3.0": {
+          "status": "已实现",
+          "notes": "配置 3.0 对应本地 PDF 的具体 Version；Header 的 2.0 仍按旧编码处理。",
+          "refs": [
+            {
+              "section": "§6.2.1",
+              "page": 96
+            }
+          ]
+        },
+        "3.1": {
+          "status": "已实现",
+          "notes": "配置 3.1 对应本地 PDF 的具体 Version；Header 的 2.0 仍按旧编码处理。",
+          "refs": [
+            {
+              "section": "§6.2.1",
+              "page": 124
+            }
+          ]
+        },
+        "3.2": {
+          "status": "已实现",
+          "notes": "配置 3.2 对应本地 PDF 的具体 Version；Header 的 2.0 仍按旧编码处理。",
+          "refs": [
+            {
+              "section": "§6.1.3 / §6.2",
+              "page": 112
+            }
+          ]
+        }
+      },
+      "code": [
+        {
+          "file": "src/js/pd/tables.js",
+          "symbol": "export const PD_SPEC_PROFILES"
+        },
+        {
+          "file": "src/js/pd/decoder.js",
+          "symbol": "constructor("
+        },
+        {
+          "file": "src/ui/app.js",
+          "symbol": "function setSpecRevision"
+        },
+        {
+          "file": "tools/cli.js",
+          "symbol": "function parseArgs"
+        }
+      ],
+      "evidence": [
+        "tools/pd-audit-profiles.mjs: 4 × 3 × 32 固定消息类型向量；波形/SQLite/流与 CLI 的版本透传。",
+        "tools/pd-audit-browser.mjs: 四版 CSV、下拉重解析、多标签隔离与 UFCS 禁用。"
+      ],
+      "limitations": [
+        "Header 的 10b 只说明 3.x；配置是解释基线，不是被解析设备真实 Version 的检测结论。",
+        "只覆盖本地四个 Version，不以此宣称支持同一 Revision 下所有发布版本。"
+      ]
+    }
+  ],
+  "chapters": [
+    [
+      "简介/系统架构",
+      "Ch.1–2 / p34–45",
+      "Ch.1–2 / p35–47",
+      "Ch.1–2 / p57–72",
+      "Ch.1–2 / p21–26",
+      "架构参考；被动分析器，不含设备策略执行"
+    ],
+    [
+      "线缆与连接器",
+      "Ch.3 / p62",
+      "Ch.3 / p64",
+      "Ch.3 / p92",
+      "§1.1 / p21（引用外部 Type-C）",
+      "声明信息可解析；实体结构检查范围外"
+    ],
+    [
+      "Power Rules",
+      "Ch.10 / p485",
+      "Ch.10 / p528",
+      "Ch.10 / p739",
+      "Ch.3 / p37",
+      "字段与局部能力约束已检查；整章规则部分实现"
+    ],
+    [
+      "电气与电源",
+      "Ch.4,7 / p94,224",
+      "Ch.4,7 / p65,219",
+      "Ch.4,7 / p93,287",
+      "Ch.4 / p48",
+      "测量值展示；硬件控制/电气合规范围外"
+    ],
+    [
+      "物理通信",
+      "Ch.5 / p104",
+      "Ch.5 / p66",
+      "Ch.5 / p94",
+      "Ch.5 / p85",
+      "CC BMC、4B5B、CRC、EOP；BFSK 与模拟 PHY 未完成"
+    ],
+    [
+      "消息定义",
+      "Ch.6 / p142",
+      "Ch.6 / p95",
+      "Ch.6 / p123",
+      "Ch.6 / p112",
+      "标准消息、对象和扩展封装按四版分派；见逐项矩阵"
+    ],
+    [
+      "消息使用/时序",
+      "Ch.6,8 / p142,284",
+      "Ch.6,8 / p95,282",
+      "Ch.6,8 / p123,371",
+      "Ch.7 / p194",
+      "关联所需状态部分实现；计时器与主动 AMS 未实现"
+    ],
+    [
+      "VDM/Alternate Mode",
+      "§6.4.4,Ch.8",
+      "§6.4.4,Ch.8",
+      "§6.4.4,Ch.8",
+      "Ch.8 / p241",
+      "标准 VDM/Identity/模式记录；私有 Mode 语义需外部定义"
+    ],
+    [
+      "协议/策略状态机",
+      "§6.9,Ch.8",
+      "§6.11,Ch.8",
+      "§6.12,Ch.8",
+      "Ch.9 / p254",
+      "被动重传、重组、合同/EPR；完整 Protocol/PE 执行范围外"
+    ],
+    [
+      "状态报告与 FRS",
+      "Ch.9 / p470；无 FRS",
+      "Ch.9 / p513；FRS 分散于5/6/7/8",
+      "Ch.9 / p723；FRS 分散于5/6/7/8",
+      "状态见Ch.6；FRS见Ch.10 / p392",
+      "按版本还原字段/控制消息；模拟 FRS 信号未检测"
+    ]
+  ],
+  "findings": [
+    {
+      "id": "profile-ui",
+      "title": "精确规范配置未贯通产品入口",
+      "before": "只有直接实例化 PdDecoder 能选择基线；网页/CLI/POWER-Z 和波形流水线固定使用默认歧义模式。",
+      "after": "增加网页四版下拉选择与每文件重解析，CLI --spec，以及三种输入/API 透传；UFCS 不受影响。",
+      "code": [
+        {
+          "file": "src/ui/app.js",
+          "symbol": "function setSpecRevision"
+        },
+        {
+          "file": "src/js/core/pipeline.js",
+          "symbol": "export async function decodeChannel"
+        },
+        {
+          "file": "src/js/core/powerz.js",
+          "symbol": "async decode"
+        },
+        {
+          "file": "tools/cli.js",
+          "symbol": "function parseArgs"
+        }
+      ],
+      "tests": [
+        "22 组版本入口检查",
+        "10 组浏览器版本检查"
+      ]
+    },
+    {
+      "id": "minimum-baselines",
+      "title": "新增消息的最低定义提示与本地 PDF 基线不一致",
+      "before": "Data_Reset/Enter_USB/Get_Sink_Cap_Extended 的提示写从 3.0 起；本地 3.0 v1.1 未定义这些消息。SKEDB/VDE 缺少后续基线提示。",
+      "after": "提示表按本地四份具体文档的最早基线标记为 3.1；显式 profile 的消息集合继续严格过滤 Reserved。",
+      "code": [
+        {
+          "file": "src/js/pd/tables.js",
+          "symbol": "export const CTRL_MIN_REV"
+        },
+        {
+          "file": "src/js/pd/tables.js",
+          "symbol": "export const DATA_MIN_REV"
+        },
+        {
+          "file": "src/js/pd/tables.js",
+          "symbol": "export const EXT_MIN_REV"
+        }
+      ],
+      "refs": [
+        {
+          "version": "3.0",
+          "section": "Tables 6-5/6-6/6-42",
+          "page": 106
+        },
+        {
+          "version": "3.1",
+          "section": "Tables 6-5/6-6/6-53",
+          "page": 134
+        }
+      ],
+      "tests": [
+        "四版每个 5-bit 消息类型固定集合向量"
+      ]
+    }
+  ],
+  "future": [
+    {
+      "priority": "P1",
+      "title": "被动计时诊断",
+      "done": "按连续抓包边界、GoodCRC/PE事件定义实现 SenderResponse、PPS、EPR Keep Alive 等起止事件；独立边界测试包含缺包与非连续输入。"
+    },
+    {
+      "priority": "P1",
+      "title": "完整 Power Rules 检查",
+      "done": "独立规则集逐版本验证 PDP 档位要求、Mandatory Voltage/Current、Managed/Guaranteed 多端口行为，不把仅 PDO bit-field 解析算完整。"
+    },
+    {
+      "priority": "P1",
+      "title": "真实 EPR/SPR AVS 抓包",
+      "done": "以实际设备完整进入、请求、Keep Alive、回落和退出序列，对照分析仪结果验证；当前 EPR 流程证据主要来自规范固定/合成向量。"
+    },
+    {
+      "priority": "P2",
+      "title": "认证与 PDFU 深层解析",
+      "done": "取得四文档引用的 USBC Auth/PDFU 外部标准，再实现内部命令/证书/签名/固件字段与跨消息会话。"
+    },
+    {
+      "priority": "P2",
+      "title": "旧 BFSK 与模拟 PHY 测试",
+      "done": "增加适用的模拟采样输入和解调器；硬件电气合规需外部测试设备。"
+    }
+  ]
+}

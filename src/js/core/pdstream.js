@@ -1,14 +1,15 @@
 /**
- * pdstream.js — POWER-Z 的 `.pdStream` 容器
+ * pdstream.js — POWER-Z 的 `.pdStream` / `.ufcsStream` 容器
  *
  * ── 这是什么 ────────────────────────────────────────────────────────
- * 同一份抓包，POWER-Z 上位机可以导出两种文件：
+ * POWER-Z 上位机可以导出 SQLite 或独立记录流：
  *
  *   · `.sqlite`   三张表：`pd_chart`（ADC 采样序列）、`pd_table`（事件行 + `Raw` blob）、
  *                 `pd_table_key`（会话密钥，导出文件里为空）
  *   · `.pdStream` **只有 `pd_table` 那部分**：二进制、无文件头 / 无索引 / 无校验和
+ *   · `.ufcsStream` 同样的外层布局，payload 来自 `ufcs_table.Raw`
  *
- * 所以这里**不是第三种协议**：报文语义照样交给 `PdDecoder`（PD）那一套，
+ * 协议由 Raw 的已知记录布局确定，报文语义交给对应的 PD / UFCS 解码器，
  * 本文件只负责把「表格」从二进制里读出来，然后交给 `PowerzCapture` 现成的解码流程。
  * 与 `.sqlite` 的唯一实质差别是**没有 ADC 波形**（没有 `pd_chart`），
  * 于是时间轴没有曲线可画 —— 界面已有的「这份抓包没有模拟量轨迹数据」分支正好接住。
@@ -30,8 +31,9 @@
  * 文件开头就是一条普通记录，所以只能**靠结构自证**：按上面的布局走一遍，要求
  *   ① 每一步长度都落在合理区间；
  *   ② **结束位置正好等于文件长度**（多一个字节都不认）；
- *   ③ Time 有限、非负、单调不减；Vbus / Ibus 在物理量程内。
- * 三条同时成立才认。这个判据很强（随机数据几乎不可能正好走完），
+ *   ③ Time 有限、非负、单调不减；Vbus / Ibus 在物理量程内；
+ *   ④ 至少三条记录，且可识别的 Raw 属于同一种协议。
+ * 外层结构相同不能证明是 PD，必须同时检查 Raw 内容。结构检查
  * 也顺带排除了 ZIP（首 4 字节 `PK\x03\x04` = 0x504b0304，远超长度上限）与 SQLite
  * （`SQLite format 3` 同理）。
  *
@@ -39,7 +41,8 @@
  * 手里的 `.sqlite` 转成更小的 `.pdStream`。
  */
 
-import { PowerzCapture, POWERZ_KINDS, POWERZ_RATE } from './powerz.js';
+import { PowerzCapture, POWERZ_KINDS, POWERZ_RATE, parsePowerzBlob } from './powerz.js';
+import { ufcsParseRecord, ufcsParseEvent } from '../ufcs/index.js';
 
 /** 每条记录的定长开销：4 字节长度 + 3 个 f64 */
 export const PDSTREAM_REC_FIXED = 28;
@@ -53,15 +56,12 @@ export const PDSTREAM_MAX_PAYLOAD = 4096;
  */
 const MIN_RECORDS = 3;
 
-/** 认容器时最多走多少条记录（防御超大文件：真样本 3677 条，这里给足两个数量级） */
-const SNIFF_MAX_RECORDS = 200000;
-
 /** 物理量程兜底（PD 3.1 EPR 上限 48V / 5A，各留一倍余量） */
 const MAX_VOLT = 120;
 const MAX_AMP = 20;
 
 /**
- * 把 `.pdStream` 读成记录数组。
+ * 把 POWER-Z 记录流读成数组（函数名保留以兼容原调用）。
  *
  * 不做任何猜测：任何一步对不上就抛错并说明**卡在哪里**（偏移 + 原因），
  * 这样「打不开」时能直接看出是文件被截断、还是根本不是这个格式。
@@ -113,48 +113,78 @@ export function readPdStream(u8) {
 }
 
 /**
- * 只看结构，判断是不是 `.pdStream`。不抛错（认不出就 false），不复制字节。
- *
- * 调用点：界面/CLI 的格式分流。它排在 `sniffPowerz` 之后，所以正常不会碰到
- * SQLite 文件；但为了防御「随便丢进来一个大文件」，走满 `SNIFF_MAX_RECORDS`
- * 就先认下来 —— 真样本不会有那么多条记录，而走到这一步本身已经说明结构自洽。
+ * 检查完整外层结构与 Raw 协议。未知、混合或截断的流返回 null，不复制字节。
  *
  * @param {Uint8Array} u8
- * @returns {boolean}
+ * @returns {'pd'|'ufcs'|null}
  */
-export function sniffPdStream(u8) {
-  if (!(u8 instanceof Uint8Array)) return false;
-  if (u8.length < PDSTREAM_REC_FIXED * MIN_RECORDS) return false;
+export function sniffPowerzStream(u8) {
+  if (!(u8 instanceof Uint8Array)) return null;
+  if (u8.length < PDSTREAM_REC_FIXED * MIN_RECORDS) return null;
   try {
     const view = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
     let off = 0;
     let n = 0;
     let lastTime = -Infinity;
-    while (off < u8.length && n < SNIFF_MAX_RECORDS) {
-      if (off + PDSTREAM_REC_FIXED > u8.length) return false;
+    let kind = null;
+    while (off < u8.length) {
+      if (off + PDSTREAM_REC_FIXED > u8.length) return null;
       const len = view.getUint32(off, false);
-      if (len === 0 || len > PDSTREAM_MAX_PAYLOAD) return false;
+      if (len === 0 || len > PDSTREAM_MAX_PAYLOAD) return null;
       const end = off + 4 + len + 24;
-      if (end > u8.length) return false;
+      if (end > u8.length) return null;
       const time = view.getFloat64(off + 4 + len, false);
       const vbus = view.getFloat64(off + 12 + len, false);
       const ibus = view.getFloat64(off + 20 + len, false);
-      if (!Number.isFinite(time) || time < 0 || time < lastTime) return false;
-      if (!Number.isFinite(vbus) || vbus < 0 || vbus > MAX_VOLT) return false;
-      if (!Number.isFinite(ibus) || Math.abs(ibus) > MAX_AMP) return false;
+      if (!Number.isFinite(time) || time < 0 || time < lastTime) return null;
+      if (!Number.isFinite(vbus) || vbus < 0 || vbus > MAX_VOLT) return null;
+      if (!Number.isFinite(ibus) || Math.abs(ibus) > MAX_AMP) return null;
+      const rowKind = powerzStreamRowKind(u8.subarray(off + 4, off + 4 + len));
+      if (rowKind) {
+        if (kind && kind !== rowKind) return null;
+        kind = rowKind;
+      }
       lastTime = time;
       off = end;
       n++;
     }
-    // 走满上限（超大文件）或正好走完 —— 两种都算认出来；中途对不上早在上面 return false 了
-    return n >= MIN_RECORDS;
+    return n >= MIN_RECORDS ? kind : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
+/** 两种流共享外层结构，协议由 Raw 的已知记录布局确定，不能只看扩展名。 */
+function powerzStreamRowKind(raw) {
+  if (ufcsParseRecord(raw)) return 'ufcs';
+  const pd = parsePowerzBlob(raw);
+  if (!pd.truncated && pd.events.length && pd.events.every(e => e.kind !== 'msg'
+    || (e.sopByte <= 2 && pdStreamWireLengthValid(e.wire)))) return 'pd';
+  if (ufcsParseEvent(raw)) return 'ufcs';
+  return null;
+}
+
+function pdStreamWireLengthValid(wire) {
+  if (wire.length < 2) return false;
+  if ((wire[1] & 0x80) && ((wire[0] >>> 6) & 3) >= 2) {
+    if (wire.length < 4) return false;
+    if (!(wire[3] & 0x80)) {
+      const size = wire[2] | ((wire[3] & 1) << 8);
+      if (size > 260) return false;
+      const end = 4 + size;
+      return wire.length === end || wire.length === 2 + Math.ceil((2 + size) / 4) * 4 && wire.slice(end).every(b => b === 0);
+    }
+  }
+  return wire.length === 2 + 4 * ((wire[1] >>> 4) & 7);
+}
+
+/** 兼容原有 PD-only 调用；UFCS 流不会被识别为 PD。 */
+export function sniffPdStream(u8) { return sniffPowerzStream(u8) === 'pd'; }
+export function sniffUfcsStream(u8) { return sniffPowerzStream(u8) === 'ufcs'; }
+
 /**
- * 把行写成 `.pdStream` 字节。行的形状与 `pd_table` 一致（`{time, vbus, ibus, raw}`），
+ * 把 PD / UFCS 表行写成共享的记录流字节（函数名保留以兼容原调用）。
+ * 行的形状为 `{time, vbus, ibus, raw}`，
  * 时间必须是非减的（写入前按 Time 排序，与 sqlite 路径的读法保持一致）。
  *
  * @param {Array<{time:number, vbus:number, ibus:number, raw:Uint8Array|ArrayBuffer}>} rows
@@ -187,14 +217,14 @@ export function writePdStream(rows) {
 /* ────────────────────────── 抓包对象 ────────────────────────── */
 
 /**
- * `.pdStream` 只有一张「表」。这里做一个**只读的虚拟表适配器**，
+ * 记录流只有一张「表」。这里做一个**只读的虚拟表适配器**，
  * 形状对齐 `SqliteReader` 的那几个方法，于是 `PowerzCapture` 的构造与解码流程
  * 一行都不用改（报文语义、事件拆分、CRC 口径全部复用）。
  */
 class PdStreamTable {
-  constructor(parsed) {
+  constructor(parsed, kind) {
     this.parsed = parsed;
-    this.name = POWERZ_KINDS.pd.table;
+    this.name = POWERZ_KINDS[kind].table;
     this.rows_ = parsed.records;
   }
 
@@ -212,14 +242,14 @@ class PdStreamTable {
   writeVersion = null;
 }
 
-export class PdStreamCapture extends PowerzCapture {
+export class PowerzStreamCapture extends PowerzCapture {
   /**
    * @param {Uint8Array} u8
    * @param {ReturnType<typeof readPdStream>} parsed
    */
-  constructor(u8, parsed) {
-    super(new PdStreamTable(parsed), 'pd', u8);
-    this.container = 'pdstream';
+  constructor(u8, parsed, kind) {
+    super(new PdStreamTable(parsed, kind), kind, u8);
+    this.container = kind === 'ufcs' ? 'ufcsstream' : 'pdstream';
     this.parsed = parsed;
 
     const m = this.meta;
@@ -230,8 +260,9 @@ export class PdStreamCapture extends PowerzCapture {
     m.durationSec = totalSamples / POWERZ_RATE;
     m.channels[0].totalSamples = totalSamples;
 
-    m.title = 'POWER-Z · .pdStream';
-    m.container = 'pdstream';
+    const extension = kind === 'ufcs' ? '.ufcsStream' : '.pdStream';
+    m.title = `POWER-Z · ${extension}`;
+    m.container = this.container;
     m.sqlite = null;                                  // 不是 SQLite，别让界面去读页大小
     m.busLabels = [];                                 // 没有第三、第四路模拟量 → 也没有「差分线」档
     m.stream = {
@@ -241,21 +272,32 @@ export class PdStreamCapture extends PowerzCapture {
       firstTime: parsed.records[0].time,
       lastTime: parsed.records[parsed.records.length - 1].time,
     };
-    m.sampleRateNote = 'POWER-Z 的 .pdStream 只有报文与毫秒时间戳，没有 ADC 波形；'
+    m.sampleRateNote = `POWER-Z 的 ${extension} 含报文、时间戳和逐报文测量值，没有 ADC 波形；`
       + '时间轴按「1 采样点 = 1 ms」映射（与同名的 .sqlite 一致）';
   }
 
   /**
    * @param {Uint8Array} u8
-   * @returns {PdStreamCapture}
+   * @returns {PowerzStreamCapture}
    */
   static open(u8) {
     const parsed = readPdStream(u8);                  // 认不出会抛错并指出卡在哪个偏移
-    return new PdStreamCapture(u8, parsed);
+    const kinds = new Set(parsed.records.map(r => powerzStreamRowKind(r.raw)).filter(Boolean));
+    if (kinds.size !== 1) throw new Error('POWER-Z 记录流的协议无法确定或混有 PD / UFCS 记录');
+    return new PowerzStreamCapture(u8, parsed, [...kinds][0]);
   }
 
   /** 覆写取行方式：流程照旧，只是行来自二进制流而不是 SQLite 表 */
   *_tableRows() {
     for (const r of this.parsed.records) yield [r.time, r.vbus, r.ibus, r.raw];
+  }
+}
+
+export class PdStreamCapture extends PowerzStreamCapture {
+  constructor(u8, parsed) { super(u8, parsed, 'pd'); }
+  static open(u8) {
+    const cap = PowerzStreamCapture.open(u8);
+    if (cap.kind !== 'pd') throw new Error('这是 UFCS 记录流，不能按 USB PD 解析');
+    return new PdStreamCapture(u8, cap.parsed);
   }
 }

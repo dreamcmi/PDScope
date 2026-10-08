@@ -354,9 +354,9 @@ export class PowerzCapture {
    * 解析成报文列表。产出与 `core/pipeline.js#decodeChannel()` 同形的 `{packets, stats}`，
    * 因此界面侧两条路径可以共用同一段渲染代码。
    *
-   * @param {{onProgress?:Function, shouldStop?:()=>boolean}} [opts]
+   * @param {{onProgress?:Function, shouldStop?:()=>boolean, specRevision?:'2.0'|'3.0'|'3.1'|'3.2'|null}} [opts]
    */
-  async decode({ onProgress, shouldStop } = {}) {
+  async decode({ onProgress, shouldStop, specRevision = null } = {}) {
     const { db, kind, info } = this;
 
     // ── 1. 取全部行并按时间排序（导出文件一般已有序，这里不依赖它）──
@@ -364,7 +364,7 @@ export class PowerzCapture {
     const tableRows = this.meta.tableRows || 0;
     let i = 0;
     for (const r of this._tableRows()) {
-      rows.push({ t: Number(r[0]) || 0, vbus: Number(r[1]) || 0, ibus: Number(r[2]) || 0, raw: r[3] });
+      rows.push({ t: Number(r[0]) || 0, vbus: powerzMeasurement(r[1]), ibus: powerzMeasurement(r[2]), raw: r[3] });
       if ((i++ & 2047) === 2047) {
         onProgress?.({ phase: 'read', ratio: tableRows ? i / tableRows : 0, packets: 0 });
         await yieldToMain();
@@ -423,16 +423,12 @@ export class PowerzCapture {
 
     if (kind === 'pd') {
       // 与 .atkcc 路径共用同一个解码器 → 跨报文状态（PDO 登记表、SOP 电源角色）语义一致
-      const pd = new PdDecoder({ sampleRate: POWERZ_RATE });
-      const msgs = events.filter((e) => e.kind === 'msg');
+      const pd = new PdDecoder({ sampleRate: POWERZ_RATE, specRevision });
+      const msgs = events.filter((e) => ['msg', 'connect', 'disconnect'].includes(e.kind));
       for (let k = 0; k < msgs.length; k++) {
         const ev = msgs[k];
+        if (ev.kind !== 'msg') { pd.reset({ preserveSequence: true }); continue; }
         const wire = ev.wire;
-        // 自检：Header 声明的对象数应当与 blob 给的长度吻合，不吻合说明拆帧错了
-        if (wire.length >= 2) {
-          const hdr = wire[0] | (wire[1] << 8);
-          if (2 + 4 * ((hdr >> 12) & 7) !== wire.length) badWire++;
-        } else badWire++;
 
         const pkt = pd.decodeWire(wire, {
           sop: SOP_BY_BYTE[ev.sopByte] ?? 'SOP',
@@ -441,7 +437,9 @@ export class PowerzCapture {
           crcRecorded: false,
           extra: { sopByte: ev.sopByte, powerz: true },
         });
-        if (pkt) packets.push(pkt);
+        // 长度判断统一由 PD 库完成：Unchunked Extended 的 NDO 为保留域。
+        if (!pkt || pkt.warnings.some(w => ['LENGTH', 'TRUNC', 'SYM', 'EXT_LENGTH', 'EXT_HEADER'].includes(w.short))) badWire++;
+        if (pkt) { pkt.vbus = ev.vbus; pkt.ibus = ev.ibus; packets.push(pkt); }
 
         if ((k & 255) === 255) {
           onProgress?.({ phase: 'decode', ratio: (k + 1) / msgs.length, packets: packets.length });
@@ -472,7 +470,7 @@ export class PowerzCapture {
             layout: b.layout,
             channel: 0,
           });
-          if (pkt) packets.push(pkt);
+          if (pkt) { pkt.vbus = b.vbus; pkt.ibus = b.ibus; packets.push(pkt); }
           if ((++k & 255) === 0) {
             onProgress?.({ phase: 'decode', ratio: k / totalFrames, packets: packets.length });
             await yieldToMain();
@@ -496,6 +494,7 @@ export class PowerzCapture {
       source: 'powerz',
       kind,
       protocol: info.protocol,
+      specRevision: kind === 'pd' ? specRevision : null,
       unsupported: info.unsupported || null,
       totalSamples,
       durationSec: totalSamples / POWERZ_RATE,
@@ -537,4 +536,11 @@ function toU8(raw) {
   if (raw instanceof Uint8Array) return raw;
   if (raw instanceof ArrayBuffer) return new Uint8Array(raw);
   return null;
+}
+
+/** NULL/缺失测量保持未知，数值 0 才表示实际测得零。 */
+function powerzMeasurement(value) {
+  if (value == null) return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
 }

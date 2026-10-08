@@ -4,7 +4,7 @@
  *
  * 用法：
  *   node tools/cli.js <file> [--channel 0] [--json] [--csv] [--limit 50] [--verbose]
- *                            [--rate 2500000]
+ *                            [--rate 2500000] [--spec 2.0|3.0|3.1|3.2|auto]
  *
  * 支持两种格式，按文件内容自动分流（不看扩展名）：
  *   · .atkcc —— 正点原子 ATK-C 抓的原始电平采样，走 BMC → 4B5B；
@@ -20,13 +20,14 @@
 import { readFile } from 'node:fs/promises';
 import { AtkccCapture, scanChannelActivity } from '../src/js/core/atkcc.js';
 import { PowerzCapture, sniffPowerz } from '../src/js/core/powerz.js';
-import { PdStreamCapture, sniffPdStream } from '../src/js/core/pdstream.js';
-import { decodeChannel, busAt } from '../src/js/core/pipeline.js';
+import { PowerzStreamCapture, sniffPowerzStream } from '../src/js/core/pdstream.js';
+import { decodeChannel, attachBusValues } from '../src/js/core/pipeline.js';
 import { makeNodeInflator } from '../src/js/core/inflate.js';
 import { csvExport, csvClock } from '../src/js/core/csv.js';
+import { PD_SPEC_PROFILES } from '../src/js/pd/index.js';
 
 function parseArgs(argv) {
-  const a = { file: null, channel: 0, json: false, csv: false, limit: 0, verbose: false, listChannels: false, scan: 0, rate: 0 };
+  const a = { file: null, channel: 0, json: false, csv: false, limit: 0, verbose: false, listChannels: false, scan: 0, rate: 0, specRevision: null };
   for (let i = 2; i < argv.length; i++) {
     const v = argv[i];
     if (v === '--channel') a.channel = Number(argv[++i]);
@@ -37,6 +38,11 @@ function parseArgs(argv) {
     else if (v === '--channels') a.listChannels = true;
     else if (v === '--scan') a.scan = Number(argv[++i]) || 4;
     else if (v === '--rate') a.rate = Number(argv[++i]) || 0;
+    else if (v === '--spec') {
+      const value = argv[++i];
+      if (value !== 'auto' && !PD_SPEC_PROFILES[value]) throw new Error('--spec 必须为 2.0/3.0/3.1/3.2/auto');
+      a.specRevision = value === 'auto' ? null : value;
+    }
     else if (!a.file) a.file = v;
   }
   return a;
@@ -47,9 +53,11 @@ const fmtMs = csvClock;
 
 const RATE_SRC = { declared: '文件声明', measured: '波形实测', default: '默认值', override: '手动指定', powerz: '分析仪时间戳' };
 
-const args = parseArgs(process.argv);
+let args;
+try { args = parseArgs(process.argv); }
+catch (err) { console.error(err.message); process.exit(1); }
 if (!args.file) {
-  console.error('用法: node tools/cli.js <file> [--channel N] [--json|--csv] [--limit N] [--channels] [--scan N] [--rate HZ]');
+  console.error('用法: node tools/cli.js <file> [--channel N] [--json|--csv] [--limit N] [--channels] [--scan N] [--rate HZ] [--spec 2.0|3.0|3.1|3.2|auto]');
   process.exit(1);
 }
 
@@ -59,17 +67,17 @@ const tOpen = Date.now();
 // 格式分流：POWER-Z 的 SQLite / .pdStream 与 ATK-C 的 ZIP 靠文件内容区分，扩展名只作参考
 const inflate = await makeNodeInflator();
 const pzKind = sniffPowerz(bytes);
-const isPds = !pzKind && sniffPdStream(bytes);
+const streamKind = !pzKind && sniffPowerzStream(bytes);
 const cap = pzKind ? PowerzCapture.open(bytes)
-  : isPds ? PdStreamCapture.open(bytes)
+  : streamKind ? PowerzStreamCapture.open(bytes)
     : await AtkccCapture.open(bytes, { inflate });
-const pz = !!pzKind || isPds;
-const container = pzKind ? 'SQLite' : isPds ? '.pdStream' : 'ATK-C';
+const pz = !!pzKind || !!streamKind;
+const container = pzKind ? 'SQLite' : streamKind ? (streamKind === 'ufcs' ? '.ufcsStream' : '.pdStream') : 'ATK-C';
 console.error(`[open] ${Date.now() - tOpen}ms  ${pz ? `POWER-Z（${cap.meta.protocol}，${cap.meta.tableRows} 行事件，${container}）` : 'ATK-C（原始采样）'}`
   + `  采样率=${cap.meta.sampleRate}Hz`
   + (pz ? '（分析仪毫秒时间戳，按 1 采样点 = 1 ms 映射）' : `${cap.meta.sampleRateRaw ? `（${cap.meta.sampleRateRaw}）` : '（文件未声明）'}`)
   + `  totalSamples=${cap.meta.totalSamples}  duration=${cap.durationSec.toFixed(3)}s  channels=${cap.meta.channels.length}`
-  + (isPds ? `  无 ADC 波形（.pdStream 只含报文）` : ''));
+  + (streamKind ? `  无 ADC 波形（${container} 含逐报文测量值）` : ''));
 
 if (args.listChannels) {
   if (pz) console.error('  分析仪导出没有「分块通道」概念（单通路）');
@@ -90,10 +98,11 @@ if (args.scan) {
 
 const t0 = Date.now();
 const { packets, stats } = pz
-  ? await cap.decode()
+  ? await cap.decode({ specRevision: args.specRevision })
   : await decodeChannel(cap, args.channel, {
     inflate,
     sampleRate: args.rate,
+    specRevision: args.specRevision,
     onProgress: (p) => { if (process.stderr.isTTY) process.stderr.write(`\r[decode] ch${p.channel} chunk ${p.chunk}/${p.chunks} packets=${p.packets}`); },
   });
 console.error(`\n[decode] ${Date.now() - t0}ms  packets=${stats.packetCount}  badCrc=${stats.badCrc}`
@@ -102,13 +111,11 @@ console.error(`\n[decode] ${Date.now() - t0}ms  packets=${stats.packetCount}  ba
 console.error(`[rate]   实际采用 ${stats.sampleRate}Hz（${RATE_SRC[stats.sampleRateSource] || stats.sampleRateSource}）`
   + `${stats.sampleRateMeasured ? ` · 波形实测 ${stats.sampleRateMeasured}Hz` : ''}`);
 if (stats.sampleRateNote) console.error(`[rate]   ${stats.sampleRateNote}`);
+if (cap.meta.protocol !== 'UFCS') console.error(`[spec]   ${args.specRevision || 'auto（Header 的 3.x 保留精确版本歧义）'}`);
 if (stats.unsupported) console.error(`[warn]   ${stats.unsupported}（${stats.unsupportedMsgs} 条原始帧未做语义解析）`);
 
 // 把 VBUS/IBUS 附到包上
-for (const p of packets) {
-  const b = busAt(cap.meta.bus, p.startSample);
-  p.vbus = b.vbus; p.ibus = b.ibus;
-}
+attachBusValues(packets, cap.meta.bus);
 
 const list = args.limit ? packets.slice(0, args.limit) : packets;
 
@@ -148,7 +155,7 @@ if (args.json) {
       String(p.msgId ?? '').padEnd(3),
       (p.role ?? '').padEnd(6),
       fmtMs(p.timeMs).padEnd(15),
-      `${p.vbus.toFixed(3)}V/${p.ibus.toFixed(3)}A`.padEnd(18),
+      `${Number.isFinite(p.vbus) ? p.vbus.toFixed(3) : '—'}V/${Number.isFinite(p.ibus) ? p.ibus.toFixed(3) : '—'}A`.padEnd(18),
       (p.dataHex ?? '').padEnd(40),
       p.summary ?? '',
     ].join(' '));

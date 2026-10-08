@@ -175,13 +175,14 @@ jobs:
 
       - run: npm install --no-audit --no-fund
 
-      # 只跑不依赖抓包样本的三项：ackcheck.js 与 e2e.mjs 要读仓库上一级的 *.atkcc
-      # 实测样本，而那些文件按 .gitignore 不入库，想跑就在本机 npm run check
+      # 每个目标都运行协议与缺陷回归，不需要私人抓包。
       - name: 版本号 / 语法 / 协议层自检
-        run: |
-          node tools/version-check.mjs
-          node tools/syntax.mjs
-          node tools/selftest.js
+        run: npm run ver && npm run syntax && npm run selftest && npm run regression
+
+      # 输入由生成器产生或来自 rawdata/ 已入库样本，失败阻止该目标打包。
+      - name: 浏览器 / 多文件 / CSV 导出回归
+        if: matrix.name == 'windows11-x64'
+        run: npm test
 
       # bundles 的值必须加引号，否则 PowerShell 会把 nsis,msi 当数组拆成两个参数。
       # 值只能用 Tauri 的 bundle 名（Windows 是 nsis / msi）；exe 安装包由 nsis 打包器产出。

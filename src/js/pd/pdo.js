@@ -72,19 +72,23 @@ const PDO_KIND_TITLE = {
  * @returns {{name:string, ref:string, meta:object}}
  */
 export function pdoParse(st, em, pdo, o) {
+  const legacy = o.revText === '2.0' || o.revText === '1.0' || o.specRevision === '2.0';
+  const old3 = o.specRevision === '3.0';
   const role = o.role;
   const pos = o.position;
   const isEpr = !!o.isEpr;
   const roleName = role === 'source' ? 'Source' : 'Sink';
   const t1 = pdField(pdo, 31, 30);
 
-  const name = pdoKindName(pdo, isEpr);
+  const apdoType = pdField(pdo, 29, 28);
+  const reservedApdo = t1 === 3 && (legacy || old3 && apdoType !== 0 || o.specRevision === '3.1' && apdoType === 2);
+  const name = reservedApdo ? 'Reserved_APDO' : pdoKindName(pdo, isEpr);
   em.object(`PDO #${pos} · ${PDO_KIND_TITLE[name] ?? name}（${roleName}）`);
   em.detail('原始值', `0x${pdHex(pdo)}`);
   em.detail('功率范围', isEpr ? 'EPR（扩展功率范围）' : 'SPR（标准功率范围）');
   em.detail('角色', roleName);
 
-  const meta = { type: t1, role, isEpr, kind: 'unknown', position: pos };
+  const meta = { raw: pdo >>> 0, type: t1, role, isEpr, kind: 'unknown', position: pos };
   let summary = `[${name}] [raw: 0x${pdHex(pdo)}]`;
 
   if (t1 === 0) {
@@ -105,29 +109,32 @@ export function pdoParse(st, em, pdo, o) {
           ? pdFlag(pdBit(pdo, 28), 'Sink 需按 USB 规范挂起/唤醒', '无需遵循挂起规则')
           : pdFlag(pdBit(pdo, 28), 'Sink 需要比 5V PDO 更多的电量', '否'));
       em.detail('Unconstrained Power [B27]', pdFlag(pdBit(pdo, 27),
-        role === 'source' ? '外部电源充足，可全力供电' : '外部电源不足，受自身功耗限制'));
+        role === 'source' ? '电源充足，不受外部功率限制' : '有足够供自身使用的外部电源', '受供电功率限制'));
       em.detail('USB Communications Capable [B26]', pdFlag(pdBit(pdo, 26)));
       em.detail('Dual-Role Data [B25]', pdFlag(pdBit(pdo, 25), '可通过 DR_Swap 换数据角色', '不可换'));
-      if (role === 'source') {
+      if (legacy) {
+        em.detail('Reserved [B24-22]', pdField(pdo, 24, 22));
+      } else if (role === 'source') {
         em.detail('Unchunked Extended Messages [B24]', pdFlag(pdBit(pdo, 24), '支持分块与不分块', '仅支持分块'));
-        em.detail('EPR Capable [B23]', pdFlag(pdBit(pdo, 23), '可进入 EPR 模式', '仅 SPR'));
+        em.detail(old3 ? 'Reserved [B23]' : 'EPR Capable [B23]', old3 ? pdBit(pdo, 23) : pdFlag(pdBit(pdo, 23), '可进入 EPR 模式', '仅 SPR'));
         em.detail('Reserved [B22]', pdBit(pdo, 22));
       } else {
         em.detail('FRS Current [B24-23]', FRS_CURRENT[pdField(pdo, 24, 23)]);
         em.detail('Reserved [B22-20]', `0x${pdField(pdo, 22, 20).toString(16).toUpperCase()}`);
       }
     } else if (isEpr) {
-      em.detail('Reserved [B29-23]', `0x${pdField(pdo, 29, 23).toString(16).toUpperCase()}`);
+      em.detail('Reserved [B29-22]', `0x${pdField(pdo, 29, 22).toString(16).toUpperCase()}`);
     } else {
       em.detail('Device Flags [B29-22]', `0x${pdField(pdo, 29, 22).toString(16).toUpperCase()}（非首位 PDO 时为 Reserved）`);
     }
-    if (role === 'source' || carry5vFlags) {
+    if (role === 'source') {
       emitPeakCurrent(em, 'Peak Current', pdField(pdo, 21, 20), 'B21-20');
     } else {
       em.detail('Peak Current [B21-20]', 'Reserved（Sink 侧不使用）');
     }
     em.detail('最大功率', `${pdNum(mv * ma)} W`);
     meta.kind = 'fixed';
+    Object.assign(meta, { minVoltage: mv, maxVoltage: mv, current: ma, power: mv * ma });
   } else if (t1 === 1) {
     /* ── Battery Supply PDO（Table 6.11）── */
     const minv = pdField(pdo, 19, 10) * V_STEP;
@@ -139,6 +146,7 @@ export function pdoParse(st, em, pdo, o) {
     em.detail(role === 'source' ? '最大可用功率 [B9-0]' : '工作功率 [B9-0]', `${pdNum(mw)} W`);
     summary = `[${name}] ${pdNum(minv)}/${pdNum(maxv)}V ${pdNum(mw)}W`;
     meta.kind = 'battery';
+    Object.assign(meta, { minVoltage: minv, maxVoltage: maxv, power: mw });
   } else if (t1 === 2) {
     /* ── Variable Supply PDO（Table 6.12）── */
     const minv = pdField(pdo, 19, 10) * V_STEP;
@@ -150,6 +158,10 @@ export function pdoParse(st, em, pdo, o) {
     em.detail(role === 'source' ? '最大电流 [B9-0]' : '工作电流 [B9-0]', `${pdNum(ma)} A`);
     summary = `[${name}] ${pdNum(minv)}/${pdNum(maxv)}V ${pdNum(ma)}A`;
     meta.kind = 'variable';
+    Object.assign(meta, { minVoltage: minv, maxVoltage: maxv, current: ma });
+  } else if (reservedApdo) {
+    em.detail('Supply Type [B31-30]', legacy ? '11b Reserved（PD 2.0 未定义 APDO）' : `11b Augmented，类型 ${apdoType} 在所选规范中为 Reserved`);
+    meta.kind = 'reserved_apdo';
   } else {
     /* ── Augmented PDO（Table 6.13…6.17）── */
     const t2 = pdField(pdo, 29, 28);
@@ -161,7 +173,7 @@ export function pdoParse(st, em, pdo, o) {
       const ma = pdField(pdo, 6, 0) * I_STEP_PPS;
       const limited = pdBit(pdo, 27);
       em.detail('APDO Type [B29-28]', '00b SPR PPS');
-      em.detail('PPS Power Limited [B27]', pdFlag(limited, '电流上限由 PPS Power Limited 决定', '不受限'));
+      em.detail(role === 'source' && !old3 ? 'PPS Power Limited [B27]' : 'Reserved [B27]', role === 'source' && !old3 ? pdFlag(limited, '受 PDP 限制', '不受限') : limited);
       em.detail('Reserved [B26-25]', `0x${pdField(pdo, 26, 25).toString(16).toUpperCase()}`);
       em.detail('最高电压 [B24-17]', `${pdNum(maxv)} V`);
       em.detail('Reserved [B16]', pdBit(pdo, 16));
@@ -169,8 +181,9 @@ export function pdoParse(st, em, pdo, o) {
       em.detail('Reserved [B7]', pdBit(pdo, 7));
       em.detail(role === 'source' ? '最大电流 [B6-0]' : '所需电流 [B6-0]', `${pdNum(ma)} A`);
       em.detail('@Vmax 近似功率', `${pdNum(maxv * ma)} W`);
-      summary = `[PPS] ${pdNum(minv)}/${pdNum(maxv)}V ${pdNum(ma)}A${limited ? ' [limited]' : ''}`;
+      summary = `[PPS] ${pdNum(minv)}/${pdNum(maxv)}V ${pdNum(ma)}A${role === 'source' && !old3 && limited ? ' [limited]' : ''}`;
       meta.kind = 'pps';
+      Object.assign(meta, { minVoltage: minv, maxVoltage: maxv, current: ma, powerLimited: role === 'source' && !old3 && !!limited });
     } else if (t2 === 1) {
       const minv = pdField(pdo, 15, 8) * V_STEP_AVS;
       const maxv = pdField(pdo, 25, 17) * V_STEP_AVS;
@@ -184,14 +197,15 @@ export function pdoParse(st, em, pdo, o) {
       em.detail('最高电压 [B25-17]', `${pdNum(maxv)} V`);
       em.detail('Reserved [B16]', pdBit(pdo, 16));
       em.detail('最低电压 [B15-8]', `${pdNum(minv)} V`);
-      em.detail('PDP [B7-0]', `${pdp} W`);
-      em.detail('@Vmax 近似电流', `${pdNum(maxv > 0 ? pdp / maxv : 0)} A`);
+      em.detail(role === 'source' ? 'PDP [B7-0]' : 'Maximum Power [B7-0]', `${pdp} W`);
+      em.detail('@Vmax 可用电流', `${pdNum(maxv > 0 ? Math.floor(Math.min(5, pdp / maxv) * 20 + 1e-9) / 20 : 0)} A（取 PDP/V 与 5A 中较小值，向下取整到 50mA）`);
       summary = `[EPR_AVS] ${pdNum(minv)}~${pdNum(maxv)}V (${pdp}W)`;
       meta.kind = 'epr_avs';
+      Object.assign(meta, { minVoltage: minv, maxVoltage: maxv, power: pdp });
     } else if (t2 === 2) {
       const c15 = pdField(pdo, 19, 10) * I_STEP_AVS_MAX;
       const c20 = pdField(pdo, 9, 0) * I_STEP_AVS_MAX;
-      em.detail('APDO Type [B29-28]', '10b SPR AVS（9~20V 可调）');
+      em.detail('APDO Type [B29-28]', `10b SPR AVS（9~${c20 ? 20 : 15}V 可调）`);
       if (role === 'source') {
         emitPeakCurrent(em, 'Peak Current', pdField(pdo, 27, 26), 'B27-26');
         em.detail('Reserved [B25-20]', `0x${pdField(pdo, 25, 20).toString(16).toUpperCase()}`);
@@ -200,10 +214,11 @@ export function pdoParse(st, em, pdo, o) {
       }
       em.detail('9V~15V 最大电流 [B19-10]', `${pdNum(c15)} A`);
       em.detail('15V~20V 最大电流 [B9-0]', c20 === 0 ? '0 A（最高只到 15V）' : `${pdNum(c20)} A`);
-      summary = `[SPR_AVS] 9~20V  15V:${pdNum(c15)}A  20V:${pdNum(c20)}A`;
+      summary = `[SPR_AVS] 9~${c20 ? 20 : 15}V  15V:${pdNum(c15)}A${c20 ? `  20V:${pdNum(c20)}A` : ''}`;
       meta.kind = 'spr_avs';
+      Object.assign(meta, { minVoltage: 9, maxVoltage: c20 ? 20 : 15, current15: c15, current20: c20 });
     } else {
-      em.detail('APDO Type [B29-28]', `1${t2.toString(2).padStart(2, '0')}b Reserved`);
+      em.detail('APDO Type [B29-28]', `${t2.toString(2).padStart(2, '0')}b Reserved`);
       em.detail('原始值', `0x${pdHex(pdo)}`);
       summary = `[Reserved_APDO] [raw: 0x${pdHex(pdo)}]`;
       meta.kind = 'reserved_apdo';
@@ -211,8 +226,11 @@ export function pdoParse(st, em, pdo, o) {
   }
 
   const ref = `${name} ${summaryShort(summary)}`;
-  st.pdos[role][pos] = ref;
-  st.pdoMeta[role][pos] = meta;
+  meta.valid = pdValidatePdo(em, meta);
+  if (o.register !== false) {
+    st.pdos[role][pos] = ref;
+    st.pdoMeta[role][pos] = meta;
+  }
   return { name, ref, meta, summary };
 }
 
@@ -232,8 +250,10 @@ function summaryShort(s) {
  * @param {object} o  { isEpr }
  */
 export function rdoParse(st, em, rdo, o = {}) {
-  const pos = pdField(rdo, 31, 28);
-  const posValid = pos !== 0 && pos < 0x0E;
+  const legacy = o.revText === '2.0' || o.revText === '1.0' || o.specRevision === '2.0';
+  const latest = o.specRevision === '3.2';
+  const pos = pdField(rdo, legacy ? 30 : 31, 28);
+  const posValid = pos > 0 && pos <= (o.isEpr ? (latest ? 11 : 13) : 7);
   em.object(`RDO · 请求数据对象${posValid ? `（引用 PDO #${pos}）` : ''}`);
   em.detail('原始值', `0x${pdHex(rdo)}`);
 
@@ -241,24 +261,50 @@ export function rdoParse(st, em, rdo, o = {}) {
     em.detail(`Object Position [${pdRange(31, 28)}]`, `${pos} · 无效位置`);
     const s = `(RDO 位置 ${pos} 无效)`;
     em.note(s);
-    return { summary: s };
+    em.warn?.(`RDO 引用位置 ${pos} 无效`, 'RDO_POSITION');
   }
 
-  const known = pos in st.pdos.source;
-  const ref = known ? st.pdos.source[pos] : 'Unknown PDO';
-  const meta = known ? (st.pdoMeta.source[pos] ?? { kind: 'unknown' }) : { kind: 'unknown' };
+  // 普通 Request 与 EPR_Request 引用各自最近一次能力表。
+  const caps = o.capabilities === undefined ? { pdos: st.pdos.source, pdoMeta: st.pdoMeta.source } : o.capabilities;
+  const known = !!o.meta || !!caps && pos in caps.pdos;
+  const ref = o.ref ?? (known ? caps?.pdos[pos] : 'Unknown PDO');
+  const meta = o.meta ?? (known ? (caps.pdoMeta[pos] ?? { kind: 'unknown' }) : { kind: 'unknown' });
   const kind = meta.kind ?? 'unknown';
 
   em.detail(`Object Position [${pdRange(31, 28)}]`, String(pos));
   em.detail('引用的 PDO', known ? ref : `未捕获到 Source_Capabilities 的第 ${pos} 个 PDO`);
-  em.detail('Giveback [B27]', pdFlag(pdBit(rdo, 27), '已置位（该位已废弃）', '未置位'));
+  if (legacy) em.detail('Reserved [B31]', pdBit(rdo, 31));
+  const augmented = ['pps', 'spr_avs', 'epr_avs'].includes(kind);
+  const givebackField = latest ? 'Giveback (Deprecated) [B27]'
+    : augmented ? (o.specRevision == null ? 'Giveback/Reserved [B27]' : 'Reserved [B27]') : 'Giveback [B27]';
+  const givebackBit = !!pdBit(rdo, 27);
+  if (latest) {
+    em.detail(givebackField, `${Number(givebackBit)}（PD 3.2 已废弃，接收端必须忽略）`);
+  } else if (augmented) {
+    em.detail(givebackField, `${Number(givebackBit)}${o.specRevision == null ? '（版本未指定；3.0 起该位 Reserved/弃用）' : '（PD 3.1 Reserved）'}`);
+  } else {
+    em.detail(givebackField, pdFlag(givebackBit, '收到 GotoMin 时降至最小请求值', '使用最大请求值'));
+  }
   em.detail('Capability Mismatch [B26]', pdFlag(pdBit(rdo, 26), '能力不匹配', '匹配'));
-  em.detail('USB Communications Cable [B25]', pdFlag(pdBit(rdo, 25), '是通信线缆', '否'));
+  em.detail('USB Communications Capable [B25]', pdFlag(pdBit(rdo, 25), '支持 USB 数据通信', '不支持'));
   em.detail('No USB Suspend [B24]', pdFlag(pdBit(rdo, 24), '不遵循 USB 挂起', '遵循 USB 挂起'));
-  em.detail('Unchunked Extended Messages [B23]', pdFlag(pdBit(rdo, 23), '支持分块与不分块', '仅支持分块'));
-  em.detail('EPR Capable [B22]', pdFlag(pdBit(rdo, 22), '申请进入 EPR', '仅 SPR'));
+  if (legacy) em.detail('Reserved [B23-20]', pdField(rdo, 23, 20));
+  else {
+    em.detail('Unchunked Extended Messages [B23]', pdFlag(pdBit(rdo, 23), '支持分块与不分块', '仅支持分块'));
+    em.detail(o.specRevision === '3.0' ? 'Reserved [B22]' : 'EPR Capable [B22]', o.specRevision === '3.0' ? pdBit(rdo, 22) : pdFlag(pdBit(rdo, 22), '支持 EPR', '仅 SPR'));
+  }
 
   let s;
+  const request = { raw: rdo >>> 0, kind, position: pos, validPosition: posValid, referenceKnown: known,
+    eprCapable: !legacy && o.specRevision !== '3.0' && !!pdBit(rdo, 22), pdoRaw: meta.raw ?? null,
+    range: pos >= 8 ? 'epr' : 'spr', valid: posValid && meta.valid !== false,
+    // Keep the raw value for diagnostics. In PD 3.2 the receiver must ignore
+    // this deprecated bit, so it cannot select the older min/max semantics.
+    givebackBit, giveback: !latest && !augmented && givebackBit, mismatch: !!pdBit(rdo, 26) };
+  if (kind === 'unknown' || kind === 'reserved_apdo') {
+    em.detail('请求载荷 [B21-0]', `0x${pdHex(pdField(rdo, 21, 0), 6)}（PDO 类型未知，无法选择电流/功率/电压格式）`);
+    s = `(RDO ${pos}: Unknown PDO) 请求格式待能力表确认`;
+  } else
   if (kind === 'pps') {
     const ov = pdField(rdo, 20, 9) * 0.02;      // Table 6.21：20mV
     const oa = pdField(rdo, 6, 0) * I_STEP_PPS; // 50mA
@@ -267,6 +313,7 @@ export function rdoParse(st, em, rdo, o = {}) {
     em.detail('Reserved [B8-7]', `0x${pdField(rdo, 8, 7).toString(16).toUpperCase()}`);
     em.detail('工作电流 [B6-0]', `${pdNum(oa)} A`);
     s = `(RDO ${pos}: ${ref}) 请求 ${pdNum(ov)}V ${pdNum(oa)}A`;
+    Object.assign(request, { voltage: ov, current: oa });
   } else if (kind === 'spr_avs' || kind === 'epr_avs') {
     const raw = pdField(rdo, 20, 9);
     const ov = raw * 0.025;                     // Table 6.22：25mV，且 B10-9 必须为 00b
@@ -277,24 +324,67 @@ export function rdoParse(st, em, rdo, o = {}) {
     em.detail('Reserved [B8-7]', `0x${pdField(rdo, 8, 7).toString(16).toUpperCase()}`);
     em.detail('工作电流 [B6-0]', `${pdNum(oa)} A`);
     s = `(RDO ${pos}: ${ref}) 请求 ${pdNum(ov)}V ${pdNum(oa)}A`;
+    Object.assign(request, { voltage: ov, current: oa });
+    if (raw & 3) { em.warn?.('AVS RDO 的 B10-9 必须为 00b', 'RDO_STEP'); request.valid = false; }
   } else if (kind === 'battery') {
     const ow = pdField(rdo, 19, 10) * P_STEP_BATT;
     const mw = pdField(rdo, 9, 0) * P_STEP_BATT;
     em.detail('Reserved [B21-20]', `0x${pdField(rdo, 21, 20).toString(16).toUpperCase()}`);
     em.detail('工作功率 [B19-10]', `${pdNum(ow)} W`);
-    em.detail('最大工作功率 [B9-0]', `${pdNum(mw)} W（已废弃，应与工作功率相同）`);
-    s = `(RDO ${pos}: ${ref}) 工作 ${pdNum(ow)}W / 最大 ${pdNum(mw)}W`;
+    em.detail(`${request.giveback ? '最小' : '最大'}工作功率 [B9-0]`, `${pdNum(mw)} W${latest ? '（PD 3.2 已废弃，应与工作功率相同）' : '（PD 3.0/3.1 中有效，PD 3.2 废弃）'}`);
+    s = `(RDO ${pos}: ${ref}) 工作 ${pdNum(ow)}W / ${request.giveback ? '最小' : '最大'} ${pdNum(mw)}W`;
+    Object.assign(request, { power: ow, limit: mw });
   } else {
     const oa = pdField(rdo, 19, 10) * I_STEP;
     const ma = pdField(rdo, 9, 0) * I_STEP;
     em.detail('Reserved [B21-20]', `0x${pdField(rdo, 21, 20).toString(16).toUpperCase()}`);
     em.detail('工作电流 [B19-10]', `${pdNum(oa)} A`);
-    em.detail('最大工作电流 [B9-0]', `${pdNum(ma)} A（已废弃，应与工作电流相同）`);
-    s = `(RDO ${pos}: ${ref}) 工作 ${pdNum(oa)}A / 最大 ${pdNum(ma)}A`;
+    em.detail(`${request.giveback ? '最小' : '最大'}工作电流 [B9-0]`, `${pdNum(ma)} A${latest ? '（PD 3.2 已废弃，应与工作电流相同）' : '（PD 3.0/3.1 中有效，PD 3.2 废弃）'}`);
+    s = `(RDO ${pos}: ${ref}) 工作 ${pdNum(oa)}A / ${request.giveback ? '最小' : '最大'} ${pdNum(ma)}A`;
+    Object.assign(request, { current: oa, limit: ma });
   }
 
+  request.valid = pdValidateRequest(em, request, meta, latest) && request.valid;
+
   em.note(s);
-  return { summary: s, ref, kind, position: pos };
+  return { summary: s, ref, ...request };
+}
+
+function pdValidatePdo(em, m) {
+  let valid = m.kind !== 'reserved_apdo';
+  const bad = text => { valid = false; em.warn?.(`PDO #${m.position}: ${text}`, 'PDO_RANGE'); };
+  if (m.minVoltage > m.maxVoltage) bad('最低电压大于最高电压');
+  if (m.current > 5 || m.current15 > 5 || m.current20 > 5) bad('电流超过 5A');
+  if (m.position === 1 && (m.kind !== 'fixed' || m.minVoltage !== 5)) bad('首个 PDO 必须为 5V Fixed');
+  if (m.kind === 'battery' && m.power > 100) bad('Battery PDO 功率超过 100W');
+  if (m.kind === 'fixed' && m.maxVoltage > (m.isEpr ? 48 : 20)) bad('固定电压超出功率范围');
+  if (m.isEpr && m.kind === 'fixed' && m.maxVoltage <= 20) bad('EPR Fixed 电压必须大于 20V');
+  if (m.role === 'source' && m.isEpr && m.kind === 'fixed' && ![28, 36, 48].includes(m.maxVoltage)) bad('EPR Source Fixed 电压必须为 28/36/48V');
+  if (m.isEpr && !['fixed', 'epr_avs'].includes(m.kind)) bad('EPR 槽位只能包含 Fixed 或 EPR AVS');
+  if (!m.isEpr && m.kind === 'epr_avs') bad('EPR AVS 必须从位置 8 起');
+  if (m.kind === 'pps' && (m.minVoltage < 3.3 || m.maxVoltage > 21)) bad('PPS 电压超出 3.3~21V');
+  if (m.kind === 'epr_avs' && (m.minVoltage < 15 || m.maxVoltage > 48 || m.power > 240)) bad('EPR AVS 电压或 PDP 超出范围');
+  if (m.kind === 'epr_avs' && m.role === 'source' && (m.minVoltage !== 15 || ![28, 36, 48].includes(m.maxVoltage))) bad('EPR Source AVS 必须从 15V 起，最高电压为 28/36/48V');
+  return valid;
+}
+
+function pdValidateRequest(em, r, m, latest) {
+  let valid = true;
+  const bad = text => { valid = false; em.warn?.(text, 'RDO_RANGE'); };
+  // 编码单位换算产生的浮点尾差不能把 3.55A 等合法边界误判为超限。
+  const epsilon = 1e-9;
+  if (r.voltage !== undefined && (r.voltage < m.minVoltage - epsilon || r.voltage > m.maxVoltage + epsilon)) bad('请求电压超出所引用 PDO 的范围');
+  const currentLimit = m.kind === 'spr_avs' ? (r.voltage > 15 ? m.current20 : m.current15)
+    : m.kind === 'epr_avs' && r.voltage > 0 ? Math.floor(Math.min(5, m.power / r.voltage) * 20 + 1e-9) / 20 : m.current;
+  if (r.current > currentLimit + epsilon) bad('请求电流超过所引用 PDO 的最大电流');
+  if (r.power > m.power + epsilon) bad('请求功率超过所引用 PDO 的最大功率');
+  if (latest && r.limit !== undefined && Math.abs(r.limit - (r.current ?? r.power)) > epsilon) bad('PD 3.2 的废弃最大请求域必须等于工作请求值');
+  if (!latest && r.limit !== undefined) {
+    const operating = r.current ?? r.power;
+    if (r.giveback ? r.limit > operating + epsilon : r.limit < operating - epsilon) bad('最小/最大请求值与工作请求值的关系无效');
+    if (!r.giveback && !r.mismatch && r.limit > (m.kind === 'battery' ? m.power : m.current) + epsilon) bad('未置 Capability Mismatch 时最大请求值不能超出 PDO');
+  }
+  return valid;
 }
 
 /** 供外部（如 EPR_Request 的「被请求 PDO 副本」）复用的位置查询 */

@@ -36,8 +36,8 @@ export const CTRL_TYPES = {
 
 /** 控制消息里已废弃、只能被 Not_Supported 回应的类型（键名与 CTRL_TYPES 的取值逐字一致） */
 export const CTRL_DEPRECATED = {
-  'GotoMin': 'PD 3.0 起废弃，接收端应回 Not_Supported',
-  'Ping': 'PD 3.0 起废弃，接收端可回 Not_Supported 或忽略（线缆插头必须忽略）',
+  'GotoMin': 'PD 3.2 已废弃，接收端应回 Not_Supported',
+  'Ping': 'PD 3.2 已废弃，接收端可回 Not_Supported 或忽略（线缆插头必须忽略）',
 };
 
 /** 数据消息（Number of Data Objects > 0）—— PD 3.2 Table 6.5 */
@@ -63,16 +63,24 @@ export const EXT_TYPES = {
   29: 'Reserved', 30: 'Vendor_Defined_Extended', 31: 'Reserved',
 };
 
-/** 消息类型 → 该类型在哪个 PD 版本才有（用于提示「对版本而言非法」） */
+/** 消息类型 → 本仓库四份 PDF 中最早出现的基线；同一 Revision 的其他 Version 不在此表范围。 */
 export const CTRL_MIN_REV = {
-  14: 3.0, 15: 3.0, 16: 3.0, 17: 3.0, 18: 3.0, 19: 3.0, 20: 3.0, 21: 3.0, 22: 3.0,
+  14: 3.1, 15: 3.1, 16: 3.0, 17: 3.0, 18: 3.0, 19: 3.0, 20: 3.0, 21: 3.0, 22: 3.1,
   23: 3.1, 24: 3.1,
 };
 export const DATA_MIN_REV = {
-  5: 3.0, 6: 3.0, 7: 3.0, 8: 3.0,
+  5: 3.0, 6: 3.0, 7: 3.0, 8: 3.1,
   9: 3.1, 10: 3.1, 11: 3.1, 12: 3.1,
 };
-export const EXT_MIN_REV = { 16: 3.1, 17: 3.1, 18: 3.1 };
+export const EXT_MIN_REV = { 15: 3.1, 16: 3.1, 17: 3.1, 18: 3.1, 30: 3.1 };
+
+/** 精确对应 doc 中的四份规范。3.0 指 r3.0 v1.1；3.1 指 r3.1 v1.4。 */
+export const PD_SPEC_PROFILES = {
+  '2.0': { control: Array.from({ length: 13 }, (_, i) => i + 1), data: [1, 2, 3, 4, 15], ext: [] },
+  '3.0': { control: [...Array.from({ length: 13 }, (_, i) => i + 1), 16, 17, 18, 19, 20, 21], data: [1, 2, 3, 4, 5, 6, 7, 15], ext: Array.from({ length: 14 }, (_, i) => i + 1) },
+  '3.1': { control: Array.from({ length: 24 }, (_, i) => i + 1), data: [...Array.from({ length: 12 }, (_, i) => i + 1), 15], ext: [...Array.from({ length: 18 }, (_, i) => i + 1), 30] },
+  '3.2': { control: Array.from({ length: 24 }, (_, i) => i + 1), data: [...Array.from({ length: 12 }, (_, i) => i + 1), 15], ext: [...Array.from({ length: 18 }, (_, i) => i + 1), 30] },
+};
 
 /**
  * 「消息类型 → 界面分类」映射（给表格上色用）。
@@ -139,7 +147,7 @@ export const MSG_CATEGORY = {
 
 /**
  * Header 的 Specification Revision 域 → 版本号（PD 3.2 Table 6.1）
- * 0b00 = 1.0，0b01 = 2.0，0b10 = 3.0，0b11 = 3.1（3.2 沿用 3.1 的编码，与 3.1 端口互通）
+ * 00b 已废弃，按 2.0 接收；01b = 2.0；10b = 3.x（含 3.0/3.1/3.2）；11b 保留。
  */
 /**
  * Header 的 Specification Revision 字段（B7…6）取值。

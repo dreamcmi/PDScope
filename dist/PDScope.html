@@ -795,7 +795,7 @@ body.detail-collapsed .detail-rail span{
       打开抓包
     </button>
     <!-- multiple：一次可以选多份，每份各占一个标签页 -->
-    <input type="file" id="fileInput" accept=".atkcc,.sqlite,.db,.bin,.zip,.pdStream,.pdstream" multiple hidden />
+    <input type="file" id="fileInput" accept=".atkcc,.sqlite,.db,.bin,.zip,.pdStream,.pdstream,.ufcsStream,.ufcsstream" multiple hidden />
   </header>
 
   <!-- ── 抓包标签栏 ─────────────────────────────────────────
@@ -818,6 +818,18 @@ body.detail-collapsed .detail-rail span{
         <section class="fgroup">
           <h4>通道 <span class="hint" id="chHint"></span></h4>
           <div class="chlist" id="chList"></div>
+        </section>
+
+        <section class="fgroup">
+          <h4><label for="specRevision">PD 规范版本</label></h4>
+          <select class="text" id="specRevision" disabled>
+            <option value="">自动（保留 3.x 歧义）</option>
+            <option value="2.0">PD 2.0 · v1.3</option>
+            <option value="3.0">PD 3.0 · v1.1</option>
+            <option value="3.1">PD 3.1 · v1.4</option>
+            <option value="3.2">PD 3.2 · v1.2</option>
+          </select>
+          <p class="hint">按选定规范重新解析当前文件；3.x 报文头无法区分 3.0/3.1/3.2。</p>
         </section>
 
         <section class="fgroup">
@@ -948,7 +960,7 @@ body.detail-collapsed .detail-rail span{
         <div class="empty" id="emptyState">
           <svg viewBox="0 0 64 64" class="empty-art"><rect x="8" y="14" width="48" height="36" rx="6" fill="none" stroke="currentColor" stroke-width="1.6" opacity=".5"/><path d="M18 32h7l3-7 4 14 3-7h11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
           <h3 id="emptyTitle">打开一份 PD 抓包文件</h3>
-          <p id="emptyText">支持正点原子 ATK-C 的 <b>.atkcc</b> 与 POWER-Z 的 <b>.sqlite</b> / <b>.pdStream</b>，直接解析、可视化、逐字段溯源。</p>
+          <p id="emptyText">支持正点原子 ATK-C 的 <b>.atkcc</b> 与 POWER-Z 的 <b>.sqlite</b> / <b>.pdStream</b> / <b>.ufcsStream</b>，直接解析、可视化、逐字段溯源。</p>
           <div class="row gap center" id="emptyBtns">
             <button class="btn primary" id="btnOpen2">选择文件</button>
             <button class="btn" id="btnDemo">载入示例</button>
@@ -1012,7 +1024,7 @@ body.detail-collapsed .detail-rail span{
     <div class="drop-inner">
       <svg viewBox="0 0 48 48" class="i"><path d="M24 8v24M14 24l10 10 10-10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
       <b>松开以解析抓包</b>
-      <span>.atkcc · .sqlite · .pdStream · 可一次拖多份</span>
+      <span>.atkcc · .sqlite · .pdStream · .ufcsStream · 可一次拖多份</span>
     </div>
   </div>
 
@@ -1927,6 +1939,7 @@ function matchOrderedSet(symbols) {
       if (symbols[i] === s.sequence[i]) same++;
     }
     if (!best || same > best.matched) best = { set: s, matched: same, total: s.sequence.length };
+    else if (same === best.matched) best.set = null; // 3/4 匹配有歧义时不可任选一种 SOP
   }
   return best;
 }
@@ -1970,8 +1983,8 @@ const CTRL_TYPES = {
 
 /** 控制消息里已废弃、只能被 Not_Supported 回应的类型（键名与 CTRL_TYPES 的取值逐字一致） */
 const CTRL_DEPRECATED = {
-  'GotoMin': 'PD 3.0 起废弃，接收端应回 Not_Supported',
-  'Ping': 'PD 3.0 起废弃，接收端可回 Not_Supported 或忽略（线缆插头必须忽略）',
+  'GotoMin': 'PD 3.2 已废弃，接收端应回 Not_Supported',
+  'Ping': 'PD 3.2 已废弃，接收端可回 Not_Supported 或忽略（线缆插头必须忽略）',
 };
 
 /** 数据消息（Number of Data Objects > 0）—— PD 3.2 Table 6.5 */
@@ -1997,16 +2010,24 @@ const EXT_TYPES = {
   29: 'Reserved', 30: 'Vendor_Defined_Extended', 31: 'Reserved',
 };
 
-/** 消息类型 → 该类型在哪个 PD 版本才有（用于提示「对版本而言非法」） */
+/** 消息类型 → 本仓库四份 PDF 中最早出现的基线；同一 Revision 的其他 Version 不在此表范围。 */
 const CTRL_MIN_REV = {
-  14: 3.0, 15: 3.0, 16: 3.0, 17: 3.0, 18: 3.0, 19: 3.0, 20: 3.0, 21: 3.0, 22: 3.0,
+  14: 3.1, 15: 3.1, 16: 3.0, 17: 3.0, 18: 3.0, 19: 3.0, 20: 3.0, 21: 3.0, 22: 3.1,
   23: 3.1, 24: 3.1,
 };
 const DATA_MIN_REV = {
-  5: 3.0, 6: 3.0, 7: 3.0, 8: 3.0,
+  5: 3.0, 6: 3.0, 7: 3.0, 8: 3.1,
   9: 3.1, 10: 3.1, 11: 3.1, 12: 3.1,
 };
-const EXT_MIN_REV = { 16: 3.1, 17: 3.1, 18: 3.1 };
+const EXT_MIN_REV = { 15: 3.1, 16: 3.1, 17: 3.1, 18: 3.1, 30: 3.1 };
+
+/** 精确对应 doc 中的四份规范。3.0 指 r3.0 v1.1；3.1 指 r3.1 v1.4。 */
+const PD_SPEC_PROFILES = {
+  '2.0': { control: Array.from({ length: 13 }, (_, i) => i + 1), data: [1, 2, 3, 4, 15], ext: [] },
+  '3.0': { control: [...Array.from({ length: 13 }, (_, i) => i + 1), 16, 17, 18, 19, 20, 21], data: [1, 2, 3, 4, 5, 6, 7, 15], ext: Array.from({ length: 14 }, (_, i) => i + 1) },
+  '3.1': { control: Array.from({ length: 24 }, (_, i) => i + 1), data: [...Array.from({ length: 12 }, (_, i) => i + 1), 15], ext: [...Array.from({ length: 18 }, (_, i) => i + 1), 30] },
+  '3.2': { control: Array.from({ length: 24 }, (_, i) => i + 1), data: [...Array.from({ length: 12 }, (_, i) => i + 1), 15], ext: [...Array.from({ length: 18 }, (_, i) => i + 1), 30] },
+};
 
 /**
  * 「消息类型 → 界面分类」映射（给表格上色用）。
@@ -2073,7 +2094,7 @@ const MSG_CATEGORY = {
 
 /**
  * Header 的 Specification Revision 域 → 版本号（PD 3.2 Table 6.1）
- * 0b00 = 1.0，0b01 = 2.0，0b10 = 3.0，0b11 = 3.1（3.2 沿用 3.1 的编码，与 3.1 端口互通）
+ * 00b 已废弃，按 2.0 接收；01b = 2.0；10b = 3.x（含 3.0/3.1/3.2）；11b 保留。
  */
 /**
  * Header 的 Specification Revision 字段（B7…6）取值。
@@ -2516,19 +2537,23 @@ const PDO_KIND_TITLE = {
  * @returns {{name:string, ref:string, meta:object}}
  */
 function pdoParse(st, em, pdo, o) {
+  const legacy = o.revText === '2.0' || o.revText === '1.0' || o.specRevision === '2.0';
+  const old3 = o.specRevision === '3.0';
   const role = o.role;
   const pos = o.position;
   const isEpr = !!o.isEpr;
   const roleName = role === 'source' ? 'Source' : 'Sink';
   const t1 = pdField(pdo, 31, 30);
 
-  const name = pdoKindName(pdo, isEpr);
+  const apdoType = pdField(pdo, 29, 28);
+  const reservedApdo = t1 === 3 && (legacy || old3 && apdoType !== 0 || o.specRevision === '3.1' && apdoType === 2);
+  const name = reservedApdo ? 'Reserved_APDO' : pdoKindName(pdo, isEpr);
   em.object(`PDO #${pos} · ${PDO_KIND_TITLE[name] ?? name}（${roleName}）`);
   em.detail('原始值', `0x${pdHex(pdo)}`);
   em.detail('功率范围', isEpr ? 'EPR（扩展功率范围）' : 'SPR（标准功率范围）');
   em.detail('角色', roleName);
 
-  const meta = { type: t1, role, isEpr, kind: 'unknown', position: pos };
+  const meta = { raw: pdo >>> 0, type: t1, role, isEpr, kind: 'unknown', position: pos };
   let summary = `[${name}] [raw: 0x${pdHex(pdo)}]`;
 
   if (t1 === 0) {
@@ -2549,29 +2574,32 @@ function pdoParse(st, em, pdo, o) {
           ? pdFlag(pdBit(pdo, 28), 'Sink 需按 USB 规范挂起/唤醒', '无需遵循挂起规则')
           : pdFlag(pdBit(pdo, 28), 'Sink 需要比 5V PDO 更多的电量', '否'));
       em.detail('Unconstrained Power [B27]', pdFlag(pdBit(pdo, 27),
-        role === 'source' ? '外部电源充足，可全力供电' : '外部电源不足，受自身功耗限制'));
+        role === 'source' ? '电源充足，不受外部功率限制' : '有足够供自身使用的外部电源', '受供电功率限制'));
       em.detail('USB Communications Capable [B26]', pdFlag(pdBit(pdo, 26)));
       em.detail('Dual-Role Data [B25]', pdFlag(pdBit(pdo, 25), '可通过 DR_Swap 换数据角色', '不可换'));
-      if (role === 'source') {
+      if (legacy) {
+        em.detail('Reserved [B24-22]', pdField(pdo, 24, 22));
+      } else if (role === 'source') {
         em.detail('Unchunked Extended Messages [B24]', pdFlag(pdBit(pdo, 24), '支持分块与不分块', '仅支持分块'));
-        em.detail('EPR Capable [B23]', pdFlag(pdBit(pdo, 23), '可进入 EPR 模式', '仅 SPR'));
+        em.detail(old3 ? 'Reserved [B23]' : 'EPR Capable [B23]', old3 ? pdBit(pdo, 23) : pdFlag(pdBit(pdo, 23), '可进入 EPR 模式', '仅 SPR'));
         em.detail('Reserved [B22]', pdBit(pdo, 22));
       } else {
         em.detail('FRS Current [B24-23]', FRS_CURRENT[pdField(pdo, 24, 23)]);
         em.detail('Reserved [B22-20]', `0x${pdField(pdo, 22, 20).toString(16).toUpperCase()}`);
       }
     } else if (isEpr) {
-      em.detail('Reserved [B29-23]', `0x${pdField(pdo, 29, 23).toString(16).toUpperCase()}`);
+      em.detail('Reserved [B29-22]', `0x${pdField(pdo, 29, 22).toString(16).toUpperCase()}`);
     } else {
       em.detail('Device Flags [B29-22]', `0x${pdField(pdo, 29, 22).toString(16).toUpperCase()}（非首位 PDO 时为 Reserved）`);
     }
-    if (role === 'source' || carry5vFlags) {
+    if (role === 'source') {
       emitPeakCurrent(em, 'Peak Current', pdField(pdo, 21, 20), 'B21-20');
     } else {
       em.detail('Peak Current [B21-20]', 'Reserved（Sink 侧不使用）');
     }
     em.detail('最大功率', `${pdNum(mv * ma)} W`);
     meta.kind = 'fixed';
+    Object.assign(meta, { minVoltage: mv, maxVoltage: mv, current: ma, power: mv * ma });
   } else if (t1 === 1) {
     /* ── Battery Supply PDO（Table 6.11）── */
     const minv = pdField(pdo, 19, 10) * V_STEP;
@@ -2583,6 +2611,7 @@ function pdoParse(st, em, pdo, o) {
     em.detail(role === 'source' ? '最大可用功率 [B9-0]' : '工作功率 [B9-0]', `${pdNum(mw)} W`);
     summary = `[${name}] ${pdNum(minv)}/${pdNum(maxv)}V ${pdNum(mw)}W`;
     meta.kind = 'battery';
+    Object.assign(meta, { minVoltage: minv, maxVoltage: maxv, power: mw });
   } else if (t1 === 2) {
     /* ── Variable Supply PDO（Table 6.12）── */
     const minv = pdField(pdo, 19, 10) * V_STEP;
@@ -2594,6 +2623,10 @@ function pdoParse(st, em, pdo, o) {
     em.detail(role === 'source' ? '最大电流 [B9-0]' : '工作电流 [B9-0]', `${pdNum(ma)} A`);
     summary = `[${name}] ${pdNum(minv)}/${pdNum(maxv)}V ${pdNum(ma)}A`;
     meta.kind = 'variable';
+    Object.assign(meta, { minVoltage: minv, maxVoltage: maxv, current: ma });
+  } else if (reservedApdo) {
+    em.detail('Supply Type [B31-30]', legacy ? '11b Reserved（PD 2.0 未定义 APDO）' : `11b Augmented，类型 ${apdoType} 在所选规范中为 Reserved`);
+    meta.kind = 'reserved_apdo';
   } else {
     /* ── Augmented PDO（Table 6.13…6.17）── */
     const t2 = pdField(pdo, 29, 28);
@@ -2605,7 +2638,7 @@ function pdoParse(st, em, pdo, o) {
       const ma = pdField(pdo, 6, 0) * I_STEP_PPS;
       const limited = pdBit(pdo, 27);
       em.detail('APDO Type [B29-28]', '00b SPR PPS');
-      em.detail('PPS Power Limited [B27]', pdFlag(limited, '电流上限由 PPS Power Limited 决定', '不受限'));
+      em.detail(role === 'source' && !old3 ? 'PPS Power Limited [B27]' : 'Reserved [B27]', role === 'source' && !old3 ? pdFlag(limited, '受 PDP 限制', '不受限') : limited);
       em.detail('Reserved [B26-25]', `0x${pdField(pdo, 26, 25).toString(16).toUpperCase()}`);
       em.detail('最高电压 [B24-17]', `${pdNum(maxv)} V`);
       em.detail('Reserved [B16]', pdBit(pdo, 16));
@@ -2613,8 +2646,9 @@ function pdoParse(st, em, pdo, o) {
       em.detail('Reserved [B7]', pdBit(pdo, 7));
       em.detail(role === 'source' ? '最大电流 [B6-0]' : '所需电流 [B6-0]', `${pdNum(ma)} A`);
       em.detail('@Vmax 近似功率', `${pdNum(maxv * ma)} W`);
-      summary = `[PPS] ${pdNum(minv)}/${pdNum(maxv)}V ${pdNum(ma)}A${limited ? ' [limited]' : ''}`;
+      summary = `[PPS] ${pdNum(minv)}/${pdNum(maxv)}V ${pdNum(ma)}A${role === 'source' && !old3 && limited ? ' [limited]' : ''}`;
       meta.kind = 'pps';
+      Object.assign(meta, { minVoltage: minv, maxVoltage: maxv, current: ma, powerLimited: role === 'source' && !old3 && !!limited });
     } else if (t2 === 1) {
       const minv = pdField(pdo, 15, 8) * V_STEP_AVS;
       const maxv = pdField(pdo, 25, 17) * V_STEP_AVS;
@@ -2628,14 +2662,15 @@ function pdoParse(st, em, pdo, o) {
       em.detail('最高电压 [B25-17]', `${pdNum(maxv)} V`);
       em.detail('Reserved [B16]', pdBit(pdo, 16));
       em.detail('最低电压 [B15-8]', `${pdNum(minv)} V`);
-      em.detail('PDP [B7-0]', `${pdp} W`);
-      em.detail('@Vmax 近似电流', `${pdNum(maxv > 0 ? pdp / maxv : 0)} A`);
+      em.detail(role === 'source' ? 'PDP [B7-0]' : 'Maximum Power [B7-0]', `${pdp} W`);
+      em.detail('@Vmax 可用电流', `${pdNum(maxv > 0 ? Math.floor(Math.min(5, pdp / maxv) * 20 + 1e-9) / 20 : 0)} A（取 PDP/V 与 5A 中较小值，向下取整到 50mA）`);
       summary = `[EPR_AVS] ${pdNum(minv)}~${pdNum(maxv)}V (${pdp}W)`;
       meta.kind = 'epr_avs';
+      Object.assign(meta, { minVoltage: minv, maxVoltage: maxv, power: pdp });
     } else if (t2 === 2) {
       const c15 = pdField(pdo, 19, 10) * I_STEP_AVS_MAX;
       const c20 = pdField(pdo, 9, 0) * I_STEP_AVS_MAX;
-      em.detail('APDO Type [B29-28]', '10b SPR AVS（9~20V 可调）');
+      em.detail('APDO Type [B29-28]', `10b SPR AVS（9~${c20 ? 20 : 15}V 可调）`);
       if (role === 'source') {
         emitPeakCurrent(em, 'Peak Current', pdField(pdo, 27, 26), 'B27-26');
         em.detail('Reserved [B25-20]', `0x${pdField(pdo, 25, 20).toString(16).toUpperCase()}`);
@@ -2644,10 +2679,11 @@ function pdoParse(st, em, pdo, o) {
       }
       em.detail('9V~15V 最大电流 [B19-10]', `${pdNum(c15)} A`);
       em.detail('15V~20V 最大电流 [B9-0]', c20 === 0 ? '0 A（最高只到 15V）' : `${pdNum(c20)} A`);
-      summary = `[SPR_AVS] 9~20V  15V:${pdNum(c15)}A  20V:${pdNum(c20)}A`;
+      summary = `[SPR_AVS] 9~${c20 ? 20 : 15}V  15V:${pdNum(c15)}A${c20 ? `  20V:${pdNum(c20)}A` : ''}`;
       meta.kind = 'spr_avs';
+      Object.assign(meta, { minVoltage: 9, maxVoltage: c20 ? 20 : 15, current15: c15, current20: c20 });
     } else {
-      em.detail('APDO Type [B29-28]', `1${t2.toString(2).padStart(2, '0')}b Reserved`);
+      em.detail('APDO Type [B29-28]', `${t2.toString(2).padStart(2, '0')}b Reserved`);
       em.detail('原始值', `0x${pdHex(pdo)}`);
       summary = `[Reserved_APDO] [raw: 0x${pdHex(pdo)}]`;
       meta.kind = 'reserved_apdo';
@@ -2655,8 +2691,11 @@ function pdoParse(st, em, pdo, o) {
   }
 
   const ref = `${name} ${summaryShort(summary)}`;
-  st.pdos[role][pos] = ref;
-  st.pdoMeta[role][pos] = meta;
+  meta.valid = pdValidatePdo(em, meta);
+  if (o.register !== false) {
+    st.pdos[role][pos] = ref;
+    st.pdoMeta[role][pos] = meta;
+  }
   return { name, ref, meta, summary };
 }
 
@@ -2676,8 +2715,10 @@ function summaryShort(s) {
  * @param {object} o  { isEpr }
  */
 function rdoParse(st, em, rdo, o = {}) {
-  const pos = pdField(rdo, 31, 28);
-  const posValid = pos !== 0 && pos < 0x0E;
+  const legacy = o.revText === '2.0' || o.revText === '1.0' || o.specRevision === '2.0';
+  const latest = o.specRevision === '3.2';
+  const pos = pdField(rdo, legacy ? 30 : 31, 28);
+  const posValid = pos > 0 && pos <= (o.isEpr ? (latest ? 11 : 13) : 7);
   em.object(`RDO · 请求数据对象${posValid ? `（引用 PDO #${pos}）` : ''}`);
   em.detail('原始值', `0x${pdHex(rdo)}`);
 
@@ -2685,24 +2726,50 @@ function rdoParse(st, em, rdo, o = {}) {
     em.detail(`Object Position [${pdRange(31, 28)}]`, `${pos} · 无效位置`);
     const s = `(RDO 位置 ${pos} 无效)`;
     em.note(s);
-    return { summary: s };
+    em.warn?.(`RDO 引用位置 ${pos} 无效`, 'RDO_POSITION');
   }
 
-  const known = pos in st.pdos.source;
-  const ref = known ? st.pdos.source[pos] : 'Unknown PDO';
-  const meta = known ? (st.pdoMeta.source[pos] ?? { kind: 'unknown' }) : { kind: 'unknown' };
+  // 普通 Request 与 EPR_Request 引用各自最近一次能力表。
+  const caps = o.capabilities === undefined ? { pdos: st.pdos.source, pdoMeta: st.pdoMeta.source } : o.capabilities;
+  const known = !!o.meta || !!caps && pos in caps.pdos;
+  const ref = o.ref ?? (known ? caps?.pdos[pos] : 'Unknown PDO');
+  const meta = o.meta ?? (known ? (caps.pdoMeta[pos] ?? { kind: 'unknown' }) : { kind: 'unknown' });
   const kind = meta.kind ?? 'unknown';
 
   em.detail(`Object Position [${pdRange(31, 28)}]`, String(pos));
   em.detail('引用的 PDO', known ? ref : `未捕获到 Source_Capabilities 的第 ${pos} 个 PDO`);
-  em.detail('Giveback [B27]', pdFlag(pdBit(rdo, 27), '已置位（该位已废弃）', '未置位'));
+  if (legacy) em.detail('Reserved [B31]', pdBit(rdo, 31));
+  const augmented = ['pps', 'spr_avs', 'epr_avs'].includes(kind);
+  const givebackField = latest ? 'Giveback (Deprecated) [B27]'
+    : augmented ? (o.specRevision == null ? 'Giveback/Reserved [B27]' : 'Reserved [B27]') : 'Giveback [B27]';
+  const givebackBit = !!pdBit(rdo, 27);
+  if (latest) {
+    em.detail(givebackField, `${Number(givebackBit)}（PD 3.2 已废弃，接收端必须忽略）`);
+  } else if (augmented) {
+    em.detail(givebackField, `${Number(givebackBit)}${o.specRevision == null ? '（版本未指定；3.0 起该位 Reserved/弃用）' : '（PD 3.1 Reserved）'}`);
+  } else {
+    em.detail(givebackField, pdFlag(givebackBit, '收到 GotoMin 时降至最小请求值', '使用最大请求值'));
+  }
   em.detail('Capability Mismatch [B26]', pdFlag(pdBit(rdo, 26), '能力不匹配', '匹配'));
-  em.detail('USB Communications Cable [B25]', pdFlag(pdBit(rdo, 25), '是通信线缆', '否'));
+  em.detail('USB Communications Capable [B25]', pdFlag(pdBit(rdo, 25), '支持 USB 数据通信', '不支持'));
   em.detail('No USB Suspend [B24]', pdFlag(pdBit(rdo, 24), '不遵循 USB 挂起', '遵循 USB 挂起'));
-  em.detail('Unchunked Extended Messages [B23]', pdFlag(pdBit(rdo, 23), '支持分块与不分块', '仅支持分块'));
-  em.detail('EPR Capable [B22]', pdFlag(pdBit(rdo, 22), '申请进入 EPR', '仅 SPR'));
+  if (legacy) em.detail('Reserved [B23-20]', pdField(rdo, 23, 20));
+  else {
+    em.detail('Unchunked Extended Messages [B23]', pdFlag(pdBit(rdo, 23), '支持分块与不分块', '仅支持分块'));
+    em.detail(o.specRevision === '3.0' ? 'Reserved [B22]' : 'EPR Capable [B22]', o.specRevision === '3.0' ? pdBit(rdo, 22) : pdFlag(pdBit(rdo, 22), '支持 EPR', '仅 SPR'));
+  }
 
   let s;
+  const request = { raw: rdo >>> 0, kind, position: pos, validPosition: posValid, referenceKnown: known,
+    eprCapable: !legacy && o.specRevision !== '3.0' && !!pdBit(rdo, 22), pdoRaw: meta.raw ?? null,
+    range: pos >= 8 ? 'epr' : 'spr', valid: posValid && meta.valid !== false,
+    // Keep the raw value for diagnostics. In PD 3.2 the receiver must ignore
+    // this deprecated bit, so it cannot select the older min/max semantics.
+    givebackBit, giveback: !latest && !augmented && givebackBit, mismatch: !!pdBit(rdo, 26) };
+  if (kind === 'unknown' || kind === 'reserved_apdo') {
+    em.detail('请求载荷 [B21-0]', `0x${pdHex(pdField(rdo, 21, 0), 6)}（PDO 类型未知，无法选择电流/功率/电压格式）`);
+    s = `(RDO ${pos}: Unknown PDO) 请求格式待能力表确认`;
+  } else
   if (kind === 'pps') {
     const ov = pdField(rdo, 20, 9) * 0.02;      // Table 6.21：20mV
     const oa = pdField(rdo, 6, 0) * I_STEP_PPS; // 50mA
@@ -2711,6 +2778,7 @@ function rdoParse(st, em, rdo, o = {}) {
     em.detail('Reserved [B8-7]', `0x${pdField(rdo, 8, 7).toString(16).toUpperCase()}`);
     em.detail('工作电流 [B6-0]', `${pdNum(oa)} A`);
     s = `(RDO ${pos}: ${ref}) 请求 ${pdNum(ov)}V ${pdNum(oa)}A`;
+    Object.assign(request, { voltage: ov, current: oa });
   } else if (kind === 'spr_avs' || kind === 'epr_avs') {
     const raw = pdField(rdo, 20, 9);
     const ov = raw * 0.025;                     // Table 6.22：25mV，且 B10-9 必须为 00b
@@ -2721,24 +2789,67 @@ function rdoParse(st, em, rdo, o = {}) {
     em.detail('Reserved [B8-7]', `0x${pdField(rdo, 8, 7).toString(16).toUpperCase()}`);
     em.detail('工作电流 [B6-0]', `${pdNum(oa)} A`);
     s = `(RDO ${pos}: ${ref}) 请求 ${pdNum(ov)}V ${pdNum(oa)}A`;
+    Object.assign(request, { voltage: ov, current: oa });
+    if (raw & 3) { em.warn?.('AVS RDO 的 B10-9 必须为 00b', 'RDO_STEP'); request.valid = false; }
   } else if (kind === 'battery') {
     const ow = pdField(rdo, 19, 10) * P_STEP_BATT;
     const mw = pdField(rdo, 9, 0) * P_STEP_BATT;
     em.detail('Reserved [B21-20]', `0x${pdField(rdo, 21, 20).toString(16).toUpperCase()}`);
     em.detail('工作功率 [B19-10]', `${pdNum(ow)} W`);
-    em.detail('最大工作功率 [B9-0]', `${pdNum(mw)} W（已废弃，应与工作功率相同）`);
-    s = `(RDO ${pos}: ${ref}) 工作 ${pdNum(ow)}W / 最大 ${pdNum(mw)}W`;
+    em.detail(`${request.giveback ? '最小' : '最大'}工作功率 [B9-0]`, `${pdNum(mw)} W${latest ? '（PD 3.2 已废弃，应与工作功率相同）' : '（PD 3.0/3.1 中有效，PD 3.2 废弃）'}`);
+    s = `(RDO ${pos}: ${ref}) 工作 ${pdNum(ow)}W / ${request.giveback ? '最小' : '最大'} ${pdNum(mw)}W`;
+    Object.assign(request, { power: ow, limit: mw });
   } else {
     const oa = pdField(rdo, 19, 10) * I_STEP;
     const ma = pdField(rdo, 9, 0) * I_STEP;
     em.detail('Reserved [B21-20]', `0x${pdField(rdo, 21, 20).toString(16).toUpperCase()}`);
     em.detail('工作电流 [B19-10]', `${pdNum(oa)} A`);
-    em.detail('最大工作电流 [B9-0]', `${pdNum(ma)} A（已废弃，应与工作电流相同）`);
-    s = `(RDO ${pos}: ${ref}) 工作 ${pdNum(oa)}A / 最大 ${pdNum(ma)}A`;
+    em.detail(`${request.giveback ? '最小' : '最大'}工作电流 [B9-0]`, `${pdNum(ma)} A${latest ? '（PD 3.2 已废弃，应与工作电流相同）' : '（PD 3.0/3.1 中有效，PD 3.2 废弃）'}`);
+    s = `(RDO ${pos}: ${ref}) 工作 ${pdNum(oa)}A / ${request.giveback ? '最小' : '最大'} ${pdNum(ma)}A`;
+    Object.assign(request, { current: oa, limit: ma });
   }
 
+  request.valid = pdValidateRequest(em, request, meta, latest) && request.valid;
+
   em.note(s);
-  return { summary: s, ref, kind, position: pos };
+  return { summary: s, ref, ...request };
+}
+
+function pdValidatePdo(em, m) {
+  let valid = m.kind !== 'reserved_apdo';
+  const bad = text => { valid = false; em.warn?.(`PDO #${m.position}: ${text}`, 'PDO_RANGE'); };
+  if (m.minVoltage > m.maxVoltage) bad('最低电压大于最高电压');
+  if (m.current > 5 || m.current15 > 5 || m.current20 > 5) bad('电流超过 5A');
+  if (m.position === 1 && (m.kind !== 'fixed' || m.minVoltage !== 5)) bad('首个 PDO 必须为 5V Fixed');
+  if (m.kind === 'battery' && m.power > 100) bad('Battery PDO 功率超过 100W');
+  if (m.kind === 'fixed' && m.maxVoltage > (m.isEpr ? 48 : 20)) bad('固定电压超出功率范围');
+  if (m.isEpr && m.kind === 'fixed' && m.maxVoltage <= 20) bad('EPR Fixed 电压必须大于 20V');
+  if (m.role === 'source' && m.isEpr && m.kind === 'fixed' && ![28, 36, 48].includes(m.maxVoltage)) bad('EPR Source Fixed 电压必须为 28/36/48V');
+  if (m.isEpr && !['fixed', 'epr_avs'].includes(m.kind)) bad('EPR 槽位只能包含 Fixed 或 EPR AVS');
+  if (!m.isEpr && m.kind === 'epr_avs') bad('EPR AVS 必须从位置 8 起');
+  if (m.kind === 'pps' && (m.minVoltage < 3.3 || m.maxVoltage > 21)) bad('PPS 电压超出 3.3~21V');
+  if (m.kind === 'epr_avs' && (m.minVoltage < 15 || m.maxVoltage > 48 || m.power > 240)) bad('EPR AVS 电压或 PDP 超出范围');
+  if (m.kind === 'epr_avs' && m.role === 'source' && (m.minVoltage !== 15 || ![28, 36, 48].includes(m.maxVoltage))) bad('EPR Source AVS 必须从 15V 起，最高电压为 28/36/48V');
+  return valid;
+}
+
+function pdValidateRequest(em, r, m, latest) {
+  let valid = true;
+  const bad = text => { valid = false; em.warn?.(text, 'RDO_RANGE'); };
+  // 编码单位换算产生的浮点尾差不能把 3.55A 等合法边界误判为超限。
+  const epsilon = 1e-9;
+  if (r.voltage !== undefined && (r.voltage < m.minVoltage - epsilon || r.voltage > m.maxVoltage + epsilon)) bad('请求电压超出所引用 PDO 的范围');
+  const currentLimit = m.kind === 'spr_avs' ? (r.voltage > 15 ? m.current20 : m.current15)
+    : m.kind === 'epr_avs' && r.voltage > 0 ? Math.floor(Math.min(5, m.power / r.voltage) * 20 + 1e-9) / 20 : m.current;
+  if (r.current > currentLimit + epsilon) bad('请求电流超过所引用 PDO 的最大电流');
+  if (r.power > m.power + epsilon) bad('请求功率超过所引用 PDO 的最大功率');
+  if (latest && r.limit !== undefined && Math.abs(r.limit - (r.current ?? r.power)) > epsilon) bad('PD 3.2 的废弃最大请求域必须等于工作请求值');
+  if (!latest && r.limit !== undefined) {
+    const operating = r.current ?? r.power;
+    if (r.giveback ? r.limit > operating + epsilon : r.limit < operating - epsilon) bad('最小/最大请求值与工作请求值的关系无效');
+    if (!r.giveback && !r.mismatch && r.limit > (m.kind === 'battery' ? m.power : m.current) + epsilon) bad('未置 Capability Mismatch 时最大请求值不能超出 PDO');
+  }
+  return valid;
 }
 
 /** 供外部（如 EPR_Request 的「被请求 PDO 副本」）复用的位置查询 */
@@ -2759,8 +2870,8 @@ function lookupPdo(st, role, pos) {
  *   • VDM Header 的 B31-16 —— 结构化 VDM 的 Standard ID，或非结构化 VDM 的厂商 ID
  *   • Discover Identity 的 ID Header VDO / Product VDO —— 厂商 ID（VID）
  *
- * 规范只定义了 0xFF00（PD SID）与 0xFF01（DPTC SID）两个标准 ID；
- * 0xFF02…0xFFFE 由 USB-IF 保留，0x0000 是列表结束符。
+ * PD 3.2 Table 6.33 定义了 0xFF00（PD SID）与 0xFF01（DPTC SID）；
+ * 旧版 PD 表只列 0xFF00，0x0000 是 Discover SVIDs 列表结束符。
  * 厂商 ID 由 USB-IF 分配，本质上是「厂商自己的编号」，所以下面这张厂商表只是
  * 常见的便利对照，**不完整也不权威** —— 查不到就老实显示原始 ID。
  */
@@ -2802,23 +2913,33 @@ const VENDOR_VID = {
 };
 
 /** SVID → 名称（未知名返回 null） */
-function svidName(svid) {
+function svidName(svid, ctx = null) {
   const v = svid & 0xFFFF;
-  if (STANDARD_SVID[v] !== undefined) return STANDARD_SVID[v];
+  if (v === 0xFF00) return STANDARD_SVID[v];
+  if (v === 0xFF01) {
+    if (ctx?.specRevision && ctx.specRevision !== '3.2') return null;
+    return 'DPTC SID（PD 3.2 Table 6.33；DisplayPort Alt Mode）';
+  }
   if (VENDOR_VID[v] !== undefined) return `${VENDOR_VID[v]}（厂商 ID）`;
   return null;
 }
 
+/** SVID → 名称；精确到旧 PD 版本时，只有该版本明确列出的 ID 才标为 PD 标准 ID。 */
+function svidNameForRevision(svid, specRevision) {
+  return svidName(svid, { specRevision });
+}
+
 /** SVID → 简短标签（附带十六进制原值，界面上一眼双向对照） */
-function svidText(svid) {
+function svidText(svid, ctx = null) {
   const v = svid & 0xFFFF;
-  const name = svidName(v);
+  const name = svidName(v, ctx);
   const hex = `0x${v.toString(16).toUpperCase().padStart(4, '0')}`;
   return name ? `${hex} · ${name}` : `${hex} · 未登记的 SVID`;
 }
 
 /** 该 SVID 是否为本规范定义的标准 ID */
-const isStandardSvid = (svid) => (svid & 0xFFFF) === 0xFF00 || (svid & 0xFFFF) === 0xFF01;
+const isStandardSvid = (svid, ctx = null) => (svid & 0xFFFF) === 0xFF00
+  || ((svid & 0xFFFF) === 0xFF01 && (!ctx?.specRevision || ctx.specRevision === '3.2'));
 
 /** 0xFF00 的重命名常量（PD 规范自身） */
 const SVID_PD = 0xFF00;
@@ -2860,17 +2981,20 @@ function pushNonAckFact(facts, ack, vdos, cmdName) {
   if (ack === 'REQ') return;
   const extra = vdos.length ? '，且不应携带数据对象' : '';
   if (ack === 'NAK') facts.push(`对端未实现/拒绝 ${cmdName}${extra}`);
-  else facts.push(`⚠ ${ack} 不是 ${cmdName} 的合法响应（规范只允许 ACK/NAK）${extra}`);
+  else if (ack === 'BUSY') facts.push(`对端忙，稍后重试 ${cmdName}${extra}`);
 }
 
 /**
  * 线缆 VDO 的 USB Highest Speed（B2..0）。
  * 按现行规范（PD 3.1+）解码；PD 3.0 时 011b 及以上还是保留值，取值到 3 以上时补一句说明。
  */
-function cableSpeedText(spd) {
+function cableSpeedText(spd, ctx) {
   const b = spd.toString(2).padStart(3, '0') + 'b';
+  if (ctx.specRevision === '3.1' && spd >= 4) return `${b} · Reserved（PD 3.1 v1.4）`;
   const t = USB_HIGHEST_SPEED[spd];
   if (!t) return `${b} · 无效取值（不得使用）`;
+  if (ctx.specRevision) return `${b} · ${t}`;
+  if (spd === 4) return `${b} · ${t}（PD 3.1 v1.4 中为 Reserved）`;
   return spd >= 3 ? `${b} · ${t}（PD 3.0 时该编码为保留值）` : `${b} · ${t}`;
 }
 
@@ -2895,6 +3019,7 @@ function vmaxNote(code, ctx) {
  * @param {object} ctx { rev, revText, sop, link, role }
  */
 function vdmParse(st, em, vdos, ctx) {
+  st.activeModes ??= {}; st.modes ??= {}; st.identities ??= {};
   const head = vdos[0] >>> 0;
   const svid = pdField(head, 31, 16);
   const structured = pdBit(head, 15) === 1;
@@ -2902,13 +3027,25 @@ function vdmParse(st, em, vdos, ctx) {
   const facts = [];
 
   em.object('VDO #1 · VDM Header');
-  em.detail('SVID [B31-16]', svidText(svid));
+  em.detail(structured ? 'SVID [B31-16]' : 'Vendor ID (VID) [B31-16]', svidText(svid, ctx));
   em.detail('VDM Type [B15]', pdFlag(structured, 'Structured VDM（结构化）', 'Unstructured VDM（厂商私有）'));
 
   if (!structured) {
     const payload = pdField(head, 14, 0);
     em.detail('Available for Vendor Use [B14-0]', `0x${payload.toString(16).toUpperCase().padStart(4, '0')}`);
-    const vendor = svidName(svid);
+    if (svid === 0 || isStandardSvid(svid, ctx)) {
+      em.warn?.('非结构化 VDM 的 B31–16 必须是 USB-IF 分配的厂商 VID，不能使用标准 SVID 或 0x0000', 'VDM_FIELD');
+    }
+    if (ctx.sop && !['SOP', "SOP'", "SOP''"].includes(ctx.sop)) {
+      em.warn?.('非结构化 VDM 仅允许用于 SOP*（SOP/SOP\'/SOP\'\'）链路', 'SOP');
+    }
+    if (ctx.sop === 'SOP' && ctx.dataRole !== undefined && ctx.dataRole !== null && ctx.dataRole !== 1) {
+      em.warn?.('非结构化 VDM 只能由 DFP 发起；当前 SOP 发送方是 UFP', 'ROLE');
+    }
+    if (ctx.link === 'cable' && ctx.role === 'Plug') {
+      em.warn?.('Cable Plug 只能作为非结构化 VDM 响应方，不能发起消息', 'ROLE');
+    }
+    const vendor = svidName(svid, ctx);
     const s = `厂商私有 VDM · SVID 0x${svid.toString(16).toUpperCase().padStart(4, '0')}`
       + (vendor ? ` (${vendor.replace('（厂商 ID）', '')})` : '') + ` · 私有载荷 0x${payload.toString(16).toUpperCase()}`;
     extra.forEach((v, i) => {
@@ -2927,13 +3064,30 @@ function vdmParse(st, em, vdos, ctx) {
   const cmd = pdField(head, 4, 0);
   const cmdName = vdmCommandName(cmd);
   const ack = VDM_ACK[cmdType];
+  ctx = { ...ctx, vdmVersionMajor: verMajor, vdmVersionMinor: verMinor,
+    knownModeCount: st.modes?.[svid]?.length };
+  pdValidateVdm(em, head, extra, ctx);
 
-  em.detail('Structured VDM Version (Major) [B14-13]', `${VDM_VER_MAJOR[verMajor] ?? '无效'} · ${verMajor.toString(2).padStart(2, '0')}b`);
-  em.detail('Structured VDM Version (Minor) [B12-11]', cmd <= 15
-    ? `${VDM_VER_MINOR[verMinor] ?? '无效取值（不得使用）'} · ${verMinor.toString(2).padStart(2, '0')}b`
-    : `由 SVID 定义 · ${verMinor.toString(2).padStart(2, '0')}b`);
+  const minorText = cmd >= 16
+    ? `由 SVID 定义 · ${verMinor.toString(2).padStart(2, '0')}b`
+    : verMajor === 0 || ['3.0', '3.1'].includes(ctx.specRevision)
+      ? `Reserved · ${verMinor.toString(2).padStart(2, '0')}b`
+      : !ctx.specRevision && verMajor === 1
+      ? `${verMinor.toString(2).padStart(2, '0')}b · PD 3.2: ${VDM_VER_MINOR[verMinor] ?? 'Invalid'}；PD 3.0/3.1: Reserved`
+      : `${VDM_VER_MINOR[verMinor] ?? '无效取值（不得使用）'} · ${verMinor.toString(2).padStart(2, '0')}b`;
+  let majorText = VDM_VER_MAJOR[verMajor] ?? '无效';
+  if (verMajor === 0) {
+    if (ctx.specRevision === '2.0') majorText = 'Version 1.0';
+    else if (['3.0', '3.1'].includes(ctx.specRevision)) majorText = 'Version 1.0（该 PD 版本 Shall Not be used）';
+    else if (ctx.specRevision === '3.2') majorText = 'Version 1.0（Deprecated for new designs）';
+    else if (!ctx.specRevision && ctx.revText === '3.x') majorText = 'Version 1.0（PD 3.0/3.1 不得使用；PD 3.2 已弃用）';
+  } else if (verMajor === 1 && ctx.specRevision === '2.0') {
+    majorText = 'Version 2.x（PD 2.0 Reserved）';
+  }
+  em.detail('Structured VDM Version (Major) [B14-13]', `${majorText} · ${verMajor.toString(2).padStart(2, '0')}b`);
+  em.detail('Structured VDM Version (Minor) [B12-11]', minorText);
   em.detail('Object Position [B10-8]', `${objPos}`
-    + (cmd === 4 || cmd === 5 ? `（指向 Discover Modes 列表里的第 ${objPos} 个 Mode）`
+    + (cmd >= 16 ? '（由 SVID 定义）' : cmd === 5 && objPos === 7 ? '（退出全部 Mode）' : cmd >= 4 && cmd <= 6 ? `（指向 Discover Modes 列表里的第 ${objPos} 个 Mode）`
       : (objPos ? '（本命令下应为 0，接收端应忽略）' : '（本命令下应为 000b）')));
   em.detail('Command Type [B7-6]', `${ack} · ${cmdType.toString(2).padStart(2, '0')}b`);
   em.detail('Reserved [B5]', pdBit(head, 5));
@@ -2959,6 +3113,12 @@ function vdmParse(st, em, vdos, ctx) {
         em.object(`VDO #${i + 2} · SVID 自定义数据`);
         em.detail('原始值', `0x${pdHex(v)}`);
       });
+  }
+
+  if (cmdType === 1 && cmd === 4) st.activeModes[`${svid}:${objPos}`] = true;
+  if (cmdType === 1 && cmd === 5) {
+    if (objPos === 7) st.activeModes = {};
+    else delete st.activeModes[`${svid}:${objPos}`];
   }
 
   const head4 = `${ack} ${cmdName}`;
@@ -2987,7 +3147,7 @@ function decodeDiscoverIdentity(st, em, vdos, ctx, ack, facts) {
     if (ack === 'NAK') {
       em.detail('说明', '对端未实现 Discover Identity，故无数据对象');
     } else {
-      em.detail('说明', 'BUSY 不是 Discover Identity 的合法响应（规范只允许 ACK/NAK）');
+      em.detail('说明', '对端忙，Discover Identity 可返回 BUSY；请求方稍后重试');
     }
     return;
   }
@@ -3013,82 +3173,178 @@ function decodeDiscoverIdentity(st, em, vdos, ctx, ack, facts) {
   const rest = vdos.slice(3);
   const kind = info.vdoKind;
 
+  const legacyLayout = ctx.revText === '2.0' || ctx.revText === '1.0' || ctx.specRevision === '3.0';
   if (!rest.length) {
     em.object('无 Product Type VDO');
-    em.detail('说明', `ID Header VDO 声明的产品类型为「${info.productTypeText}」，该类型不返回 Product Type VDO`);
+    em.detail('说明', `ID Header VDO 声明的产品类型为「${info.productTypeText}」，未捕获 Product Type VDO；早期 PD 2.0/3.0 的 Hub/Peripheral 不返回此 VDO`);
+    if (ctx.link === 'cable' && kind) em.warn?.('Discover Identity 缺少必需的线缆/VPD VDO', 'VDM_COUNT');
+    else if (kind === 'ama' || !legacyLayout && (kind === 'ufp' || info.dfpVdoKind === 'dfp')) {
+      em.warn?.('Discover Identity 缺少所声明产品类型要求的 VDO', 'VDM_COUNT');
+    }
   } else if (ctx.link === 'cable') {
     if (kind === 'activeCable') {
       em.object('VDO #5 · Active Cable VDO1');
-      activeCableVdo1(em, rest[0] >>> 0, ctx, facts);
-      if (rest[1] !== undefined) {
+      const ver = pdField(rest[0], 23, 21);
+      if (legacyLayout || ver === 0) pdLegacyCableVdo(em, rest[0] >>> 0, ctx, true, facts);
+      else activeCableVdo1(em, rest[0] >>> 0, ctx, facts);
+      if (!legacyLayout && ver >= 2 && rest[1] !== undefined) {
         em.object('VDO #6 · Active Cable VDO2');
-        activeCableVdo2(em, rest[1] >>> 0, facts);
-      } else {
+        activeCableVdo2(em, rest[1] >>> 0, ctx, facts);
+      } else if (!legacyLayout && ver >= 2) {
         em.note('⚠ 有源线缆缺少 Active Cable VDO2');
+        em.warn?.('有源线缆 VDO Version 1.2/1.3 需要 VDO2', 'VDM_COUNT');
       }
+      const expected = !legacyLayout && ver >= 2 ? 2 : 1;
+      showUnexpectedIdentityVdos(em, rest, expected, 'Active Cable');
     } else if (kind === 'vpd') {
       em.object('VDO #5 · VPD VDO');
       vpdVdo(em, rest[0] >>> 0, facts);
-    } else {
+      showUnexpectedIdentityVdos(em, rest, 1, 'VPD');
+    } else if (kind === 'passiveCable') {
       em.object('VDO #5 · Passive Cable VDO');
-      passiveCableVdo(em, rest[0] >>> 0, ctx, facts);
+      if (legacyLayout) pdLegacyCableVdo(em, rest[0] >>> 0, ctx, false, facts);
+      else passiveCableVdo(em, rest[0] >>> 0, ctx, facts);
+      showUnexpectedIdentityVdos(em, rest, 1, 'Passive Cable');
+    } else {
+      rest.forEach((v, i) => { em.object(`VDO #${i + 5} · 未知产品类型`); em.detail('原始值', `0x${pdHex(v)}`); });
     }
-  } else if (rest.length >= 3) {
+  } else if (!legacyLayout && info.ptUfp && info.ptDfp
+    && ['ufp', 'ama'].includes(info.vdoKind) && info.dfpVdoKind === 'dfp') {
     em.object('VDO #5 · UFP VDO');
-    ufpVdo(em, rest[0] >>> 0, facts);
+    if (info.vdoKind === 'ufp') ufpVdo(em, rest[0] >>> 0, ctx, facts);
+    else amaVdo(em, rest[0] >>> 0, ctx, facts);
     em.object('VDO #6 · Padding');
-    em.detail('值', `0x${pdHex(rest[1] >>> 0)}${rest[1] === 0 ? '（全 0，符合规范的 DRD 格式）' : ' ⚠ 规范要求此对象为全 0'}`);
-    em.object('VDO #7 · DFP VDO');
-    dfpVdo(em, rest[2] >>> 0, facts);
-  } else if (kind === 'dfp') {
+    em.detail('值', rest[1] === undefined ? '缺失' : `0x${pdHex(rest[1])}${rest[1] === 0 ? '（全 0）' : ' ⚠ 必须为全 0'}`);
+    if (rest[1] !== undefined && rest[1] !== 0) em.warn?.('DRD Discover Identity 的 Padding Object 必须为全 0', 'VDM_FIELD');
+    if (rest[2] !== undefined) { em.object('VDO #7 · DFP VDO'); dfpVdo(em, rest[2] >>> 0, facts); }
+    else em.warn?.('DRD 的 DFP VDO 必须位于对象 #7', 'VDM_COUNT');
+    if (rest.length > 3) showUnexpectedIdentityVdos(em, rest, 3, 'DRD');
+  } else if (info.dfpVdoKind === 'dfp' && !info.ptUfp && !legacyLayout) {
     em.object('VDO #5 · DFP VDO');
     dfpVdo(em, rest[0] >>> 0, facts);
+    showUnexpectedIdentityVdos(em, rest, 1, 'DFP');
   } else if (kind === 'ama') {
-    em.object('VDO #5 · AMA VDO（已废弃）');
+    em.object(`VDO #5 · AMA VDO${amaDeprecatedText(ctx)}`);
     amaVdo(em, rest[0] >>> 0, ctx, facts);
-  } else {
+    showUnexpectedIdentityVdos(em, rest, 1, 'AMA');
+  } else if (kind === 'ufp' && !legacyLayout) {
     em.object('VDO #5 · UFP VDO');
-    ufpVdo(em, rest[0] >>> 0, facts);
+    ufpVdo(em, rest[0] >>> 0, ctx, facts);
+    showUnexpectedIdentityVdos(em, rest, 1, 'UFP');
+  } else {
+    rest.forEach((v, i) => { em.object(`VDO #${i + 5} · 产品自定义/保留对象`); em.detail('原始值', `0x${pdHex(v)}`); });
   }
 
-  facts.unshift(...identityFacts(info));
+  facts.unshift(...identityFacts(info, ctx));
   st.identity = { ...info, certStat: vdos[1], product: vdos[2] };
+  st.identities[ctx.role ?? 'unknown'] = st.identity;
 }
 
 /** ID Header VDO（PD 3.2 Table 6.34）—— 链路不同，B29-27 的含义不同 */
 function idHeaderVdo(em, v, ctx) {
   const cable = ctx.link === 'cable';
   const ptUfp = pdField(v, 29, 27);
-  const ptDfp = pdField(v, 25, 23);
+  const pd2 = ctx.revText === '2.0' || ctx.revText === '1.0';
+  const old3 = ctx.specRevision === '3.0';
+  const ptDfp = pd2 ? 0 : pdField(v, 25, 23);
   const conn = pdField(v, 22, 21);
   const vid = pdField(v, 15, 0);
 
   em.detail('USB Host 能力 [B31]', pdFlag(pdBit(v, 31), '可枚举 USB 设备', '不可作 USB Host'));
   em.detail('USB Device 能力 [B30]', pdFlag(pdBit(v, 30), '可被枚举为 USB 设备', '不可作 USB 设备'));
 
-  let productTypeText, vdoKind = null;
+  let productTypeText, vdoKind = null, dfpVdoKind = null;
+  let dfpProductTypeText = null;
   if (cable) {
-    productTypeText = PRODUCT_TYPE_CABLE[ptUfp];
+    productTypeText = cableProductTypeText(ptUfp, ctx);
     vdoKind = PRODUCT_TYPE_VDO_KIND.cable[ptUfp] ?? null;
+    if ((pd2 || old3) && ptUfp === 6) vdoKind = null;
     em.detail(`Product Type (Cable Plug/VPD) [${pdRange(29, 27)}]`, `${ptUfp.toString(2).padStart(3, '0')}b · ${productTypeText}`);
+    if ((pd2 || old3) && ptUfp >= 5 || ctx.specRevision === '3.1' && ptUfp === 5) {
+      em.warn?.('该 Cable Plug/VPD Product Type 在所选 PD 版本中为 Reserved', 'VDM_FIELD');
+    }
   } else {
-    productTypeText = PRODUCT_TYPE_UFP[ptUfp];
+    productTypeText = ufpProductTypeText(ptUfp, ctx);
     vdoKind = PRODUCT_TYPE_VDO_KIND.ufp[ptUfp] ?? null;
+    if ((pd2 || old3) && ptUfp === 3) vdoKind = null;
+    if (ctx.specRevision === '3.1' && ptUfp === 5) vdoKind = null;
     em.detail(`Product Type (UFP) [${pdRange(29, 27)}]`, `${ptUfp.toString(2).padStart(3, '0')}b · ${productTypeText}`);
+    if ((pd2 || old3) && [3, 4, 6, 7].includes(ptUfp) || ctx.specRevision === '3.1' && ptUfp >= 4 || ctx.specRevision === '3.2' && [4, 6, 7].includes(ptUfp)) {
+      em.warn?.('该 UFP Product Type 在所选 PD 版本中为 Reserved/Invalid', 'VDM_FIELD');
+    }
   }
   em.detail('Modal Operation Supported [B26]', pdFlag(pdBit(v, 26),
     '支持 Alternate Mode（会响应 Discover SVIDs/Modes）', '不支持 Alternate Mode'));
-  if (cable) {
+  if (pd2) {
+    em.detail('Reserved [B25-16]', pdField(v, 25, 16));
+  } else if (cable) {
     em.detail(`Product Type (DFP) [${pdRange(25, 23)}]`, `Reserved（SOP' 链路不使用）· 0x${ptDfp.toString(16).toUpperCase()}`);
   } else {
-    em.detail(`Product Type (DFP) [${pdRange(25, 23)}]`, `${ptDfp.toString(2).padStart(3, '0')}b · ${PRODUCT_TYPE_DFP[ptDfp]}`);
+    dfpProductTypeText = dfpProductTypeTextForRevision(ptDfp, ctx);
+    em.detail(`Product Type (DFP) [${pdRange(25, 23)}]`, `${ptDfp.toString(2).padStart(3, '0')}b · ${dfpProductTypeText}`);
+    if (ctx.specRevision === '3.1' && ptDfp === 4 || ctx.specRevision === '3.2' && ptDfp >= 5) {
+      em.warn?.('该 DFP Product Type 在所选 PD 版本中为 Reserved/Invalid', 'VDM_FIELD');
+    }
   }
-  em.detail(`Connector Type [${pdRange(22, 21)}]`, `${conn.toString(2).padStart(2, '0')}b · ${CONNECTOR_TYPE[conn]}`);
-  em.detail(`Reserved [${pdRange(20, 16)}]`, `0x${pdField(v, 20, 16).toString(16).toUpperCase()}`);
+  if (!pd2) {
+    if (old3) em.detail('Reserved [B22-16]', pdField(v, 22, 16));
+    else {
+      em.detail(`Connector Type [${pdRange(22, 21)}]`, `${conn.toString(2).padStart(2, '0')}b · ${CONNECTOR_TYPE[conn]}`);
+      em.detail(`Reserved [${pdRange(20, 16)}]`, `0x${pdField(v, 20, 16).toString(16).toUpperCase()}`);
+    }
+  }
   em.detail(`USB Vendor ID [${pdRange(15, 0)}]`, `0x${pdHex(vid, 4)}`
-    + (svidName(vid) ? ` · ${svidName(vid).replace('（厂商 ID）', '')}` : ''));
+    + (svidName(vid, ctx) ? ` · ${svidName(vid, ctx).replace('（厂商 ID）', '')}` : ''));
 
-  return { ptUfp, ptDfp, conn, vid, productTypeText, vdoKind, cable, host: pdBit(v, 31), device: pdBit(v, 30), modal: pdBit(v, 26) };
+  if (!cable) {
+    dfpVdoKind = PRODUCT_TYPE_VDO_KIND.dfp[ptDfp] ?? null;
+    // AMA/AMC 旧 Product Type 在 PD 2.0/3.0 中复用同一个旧格式 VDO；PD 3.2 保留其弃用标记。
+    if (ptDfp === 4 && (old3 || ctx.specRevision === '3.2' || !ctx.specRevision)) dfpVdoKind = 'ama';
+    if (ctx.specRevision === '3.1' && ptDfp === 4) dfpVdoKind = null;
+    if (vdoKind !== 'ama' && dfpVdoKind === 'ama') vdoKind = 'ama';
+  }
+  if (!ctx.specRevision && ctx.revText === '3.x' && ptUfp === 3 && !cable) {
+    em.detail('版本差异', 'Product Type 011b：PD 3.0 为 Reserved，PD 3.1/3.2 为 PSD');
+  }
+  if (!ctx.specRevision && ctx.revText === '3.x' && ptUfp === 5) {
+    em.detail('版本差异', 'Product Type 101b：PD 3.0 为 AMA、PD 3.1 为 Reserved、PD 3.2 为已弃用 AMA');
+  }
+  if (!ctx.specRevision && ctx.revText === '3.x' && cable && ptUfp === 6) {
+    em.detail('版本差异', 'Product Type 110b：PD 3.0 为 Reserved，PD 3.1/3.2 为 VPD');
+  }
+  if (!ctx.specRevision && ctx.revText === '3.x' && !cable && ptDfp === 4) {
+    em.detail('版本差异', 'DFP Product Type 100b：PD 3.0 为 AMC、PD 3.1 为 Reserved、PD 3.2 为已弃用 AMC');
+  }
+  if (!ctx.specRevision && ctx.revText === '3.x' && !cable) {
+    em.detail('版本差异', `Connector Type B22–21：PD 3.0 为 Reserved，PD 3.1/3.2 为 ${CONNECTOR_TYPE[conn]}`);
+  }
+  return { ptUfp, ptDfp, conn, vid, productTypeText, dfpProductTypeText, vdoKind, dfpVdoKind, cable,
+    host: pdBit(v, 31), device: pdBit(v, 30), modal: pdBit(v, 26) };
+}
+
+function ufpProductTypeText(code, ctx) {
+  if (ctx.specRevision === '2.0' || ctx.specRevision === '3.0') {
+    if ([3, 4, 6, 7].includes(code)) return 'Reserved';
+  }
+  if (ctx.specRevision === '3.1' && code >= 4) return 'Reserved';
+  if (code === 5 && ['2.0', '3.0'].includes(ctx.specRevision)) return 'Alternate Mode Adapter (AMA)';
+  if (!ctx.specRevision && ctx.revText === '3.x' && code === 3) return 'Reserved (PD 3.0) / PSD (PD 3.1+)';
+  if (!ctx.specRevision && ctx.revText === '3.x' && code === 5) return 'AMA (PD 3.0/3.2; Reserved in PD 3.1)';
+  return PRODUCT_TYPE_UFP[code];
+}
+
+function cableProductTypeText(code, ctx) {
+  if ((ctx.specRevision === '2.0' || ctx.specRevision === '3.0') && code >= 5) return 'Reserved';
+  if (!ctx.specRevision && ctx.revText === '3.x' && code === 6) return 'Reserved (PD 3.0) / VPD (PD 3.1+)';
+  return PRODUCT_TYPE_CABLE[code];
+}
+
+function dfpProductTypeTextForRevision(code, ctx) {
+  if (ctx.specRevision === '2.0') return 'Reserved';
+  if (ctx.specRevision === '3.0' && code === 4) return 'Alternate Mode Controller (AMC)';
+  if (ctx.specRevision === '3.1' && code >= 4) return 'Reserved';
+  if (!ctx.specRevision && ctx.revText === '3.x' && code === 4) return 'AMC (PD 3.0/3.2; Reserved in PD 3.1)';
+  return PRODUCT_TYPE_DFP[code];
 }
 
 function certStatVdo(em, v) {
@@ -3103,7 +3359,22 @@ function productVdo(em, v) {
   return { pid, bcd };
 }
 
-function ufpVdo(em, v, facts) {
+function showUnexpectedIdentityVdos(em, vdos, expected, product) {
+  if (vdos.length <= expected) return;
+  em.warn?.(`${product} Discover Identity ACK 含有多余的 Product Type VDO`, 'VDM_COUNT');
+  vdos.slice(expected).forEach((v, i) => {
+    em.object(`VDO #${i + expected + 5} · 非预期 ${product} 对象`);
+    em.detail('原始值', `0x${pdHex(v)}`);
+  });
+}
+
+function amaDeprecatedText(ctx) {
+  if (['3.1', '3.2'].includes(ctx.specRevision)) return '（已废弃）';
+  if (!ctx.specRevision && ctx.revText === '3.x') return '（PD 3.1+ 已废弃）';
+  return '';
+}
+
+function ufpVdo(em, v, ctx, facts) {
   const ver = pdField(v, 31, 29);
   em.detail(`UFP VDO Version [${pdRange(31, 29)}]`, `${UFP_VDO_VERSION[ver] ?? '无效取值（不得使用）'} · ${ver.toString(2).padStart(3, '0')}b`);
   em.detail('Reserved [B28]', pdBit(v, 28));
@@ -3111,25 +3382,32 @@ function ufpVdo(em, v, facts) {
   const usb2 = pdField(v, 25, 24);
   em.detail('USB4 Device 能力 [B27]', pdFlag(usb4, 'USB4 capable', '否'));
   em.detail('USB 3.2 Device 能力 [B26]', pdFlag(usb32, 'USB 3.2 capable', '否'));
-  em.detail(`USB 2.0 Device 能力 [${pdRange(25, 24)}]`, `${usb2.toString(2).padStart(2, '0')}b · ${UFP_USB2[usb2]}`);
-  em.detail(`Connector Type (Legacy) [${pdRange(23, 22)}]`, '00b（已废弃，连接器类型看 ID Header VDO）');
+  const usb2Text = ctx.specRevision === '3.1'
+    ? ({ 0: UFP_USB2[0], 1: UFP_USB2[2], 2: UFP_USB2[1], 3: UFP_USB2[3] })[usb2]
+    : !ctx.specRevision && (usb2 === 1 || usb2 === 2)
+      ? `PD 3.1 v1.4：${usb2 === 1 ? UFP_USB2[2] : UFP_USB2[1]}；PD 3.2 v1.2：${UFP_USB2[usb2]}`
+      : UFP_USB2[usb2];
+  em.detail(`USB 2.0 Device 能力 [${pdRange(25, 24)}]`, `${usb2.toString(2).padStart(2, '0')}b · ${usb2Text}`);
+  em.detail(`Connector Type (Legacy) [${pdRange(23, 22)}]`, `${pdField(v, 23, 22).toString(2).padStart(2, '0')}b（新版已废弃，连接器类型看 ID Header VDO）`);
   em.detail(`Reserved [${pdRange(21, 11)}]`, `0x${pdField(v, 21, 11).toString(16).toUpperCase()}`);
   const vconnReq = pdBit(v, 7), vbusReq = pdBit(v, 6);
-  em.detail(`VCONN Power [${pdRange(10, 8)}]`, vconnReq
+  const altMode = pdField(v, 5, 3) !== 0;
+  em.detail(`VCONN Power [${pdRange(10, 8)}]`, altMode && vconnReq
     ? `${VCONN_POWER[pdField(v, 10, 8)]}`
     : `Reserved（未要求 VCONN）· 0x${pdField(v, 10, 8).toString(16).toUpperCase()}`);
-  em.detail('VCONN Required [B7]', pdFlag(vconnReq, '需要 VCONN 才能工作', '不需要'));
-  em.detail('VBUS Required [B6]', pdBit(v, 6) ? '1（不需要 VBUS）' : '0（需要 VBUS）');
+  em.detail('VCONN Required [B7]', altMode ? pdFlag(vconnReq, '需要 VCONN 才能工作', '不需要') : `${vconnReq}（无 Alt Mode，Reserved）`);
+  em.detail('VBUS Required [B6]', altMode ? (vbusReq ? '1（不需要 VBUS）' : '0（需要 VBUS）') : `${vbusReq}（无 Alt Mode，Reserved）`);
   em.detail('No Signal Reconfig Alt Mode [B5]', pdFlag(pdBit(v, 5), '支持不改动信号的 Alt Mode', '否'));
   em.detail('Non-TBT3 Signal Reconfig Alt Mode [B4]', pdFlag(pdBit(v, 4), '支持改动信号的 Alt Mode（TBT3 除外）', '否'));
   em.detail('TBT3 Alt Mode [B3]', pdFlag(pdBit(v, 3), '支持 Thunderbolt 3 Alt Mode', '否'));
   const spd = pdField(v, 2, 0);
-  em.detail(`USB Highest Speed [${pdRange(2, 0)}]`, `${spd.toString(2).padStart(3, '0')}b · ${USB_HIGHEST_SPEED[spd] ?? '无效取值（不得使用）'}`);
+  em.detail(`USB Highest Speed [${pdRange(2, 0)}]`, cableSpeedText(spd, ctx));
 
-  const caps = [usb4 ? 'USB4' : null, usb32 ? 'USB3.2' : null, usb2 === 2 ? 'USB2' : null].filter(Boolean);
+  const normalUsb2 = ctx.specRevision === '3.1' ? usb2 === 1 : ctx.specRevision === '3.2' && usb2 === 2;
+  const caps = [usb4 ? 'USB4' : null, usb32 ? 'USB3.2' : null, normalUsb2 ? 'USB2' : null].filter(Boolean);
   if (caps.length) facts.push(`UFP ${caps.join('/')}`);
-  if (spd in USB_HIGHEST_SPEED) facts.push(`最高速率 ${USB_HIGHEST_SPEED[spd]}`);
-  if (pdBit(v, 26) || pdBit(v, 3) || pdBit(v, 5) || pdBit(v, 4)) facts.push('支持 Alt Mode');
+  if (spd in USB_HIGHEST_SPEED && !(ctx.specRevision === '3.1' && spd >= 4)) facts.push(`最高速率 ${USB_HIGHEST_SPEED[spd]}`);
+  if (pdBit(v, 3) || pdBit(v, 5) || pdBit(v, 4)) facts.push('支持 Alt Mode');
   return v;
 }
 
@@ -3141,7 +3419,7 @@ function dfpVdo(em, v, facts) {
   em.detail('USB4 Host 能力 [B26]', pdFlag(usb4, 'Host 支持 USB4', '否'));
   em.detail('USB 3.2 Host 能力 [B25]', pdFlag(usb32, 'Host 支持 USB 3.2', '否（Power Brick / Hub 应为 0）'));
   em.detail('USB 2.0 Host 能力 [B24]', pdFlag(usb2, 'Host 支持 USB 2.0', '否（Power Brick / Hub 应为 0）'));
-  em.detail(`Connector Type (Legacy) [${pdRange(23, 22)}]`, '00b（已废弃）');
+  em.detail(`Connector Type (Legacy) [${pdRange(23, 22)}]`, `${pdField(v, 23, 22).toString(2).padStart(2, '0')}b（新版已废弃）`);
   em.detail(`Reserved [${pdRange(21, 5)}]`, `0x${pdField(v, 21, 5).toString(16).toUpperCase()}`);
   em.detail(`Port Number [${pdRange(4, 0)}]`, `${pdField(v, 4, 0)}（设备内 DFP 端口编号）`);
   const caps = [usb4 ? 'USB4' : null, usb32 ? 'USB3.2' : null, usb2 ? 'USB2' : null].filter(Boolean);
@@ -3184,7 +3462,7 @@ function passiveCableVdo(em, v, ctx, facts) {
   em.detail(`VBUS Current Handling [${pdRange(6, 5)}]`, CABLE_VBUS_CURRENT[cur]);
   em.detail(`Reserved [${pdRange(4, 3)}]`, `0x${pdField(v, 4, 3).toString(16).toUpperCase()}`);
   const spd = pdField(v, 2, 0);
-  em.detail(`USB Highest Speed [${pdRange(2, 0)}]`, cableSpeedText(spd));
+  em.detail(`USB Highest Speed [${pdRange(2, 0)}]`, cableSpeedText(spd, ctx));
 
   facts.push('无源线缆');
   facts.push(`${vmaxTable[vmaxCode]} / ${CABLE_VBUS_CURRENT[cur].replace(/（.*）/, '')}`);
@@ -3218,21 +3496,21 @@ function activeCableVdo1(em, v, ctx, facts) {
   em.detail(`Maximum VBUS Voltage [${pdRange(10, 9)}]`,
     `${vmaxCode.toString(2).padStart(2, '0')}b · ${vmaxTable[vmaxCode]}${vmaxNote(vmaxCode, ctx)}`);
   em.detail('SBU Supported [B8]', pdBit(v, 8) ? '1（不支持 SBU）' : '0（支持 SBU）');
-  em.detail('SBU Type [B7]', pdBit(v, 7) ? '1（SBU 为有源/数字化）' : '0（SBU 为无源）');
+  em.detail('SBU Type [B7]', pdBit(v, 8) ? `${pdBit(v, 7)}（未支持 SBU，此域 Reserved）` : pdBit(v, 7) ? '1（SBU 为有源/数字化）' : '0（SBU 为无源）');
   const cur = pdField(v, 6, 5);
-  em.detail(`VBUS Current Handling [${pdRange(6, 5)}]`, CABLE_VBUS_CURRENT_ACTIVE[cur]);
+  em.detail(`VBUS Current Handling [${pdRange(6, 5)}]`, pdBit(v, 4) ? CABLE_VBUS_CURRENT_ACTIVE[cur] : `${cur}（无 VBUS 导线，此域 Reserved）`);
   em.detail('VBUS Through Cable [B4]', pdFlag(pdBit(v, 4), '线缆内有 VBUS 导线', '无 VBUS 导线'));
   em.detail('SOP\'\' Controller Present [B3]', pdFlag(pdBit(v, 3), '支持 SOP\'\' 通信', '仅 SOP\''));
   const spd = pdField(v, 2, 0);
-  em.detail(`USB Highest Speed [${pdRange(2, 0)}]`, cableSpeedText(spd));
+  em.detail(`USB Highest Speed [${pdRange(2, 0)}]`, cableSpeedText(spd, ctx));
 
   facts.push('有源线缆');
-  facts.push(`${vmaxTable[vmaxCode]} / ${CABLE_VBUS_CURRENT_ACTIVE[cur]}`);
+  facts.push(`${vmaxTable[vmaxCode]}${pdBit(v, 4) ? ' / ' + CABLE_VBUS_CURRENT_ACTIVE[cur] : ' / 无 VBUS 导线'}`);
   facts.push(CABLE_LATENCY_ACTIVE[lat]);
   return v;
 }
 
-function activeCableVdo2(em, v, facts) {
+function activeCableVdo2(em, v, ctx, facts) {
   em.detail(`Maximum Operating Temperature [${pdRange(31, 24)}]`, `${pdField(v, 31, 24)} °C（插头内最高工作温度）`);
   em.detail(`Shutdown Temperature [${pdRange(23, 16)}]`, `${pdField(v, 23, 16)} °C（超过即关断有源器件）`);
   em.detail('Reserved [B15]', pdBit(v, 15));
@@ -3246,7 +3524,10 @@ function activeCableVdo2(em, v, facts) {
   em.detail('USB 3.2 Supported [B4]', pdBit(v, 4) ? '1（不支持 USB3 SuperSpeed）' : '0（支持 USB3 SuperSpeed）');
   em.detail('USB Lanes Supported [B3]', pdBit(v, 3) ? '1（两条 lane）' : '0（一条 lane）');
   em.detail('Optically Isolated Active Cable [B2]', pdFlag(pdBit(v, 2)));
-  em.detail('[USB4] Asymmetric Mode [B1]', pdFlag(pdBit(v, 1)));
+  if (ctx.specRevision === '3.1') {
+    em.detail('Reserved [B1]', pdBit(v, 1));
+    if (pdBit(v, 1)) em.warn?.('PD 3.1 v1.4 Active Cable VDO2 的 B1 为 Reserved', 'RESERVED');
+  } else em.detail('[USB4] Asymmetric Mode [B1]', pdFlag(pdBit(v, 1)) + (!ctx.specRevision ? '（PD 3.1 v1.4 中此位为 Reserved）' : ''));
   em.detail('USB Gen [B0]', pdBit(v, 0) ? '1（Gen2 及以上）' : '0（Gen1，仅 USB3 线缆）');
   facts.push(`最高工作温度 ${pdField(v, 31, 24)}°C`);
   return v;
@@ -3265,6 +3546,7 @@ function vpdVdo(em, v, facts) {
     : `${pdBit(v, 14)}（未开启 Charge Through，此域 Reserved）`);
   em.detail('Reserved [B13]', pdBit(v, 13));
   const vbusImp = pdField(v, 12, 7), gndImp = pdField(v, 6, 1);
+  if (ct && (vbusImp < 5 || gndImp < 10)) em.warn?.('Charge Through VPD 的 VBUS/Ground Impedance 必须至少为 10 mΩ', 'VDM_FIELD');
   em.detail(`VBUS Impedance [${pdRange(12, 7)}]`, ct ? `${vbusImp * 2} mΩ（2mΩ 步长）` : 'Reserved（未开启 Charge Through）');
   em.detail(`Ground Impedance [${pdRange(6, 1)}]`, ct ? `${gndImp} mΩ（1mΩ 步长）` : 'Reserved（未开启 Charge Through）');
   em.detail('Charge Through Support [B0]', pdFlag(ct, '支持 Charge Through（可为下游供电）', '不支持'));
@@ -3274,7 +3556,10 @@ function vpdVdo(em, v, facts) {
 
 /** 旧版 AMA VDO（PD 3.0 Table 6-37 / PD 2.0 Table 6-30） */
 function amaVdo(em, v, ctx, facts) {
-  em.detail('说明', 'AMA（Alternate Mode Adapter）产品类型已被 PD 3.1 废弃，新设计应改用 UFP VDO');
+  const amaDeprecated = ['3.1', '3.2'].includes(ctx.specRevision);
+  em.detail('说明', amaDeprecated
+    ? 'AMA（Alternate Mode Adapter）产品类型已被 PD 3.1 废弃，新设计应改用 UFP VDO'
+    : '这是 PD 2.0/3.0 定义的 AMA VDO；PD 3.1 起该产品类型被废弃，新设计应改用 UFP VDO');
   em.detail(`HW Version [${pdRange(31, 28)}]`, `0x${pdField(v, 31, 28).toString(16).toUpperCase()}`);
   em.detail(`Firmware Version [${pdRange(27, 24)}]`, `0x${pdField(v, 27, 24).toString(16).toUpperCase()}`);
   if (!(ctx.revText === '2.0' || ctx.revText === '1.0')) {
@@ -3291,38 +3576,32 @@ function amaVdo(em, v, ctx, facts) {
   }
   em.detail(`VCONN power [${pdRange(7, 5)}]`, pdBit(v, 4) ? VCONN_POWER[pdField(v, 7, 5)] : 'Reserved（未要求 VCONN）');
   em.detail('VCONN required [B4]', pdFlag(pdBit(v, 4)));
-  em.detail('VBUS required [B3]', pdBit(v, 3) ? '1（不需要 VBUS）' : '0（需要 VBUS）');
+  em.detail('VBUS required [B3]', pdBit(v, 3) ? '1（需要 VBUS）' : '0（不需要 VBUS）');
   em.detail(`USB SuperSpeed Signaling Support [${pdRange(2, 0)}]`, AMA_SUPERSPEED_V30[pdField(v, 2, 0)]);
-  facts.push('AMA（已废弃形态）');
+  facts.push(amaDeprecated ? 'AMA（已废弃形态）' : 'AMA（PD 2.0/3.0 格式）');
   return v;
 }
-
-/** 产品类型的中文短名（仅供一句话摘要；带规范原文的完整名称在详情各字段里） */
-const PT_SHORT = {
-  cable: { 0: '非线缆插头', 3: '无源线缆', 4: '有源线缆', 6: 'VPD（VCONN 供电设备）' },
-  ufp: { 0: '非 UFP', 1: 'PDUSB Hub', 2: 'PDUSB 外设', 3: 'PSD（电源设备）', 5: 'AMA（已废弃）' },
-  dfp: { 0: '非 DFP', 1: 'PDUSB Hub', 2: 'PDUSB Host', 3: 'Power Brick' },
-};
 
 /**
  * ID Header 的关键信息 → 若干条独立事实。
  * 拆成多条而不是一句话，是为了让 Product Type VDO 自己也推入的「无源线缆」等
  * 事实能与这里的重复项合并（摘要处按整条去重），摘要不会出现两遍同样的内容。
  */
-function identityFacts(info) {
+function identityFacts(info, ctx) {
   const out = [];
   if (info.cable) {
-    if (info.ptUfp) out.push(PT_SHORT.cable[info.ptUfp] ?? `保留产品类型 ${info.ptUfp}`);
+    if (info.ptUfp) out.push(info.productTypeText ?? `保留产品类型 ${info.ptUfp}`);
   } else {
-    // 端口侧 UFP / DFP 各有一个产品类型字段；为 0 表示「不是该角色」，不必写出来
-    const u = info.ptUfp ? (PT_SHORT.ufp[info.ptUfp] ?? `保留产品类型 ${info.ptUfp}`) : null;
-    const d = info.ptDfp ? (PT_SHORT.dfp[info.ptDfp] ?? `保留产品类型 ${info.ptDfp}`) : null;
+    // 端口侧 UFP / DFP 各有一个产品类型字段；为 0 表示「不是该角色」。
+    // 用已按所选 PDF 解析的字段文案，避免把 PD 3.0 的 Reserved 误报成 PD 3.2 的 PSD/VPD。
+    const u = info.ptUfp ? `UFP ${info.productTypeText ?? `产品类型 ${info.ptUfp}`}` : null;
+    const d = info.ptDfp ? `DFP ${info.dfpProductTypeText ?? `产品类型 ${info.ptDfp}`}` : null;
     if (u && d && u !== d) out.push(`${u} / ${d}`);
     else if (u) out.push(u);
     else if (d) out.push(d);
   }
   if (info.vid) {
-    const vn = svidName(info.vid);
+    const vn = svidName(info.vid, ctx);
     out.push(`VID 0x${pdHex(info.vid, 4)}${vn ? `（${vn.replace('（厂商 ID）', '')}）` : ''}`);
   }
   return out;
@@ -3340,15 +3619,22 @@ function decodeDiscoverSvids(st, em, vdos, ctx, ack, facts) {
     return;
   }
   const list = [];
+  let terminated = false, nonzeroAfterTerminator = false;
   vdos.forEach((v, i) => {
     const a = pdField(v, 31, 16), b = pdField(v, 15, 0);
     em.object(`VDO #${i + 2} · Responder VDO（两个 SVID）`);
-    em.detail('SVID n [B31-16]', a === 0 ? '0x0000（列表结束）' : svidText(a));
-    em.detail('SVID n+1 [B15-0]', b === 0 ? '0x0000（列表结束）' : svidText(b));
-    if (a) list.push(a);
-    if (b) list.push(b);
+    em.detail('SVID n [B31-16]', a === 0 ? '0x0000（列表结束）' : svidText(a, ctx));
+    em.detail('SVID n+1 [B15-0]', b === 0 ? '0x0000（列表结束）' : svidText(b, ctx));
+    for (const svid of [a, b]) {
+      if (!svid) terminated = true;
+      else if (terminated) nonzeroAfterTerminator = true;
+      else list.push(svid);
+    }
   });
-  st.svidList = list.slice();
+  if (vdos.length > 6) em.warn?.('Discover SVIDs ACK 每个响应最多包含 6 个 Responder VDO', 'VDM_COUNT');
+  if (nonzeroAfterTerminator) em.warn?.('SVID 列表终止符 0x0000 后不应再出现非零 SVID', 'VDM_FIELD');
+  st.svidList = [...new Set((st.svidComplete ? [] : st.svidList ?? []).concat(list))];
+  st.svidComplete = terminated;
   facts.push(list.length ? `SVID: ${list.map((s) => `0x${pdHex(s, 4)}`).join(', ')}` : '无 SVID');
   return list;
 }
@@ -3364,7 +3650,9 @@ function decodeDiscoverModes(st, em, vdos, ctx, ack, svid, facts) {
     em.note('⚠ Discover Modes ACK 未携带 VDO');
     return;
   }
-  const name = svidName(svid);
+  if (vdos.length > 6) em.warn?.('Discover Modes ACK 每个响应最多包含 6 个 Mode VDO', 'VDM_COUNT');
+  const name = svidName(svid, ctx);
+  st.modes[svid] = vdos.slice();
   vdos.forEach((v, i) => {
     em.object(`VDO #${i + 2} · Mode VDO #${i + 1}`);
     em.detail('对象位置', `${i + 1}（Enter/Exit Mode 用该值引用本 Mode）`);
@@ -3387,7 +3675,7 @@ function decodeEnterExitMode(em, vdos, ctx, ack, label, facts) {
     em.detail('原始值', `0x${pdHex(vdos[0])}`);
     em.detail('说明', 'Enter Mode 请求最多带 1 个 VDO，内容由 Alternate Mode 定义；ACK/NAK 不带 VDO');
   }
-  if (ack === 'BUSY') facts.push('⚠ BUSY 不是 Enter/Exit Mode 的合法响应（规范只允许 ACK/NAK）');
+  if (ack === 'BUSY') facts.push('对端忙，稍后重试');
   return null;
 }
 
@@ -3403,13 +3691,100 @@ function decodeAttention(em, vdos, ctx, svid, facts) {
   return null;
 }
 
+function pdValidateVdm(em, head, extra, ctx) {
+  const major = pdField(head, 14, 13), minor = pdField(head, 12, 11);
+  const pos = pdField(head, 10, 8), type = pdField(head, 7, 6), cmd = pdField(head, 4, 0), svid = head >>> 16;
+  const bad = (text, code = 'VDM_FIELD') => em.warn?.(text, code);
+  if (major > 1) {
+    if (ctx.specRevision === '2.0') bad('PD 2.0 的 SVDM Major=01b…11b 为 Reserved；兼容处理使用接收端支持的最高版本（Version 1.0）');
+    else if (ctx.specRevision === '3.2') bad('PD 3.2 的 SVDM Major=10b…11b 无效，接收端按 Major=01b（Version 2.x）处理');
+    else if (['3.0', '3.1'].includes(ctx.specRevision)) bad('SVDM Major=10b…11b 为 Reserved；兼容处理使用接收端支持的最高版本');
+    else bad('SVDM Major=10b…11b 为 Reserved；PD 3.2 接收端按 Major=01b（Version 2.x）处理');
+  }
+  if (svid === 0) bad('VDM Header 的 SVID 不能为 0x0000');
+  if (cmd === 0 || cmd >= 7 && cmd <= 15) bad(`标准 SVDM 命令 ${cmd} 为保留/无效编码，接收端应回 NAK`);
+  if (major === 0 && ['3.0', '3.1'].includes(ctx.specRevision)) bad('PD 3.0/3.1 的 Structured VDM Major=00b（Version 1.0）不得用于新报文');
+  if (major > 0 && ctx.specRevision === '2.0') bad('PD 2.0 只定义 Structured VDM Version 1.0（Major=00b）；更高 Major 不得使用');
+  if ((major === 0 && minor && cmd < 16) || (major === 1 && cmd < 16
+    && (minor > 1 || minor && ['3.0', '3.1'].includes(ctx.specRevision))) || pdBit(head, 5)) {
+    bad('SVDM Header 的保留位/Minor 编码无效');
+  }
+  if (!ctx.specRevision && ctx.revText === '3.x' && major === 0) {
+    em.detail('版本歧义', 'Major 00b：PD 3.0/3.1 不得用于新报文；PD 3.2 仍支持旧 Version 1.0（新设计已弃用）');
+  }
+  if (major === 1 && cmd <= 15 && !ctx.specRevision) {
+    em.detail('版本歧义', 'Minor 00b/01b 在 PD 3.0/3.1 中 Reserved；PD 3.2 分别定义为 SVDM Version 2.0/2.1');
+  }
+  if (cmd < 4 && pos || cmd > 6 && cmd < 16 && pos) bad('该 SVDM 命令的 Object Position 应为 0');
+  if (cmd >= 4 && cmd <= 6 && (pos === 0 || pos === 7 && cmd !== 5)) bad('Mode Object Position 应为 1~6，只有 Exit Mode 可用 7');
+  if (cmd >= 4 && cmd <= 6 && pos >= 1 && pos <= 6 && ctx.knownModeCount !== undefined && pos > ctx.knownModeCount) {
+    bad(`Object Position ${pos} 超过已捕获 Discover Modes ACK 提供的 ${ctx.knownModeCount} 个 Mode`);
+  }
+  if ((cmd === 1 || cmd === 2) && svid !== SVID_PD) bad('Discover Identity/SVIDs 必须使用 PD SID 0xFF00');
+  if (cmd === 6 && type !== 0) bad('Attention 只能是请求，不能是 ACK/NAK/BUSY');
+  if ((cmd === 4 || cmd === 5) && type === 3) bad('Enter Mode/Exit Mode 只允许 REQ、ACK 或 NAK，不能返回 BUSY');
+  if (cmd === 1 && type === 1 && extra.length < 3) bad('Discover Identity ACK 缺少 ID Header/Cert Stat/Product', 'VDM_COUNT');
+  if (cmd >= 1 && cmd <= 3 && (type === 0 || type >= 2) && extra.length) bad('Discovery 请求/NAK/BUSY 不能携带 VDO', 'VDM_COUNT');
+  if ((cmd === 2 || cmd === 3) && type === 1 && !extra.length) bad('Discovery ACK 缺少响应 VDO', 'VDM_COUNT');
+  if ((cmd === 2 || cmd === 3) && type === 1 && extra.length > 6) bad('Discover SVIDs/Modes ACK 每个响应最多包含 6 个数据 VDO', 'VDM_COUNT');
+  if (cmd === 5 && extra.length || cmd === 4 && (extra.length > (type === 0 ? 1 : 0)) || cmd === 6 && extra.length > 1) bad('Mode 命令的数据对象数量无效', 'VDM_COUNT');
+
+  if (ctx.sop) {
+    const discoveryWrongSop = [1, 2, 3].includes(cmd) && !['SOP', "SOP'"].includes(ctx.sop);
+    const attentionWrongSop = cmd === 6 && ctx.sop !== 'SOP';
+    const modeOrVendor = [4, 5].includes(cmd) || cmd >= 16;
+    const modeOrVendorWrongSop = modeOrVendor && !['SOP', "SOP'", "SOP''"].includes(ctx.sop);
+    if (discoveryWrongSop || attentionWrongSop || modeOrVendorWrongSop) bad(`SVDM 命令 ${cmd} 不允许使用 ${ctx.sop} 链路`, 'SOP');
+  }
+
+  // SVDM 1.0 retains the PD 2.0 DFP/UFP initiator rules. SVDM 2.x permits either
+  // port to initiate discovery, while Enter/Exit Mode remain DFP-initiated.
+  if (ctx.sop === 'SOP' && ctx.dataRole !== undefined && ctx.dataRole !== null) {
+    if (major === 0) {
+      if (type === 0 && cmd === 6 && ctx.dataRole !== 0) bad('SVDM 1.0 Attention 只能由 UFP 发起', 'ROLE');
+      else if (type === 0 && cmd !== 6 && ctx.dataRole !== 1) bad('SVDM 1.0 命令只能由 DFP 发起', 'ROLE');
+      else if (type !== 0 && cmd !== 6 && ctx.dataRole !== 0) bad('SVDM 1.0 的响应方只能是 UFP', 'ROLE');
+    } else if ([4, 5].includes(cmd)) {
+      if (type === 0 && ctx.dataRole !== 1) bad('Enter Mode/Exit Mode 只能由 DFP 发起', 'ROLE');
+      if (type !== 0 && ctx.dataRole !== 0) bad('Enter Mode/Exit Mode 的端口响应方必须是 UFP', 'ROLE');
+    }
+  }
+  if (ctx.link === 'cable' && ctx.role === 'Plug' && type === 0) bad('Cable Plug 只能作为结构化 VDM 响应方', 'ROLE');
+  if (ctx.link === 'cable' && ['SRC', 'SNK'].includes(ctx.role) && type !== 0) bad('Cable Plug 链路的端口只能发起 VDM，不能作为响应方', 'ROLE');
+}
+
+/** PD 2.0 Table 6-28/29 与 PD 3.0 v1.1 Table 6-35/36。 */
+function pdLegacyCableVdo(em, v, ctx, active, facts) {
+  const pd2 = ctx.revText === '2.0' || ctx.revText === '1.0';
+  em.detail('Hardware Version [B31-28]', pdField(v, 31, 28));
+  em.detail('Firmware Version [B27-24]', pdField(v, 27, 24));
+  em.detail(pd2 ? 'Reserved [B23-20]' : 'VDO Version [B23-21]', pd2 ? pdField(v, 23, 20) : 'Version 1.0');
+  if (!pd2) em.detail('Reserved [B20]', pdBit(v, 20));
+  em.detail('Connector Type [B19-18]', ['USB Type-A', 'USB Type-B', 'USB Type-C', 'Captive'][pdField(v, 19, 18)]);
+  em.detail('Reserved [B17]', pdBit(v, 17));
+  em.detail('Cable Latency [B16-13]', (active ? CABLE_LATENCY_ACTIVE : CABLE_LATENCY_PASSIVE)[pdField(v, 16, 13)]);
+  em.detail('Cable Termination [B12-11]', (active ? CABLE_TERMINATION_ACTIVE : CABLE_TERMINATION_PASSIVE)[pdField(v, 12, 11)]);
+  if (pd2) {
+    for (const [bit, name] of [[10, 'SSTX1'], [9, 'SSTX2'], [8, 'SSRX1'], [7, 'SSRX2']]) em.detail(`${name} Directionality [B${bit}]`, `${pdBit(v, bit)}（${active ? '接收端忽略方向性位' : '无源线缆中无实际意义'}）`);
+  } else {
+    em.detail('Maximum VBUS Voltage [B10-9]', CABLE_VBUS_VOLTAGE_V30[pdField(v, 10, 9)]);
+    em.detail('Reserved [B8-7]', pdField(v, 8, 7));
+  }
+  const current = pdField(v, 6, 5), through = pdBit(v, 4);
+  em.detail('VBUS Current Handling [B6-5]', active && !through ? `${current}（无 VBUS 导线，Reserved）` : CABLE_VBUS_CURRENT[current]);
+  em.detail('VBUS Through Cable [B4]', active || pd2 ? pdFlag(through) : `${through}（PD 3.0 无源线缆为 Reserved）`);
+  em.detail(active ? "SOP'' Controller Present [B3]" : 'Reserved [B3]', pdBit(v, 3));
+  em.detail('USB SuperSpeed Signaling [B2-0]', USB_HIGHEST_SPEED_V30[pdField(v, 2, 0)] ?? 'Reserved');
+  facts.push(active ? '有源线缆（旧版单 VDO）' : '无源线缆（旧版 VDO）');
+}
+
 /* ══════ src/js/pd/extended.js ══════ */
 /**
  * extended.js — 扩展消息数据块解析（PD 3.2 Chapter 6.5）
  *
  * 全部按「数据块内的绝对字节号」寻址，与规范表格一一对应（Byte0、Byte1…）。
- * 分块（Chunked）场景下由调用方给出本包覆盖的字节区间 `off`，
- * 字节不在本包内就如实标注，不猜。
+ * PdDecoder 在完整重组之后调用本模块；off 为低层字段读取接口保留，
+ * 调用方若只提供部分字节，缺失字段会明确标注，不猜。
  *
  * 覆盖：SCEDB / SDB(SOP 与 SOP' 两种格式) / GBCDB / GBSDB / BCDB /
  *       Manufacturer_Info / Security_* / Firmware_Update_* / PPSSDB /
@@ -3459,6 +3834,7 @@ function f(em, bk, byteIdx, key, value) {
  */
 function extendedParse(st, em, t, bk, ctx) {
   bk._group = -1;
+  pdValidateExtended(em, t, bk, ctx);
   switch (t) {
     case 1: return scedb(st, em, bk);
     case 2: return statusBlock(em, bk, ctx);
@@ -3474,7 +3850,7 @@ function extendedParse(st, em, t, bk, ctx) {
     case 14: return countryCodes(em, bk);
     case 15: return skedb(st, em, bk);
     case 16: return extControl(em, bk);
-    case 17: case 18: return eprCaps(st, em, bk, t === 17 ? 'source' : 'sink');
+    case 17: case 18: return eprCaps(st, em, bk, t === 17 ? 'source' : 'sink', ctx);
     case 30: return vendorDefinedExtended(em, bk);
     default:
       hexDump(em, bk);
@@ -3517,9 +3893,9 @@ function scedb(st, em, bk) {
   ].filter(Boolean).join(' · ')));
   const nb = b8(bk, 22);
   f(em, bk, 22, `Number of Batteries/Slots [Byte22]`, need(nb, (v) =>
-    `固定电池 ${v & 0xF} 个 · 热插拔电池槽 ${(v >> 4) & 0xF} 个`));
+    pdBatteryCounts(v)));
   f(em, bk, 23, `SPR Source PDP Rating [Byte23]`, need(b8(bk, 23), (v) => (v > 100 ? `${v}（>100 视为无效）` : `${v} W`)));
-  f(em, bk, 24, `EPR Source PDP Rating [Byte24]`, need(b8(bk, 24), (v) => (v > 240 ? `${v}（>240 视为无效）` : `${v} W`)));
+  if (bk.dataSize >= 25) f(em, bk, 24, `EPR Source PDP Rating [Byte24]`, need(b8(bk, 24), (v) => (v > 240 ? `${v}（>240 视为无效）` : `${v} W`)));
 
   const parts = [];
   if (vid !== null) parts.push(`VID 0x${pdHex(vid, 4)}`);
@@ -3544,8 +3920,13 @@ function peak(em, bk, byteIdx, name, v) {
 
 function statusBlock(em, bk, ctx) {
   // 内容由「发给谁」决定：发给 SOP' / SOP'' 时是线缆插头状态（PD 3.2 Table 6.52，仅 2 字节），
-  // 发给 SOP 时才是端口伙伴状态（Table 6.51，7 字节）。用链路判定，长度只作兜底。
-  if (ctx.link === 'cable' || bk.dataSize <= 2) {
+  // 发给 SOP 时才是端口伙伴状态（Table 6.51，7 字节），不能按截断后的长度猜链路。
+  if (ctx.link === 'cable') {
+    if (!['3.1', '3.2'].includes(ctx.specRevision)) {
+      em.object('Cable Status 数据块（当前版本未定义）');
+      hexDump(em, bk);
+      return `PD ${ctx.specRevision ?? '未指定'} 未定义线缆 Status 数据块`;
+    }
     f(em, bk, 0, 'Internal Temp [Byte0]', need(b8(bk, 0), tempText));
     f(em, bk, 1, 'Flags [Byte1]', need(b8(bk, 1), (v) => {
       if (!(v & 1)) return '正常（未进入热关断）';
@@ -3578,15 +3959,14 @@ function statusBlock(em, bk, ctx) {
   }));
   const ts = b8(bk, 4);
   f(em, bk, 4, 'Temperature Status [Byte4]', need(ts, (v) => TEMP_STATUS[(v >> 1) & 3]));
-  f(em, bk, 5, 'Power Status [Byte5]', need(b8(bk, 5), (v) => {
+  if (bk.dataSize >= 6) f(em, bk, 5, 'Power Status [Byte5]', need(b8(bk, 5), (v) => {
     if (ctx.link === 'cable') return `0x${v.toString(16).toUpperCase()}`;
     const on = POWER_STATUS_BITS.filter((b) => v & (1 << b.bit)).map((b) => b.name);
     return v === 0 ? '未受限（Sink 恒为 0）' : on.join(' · ');
   }));
   const ps = b8(bk, 6);
-  f(em, bk, 6, 'Power State Change [Byte6]', need(ps, (v) =>
-    `${POWER_STATE[v & 7] ?? '取值无效，按 0 处理'} · 指示灯 ${STATE_INDICATOR[(v >> 3) & 3] ?? '取值无效'}`));
-  f(em, bk, 7, 'Reserved [Byte7]', need(b8(bk, 7), (v) => `0x${v.toString(16).toUpperCase()}`));
+  if (bk.dataSize >= 7) f(em, bk, 6, 'Power State Change [Byte6]', need(ps, (v) =>
+    `${POWER_STATE[v & 7] ?? '取值无效，按 0 处理'} · 指示灯 ${STATE_INDICATOR[(v >> 3) & 7] ?? '取值无效，接收端忽略'}`));
 
   const t = b8(bk, 0);
   const st = b8(bk, 6);
@@ -3638,7 +4018,7 @@ function getManufacturerInfo(em, bk) {
 function manufacturerInfo(em, bk) {
   const vid = b16(bk, 0), pid = b16(bk, 2);
   const strBytes = [];
-  for (let i = 4; i < bk.dataSize; i++) {
+  for (let i = 4; i < Math.min(bk.dataSize, 26); i++) {
     const b = b8(bk, i);
     if (b === null) break;
     strBytes.push(b);
@@ -3699,7 +4079,7 @@ function countryInfo(em, bk) {
   f(em, bk, 2, 'Reserved [Byte3-2]', need(b16(bk, 2), (v) => `0x${pdHex(v, 4)}`));
   const data = [];
   for (let i = 4; i < bk.dataSize; i++) { const b = b8(bk, i); if (b === null) break; data.push(b); }
-  f(em, bk, 4, 'Country Specific Data [Byte4…]', data.length ? `"${pdAscii(data)}"` : '（本分块不含该字段）');
+  f(em, bk, 4, 'Country Specific Data [Byte4…]', data.length ? `${data.map(b => pdHex(b, 2)).join(' ')} · ASCII "${pdAscii(data)}"` : '（本分块不含该字段）');
   return `国家码 "${pdCharPair((code ?? 0) & 0xFF, ((code ?? 0) >> 8) & 0xFF)}"`;
 }
 
@@ -3708,7 +4088,7 @@ function countryCodes(em, bk) {
   f(em, bk, 0, 'Length [Byte0]', need(len, (v) => `${v} 个国家和地区码（有效范围 1~12）`));
   f(em, bk, 1, 'Reserved [Byte1]', need(b8(bk, 1), (v) => `0x${v.toString(16)}`));
   const list = [];
-  for (let n = 0; n < 12; n++) {
+  for (let n = 0; n < Math.min(len ?? 0, 12); n++) {
     const i = 2 + n * 2;
     if (i >= bk.dataSize) break;
     const v = b16(bk, i);
@@ -3743,7 +4123,7 @@ function skedb(st, em, bk) {
     [v & 1 ? 'LPS' : null, (v >> 1) & 1 ? 'PS1' : null, (v >> 2) & 1 ? 'PS2' : null].filter(Boolean).join(' + ') || '无'));
   f(em, bk, 15, 'Touch Temp [Byte15]', need(b8(bk, 15), (v) => TOUCH_TEMP_SINK[v] ?? '取值无效，按默认处理'));
   const binfo = b8(bk, 16);
-  f(em, bk, 16, 'Battery Info [Byte16]', need(binfo, (v) => `固定电池 ${v & 0xF} 个 · 热插拔电池槽 ${(v >> 4) & 0xF} 个`));
+  f(em, bk, 16, 'Battery Info [Byte16]', need(binfo, pdBatteryCounts));
   const modes = b8(bk, 17);
   f(em, bk, 17, 'Sink Modes [Byte17]', need(modes, (v) =>
     [v & 1 ? '支持 PPS 充电' : null, (v >> 1) & 1 ? '可由 VBUS 供电' : null, (v >> 2) & 1 ? '可由 AC 供电' : null,
@@ -3751,13 +4131,15 @@ function skedb(st, em, bk) {
       .filter(Boolean).join(' · ') || '无'));
   const sprs = b8(bk, 18), sprOp = b8(bk, 19), sprMax = b8(bk, 20);
   const eprs = b8(bk, 21), eprOp = b8(bk, 22), eprMax = b8(bk, 23);
-  const w = (v) => (v === null ? '（本分块不含该字段）' : (v > 240 ? `${v}（超出有效范围）` : `${v} W`));
-  f(em, bk, 18, 'SPR Sink Minimum PDP [Byte18]', w(sprs));
-  f(em, bk, 19, 'SPR Sink Operational PDP [Byte19]', w(sprOp));
-  f(em, bk, 20, 'SPR Sink Maximum PDP [Byte20]', w(sprMax));
-  f(em, bk, 21, 'EPR Sink Minimum PDP [Byte21]', w(eprs));
-  f(em, bk, 22, 'EPR Sink Operational PDP [Byte22]', w(eprOp));
-  f(em, bk, 23, 'EPR Sink Maximum PDP [Byte23]', w(eprMax));
+  const w = (v, max) => (v === null ? '（本分块不含该字段）' : (v > max ? `${v}（超出有效范围 ${max}W）` : `${v} W`));
+  f(em, bk, 18, 'SPR Sink Minimum PDP [Byte18]', w(sprs, 100));
+  f(em, bk, 19, 'SPR Sink Operational PDP [Byte19]', w(sprOp, 100));
+  f(em, bk, 20, 'SPR Sink Maximum PDP [Byte20]', w(sprMax, 100));
+  if (bk.dataSize >= 24) {
+    f(em, bk, 21, 'EPR Sink Minimum PDP [Byte21]', w(eprs, 240));
+    f(em, bk, 22, 'EPR Sink Operational PDP [Byte22]', w(eprOp, 240));
+    f(em, bk, 23, 'EPR Sink Maximum PDP [Byte23]', w(eprMax, 240));
+  }
 
   return `SPR PDP ${sprs ?? '—'}/${sprOp ?? '—'}/${sprMax ?? '—'} W`
     + (eprMax ? ` · EPR PDP ${eprs ?? '—'}/${eprOp ?? '—'}/${eprMax} W` : '');
@@ -3775,7 +4157,7 @@ function extControl(em, bk) {
 
 /* ══════════════════ ⑰⑱ EPR 能力（PDO 列表，4 字节对齐）══════════════════ */
 
-function eprCaps(st, em, bk, role) {
+function eprCaps(st, em, bk, role, ctx) {
   const slots = pdoSlots(bk);
   const found = [];
   for (const s of slots) {
@@ -3784,7 +4166,7 @@ function eprCaps(st, em, bk, role) {
       em.detail('状态', s.note);
       continue;
     }
-    em.detail('对象位置', `${s.index}（Enter/Exit Mode 与 EPR_Request 用该位置引用）`);
+    em.detail('对象位置', `${s.index}（Request/EPR_Request 用该位置引用）`);
     if (s.note) em.detail('分块对齐', s.note);
     const objPos = s.index;
     if (objPos <= 7 && s.value === 0) {
@@ -3792,28 +4174,16 @@ function eprCaps(st, em, bk, role) {
       found.push(`#${objPos} SPR 填充`);
       continue;
     }
-    const isEpr = isEprPdo(s.value, objPos);
-    const r = pdoParse(st, em, s.value, { role, position: objPos, isEpr, revText: '' });
+    const isEpr = objPos >= 8;
+    const r = pdoParse(st, em, s.value, { ...ctx, role, position: objPos, isEpr });
     found.push(`#${objPos} ${r.summary}`);
   }
   return found.join(' · ') || '（无 PDO）';
 }
 
 /**
- * EPR 能力里的 PDO 是否为 EPR 档：位置 ≥8 直接判定；
- * 位置 ≤7 时按「固定电压 > 20V」或「AVS 型 APDO」判（与 sigrok/ATK 解码器一致）。
- */
-function isEprPdo(pdo, objPos) {
-  if (objPos >= 8) return true;
-  const supplyType = pdField(pdo, 31, 30);
-  if (supplyType === 0) return pdField(pdo, 19, 10) * 0.05 > 20.0;
-  if (supplyType === 3) return pdField(pdo, 29, 28) === 1;
-  return false;
-}
-
-/**
  * 把本分块的字节切成一串「4 字节对齐的 PDO 槽位」。
- * 分块起始若不在 4 字节边界上，会尝试用上一次分块存下的尾巴拼完整（st.extCarry）。
+ * PdDecoder 通常传入完整数据块；低层调用可显式提供 _carry，缺失片段不登记 PDO。
  */
 function pdoSlots(bk) {
   const slots = [];
@@ -3850,6 +4220,68 @@ const bytesToU32 = (arr) => {
   return v >>> 0;
 };
 
+function pdBatteryCounts(v) {
+  const fixed = v & 15, slots = v >>> 4;
+  const n = x => x <= 4 ? `${x}` : `${x}（无效，接收端按 0 处理）`;
+  return `固定电池 ${n(fixed)} 个 · 热插拔电池槽 ${n(slots)} 个`;
+}
+
+/** Chapter 6.5 的长度和打包字段约束。新版本追加的字节保留在原始数据中。 */
+function pdValidateExtended(em, t, bk, ctx) {
+  const bytes = bk.bytes;
+  const minSizes = { 1: ctx.specRevision === '3.2' || ctx.specRevision === '3.1' ? 25 : 24,
+    2: ctx.link === 'cable' && ['3.1', '3.2'].includes(ctx.specRevision) ? 2 : ['3.1', '3.2'].includes(ctx.specRevision) ? 7 : 5,
+    3: 1, 4: 1, 5: 9, 6: 2, 7: 5, 12: 4, 13: 5, 14: 4,
+    15: ['3.1', '3.2'].includes(ctx.specRevision) ? 24 : 21, 16: 2, 17: 4, 18: 4, 30: 4 };
+  if (bk.off === 0 && bk.dataSize < (minSizes[t] ?? 0)) em.warn?.(`扩展消息 ${t} 的数据块过短：${bk.dataSize} 字节，至少需要 ${minSizes[t]}`, 'EXT_SIZE');
+  if (bk.off === 0 && t === 2 && ctx.link === 'cable' && !['3.1', '3.2'].includes(ctx.specRevision)) {
+    em.warn?.(`PD ${ctx.specRevision ?? '未指定'} 未定义 SOP'/SOP'' Status Data Block`, 'EXT_REVISION');
+  }
+  const masks = ({ 1: [[10, 0xF8], [12, 0xF8], [13, 0xF8], [21, 0xF8]],
+    2: ctx.link === 'cable' ? [[1, 0xFE]] : [[1, 0xE1], [3, 0xE1], [4, 0xF9], [5, 0xC1], [6, 0xC0]],
+    5: [[8, 0xFE]], 12: [[3, 0xF1]], 13: [[2, 0xFF], [3, 0xFF]], 14: [[1, 0xFF]],
+    15: [[11, 0xFC], [14, 0xF8], [17, 0xC0]], 30: [[3, 0x80]] })[t] ?? [];
+  for (const [i, mask] of masks) {
+    const v = b8(bk, i);
+    if (v === null) continue;
+    f(em, bk, i, `Reserved [Byte${i}, mask 0x${pdHex(mask, 2)}]`, `0x${pdHex(v & mask, 2)}`);
+    if (v & mask) em.warn?.(`扩展数据 Byte${i} 的保留位非零，接收端忽略`, 'RESERVED');
+  }
+  if (bk.off !== 0) return;
+  const bad = text => em.warn?.(text, 'EXT_FIELD');
+  if ((t === 3 || t === 4) && bytes[0] > 7) bad('Battery Reference 超出 0~7');
+  if (t === 6 && (bytes[0] > 1 || (bytes[0] === 1 && bytes[1] > 7))) bad('Manufacturer Info Target/Ref 无效');
+  if (t === 7 && bytes.length >= 5 && !bytes.slice(4, 26).includes(0)) bad('Manufacturer String 缺少 NUL 结束符（最多 21 个字符）');
+  if (t === 14 && (bytes[0] < 1 || bytes[0] > 12 || bytes.length < 2 + 2 * bytes[0])) bad('Country Codes 的 Length 无效或列表不完整');
+  if (t === 16 && (bytes[0] < 1 || bytes[0] > 4 || bytes[1] !== 0)) bad('Extended Control Type/Data 无效');
+  if (t === 17 || t === 18) {
+    if (bk.dataSize % 4 || bk.dataSize > (ctx.specRevision ? 44 : 52)) bad('EPR 能力表必须为完整 PDO；所提供的 PD 3.1/3.2 能力消息最多 11 个');
+    let padding = false;
+    const first = b32(bk, 0);
+    if (first !== null && ((first >>> 30) !== 0 || pdField(first, 19, 10) !== 100)) bad('EPR 能力表的首个 PDO 必须为 5V Fixed');
+    for (let i = 0; i < Math.min(bytes.length, 28); i += 4) {
+      const v = b32(bk, i);
+      if (v === 0) padding = true;
+      else if (padding) bad('SPR 能力表的零填充之后又出现非零 PDO');
+    }
+  }
+  if (t === 2 && ctx.link !== 'cable') {
+    if (((bytes[1] >>> 1) & 3) === 2) bad('Present Input 的外部电源编码 10b 无效');
+    if (bytes[6] !== undefined && ((bytes[6] & 7) === 7 || ((bytes[6] >>> 3) & 7) > 3)) bad('Power State/LED Indicator 含无效编码');
+    if (ctx.role === 'SNK' && bytes[5]) bad('Sink 的 Power Status 必须为 0');
+  }
+  if (t === 1 || t === 15) {
+    const batteryByte = t === 1 ? 22 : 16;
+    const count = bytes[batteryByte];
+    if (count !== undefined && ((count & 15) > 4 || (count >>> 4) > 4)) bad('电池数量/槽位数量超出 0~4，接收端按 0 处理');
+    const spr = t === 1 ? [23] : [18, 19, 20];
+    const epr = t === 1 ? [24] : [21, 22, 23];
+    if (spr.some(i => bytes[i] > 100) || epr.some(i => bytes[i] > 240)) bad('SPR/EPR PDP 超出 100W/240W');
+    if (t === 15 && bytes[10] !== undefined && bytes[10] !== 1) bad('SKEDB Version 不为 1，接收端忽略该数据块');
+    if (t === 15 && (bytes[18] > bytes[19] || bytes[19] > bytes[20] || bytes[21] > bytes[22] || bytes[22] > bytes[23])) bad('Sink PDP 必须满足 Minimum ≤ Operational ≤ Maximum');
+  }
+}
+
 /* ══════════════════ ㉚ Vendor_Defined_Extended ══════════════════ */
 
 function vendorDefinedExtended(em, bk) {
@@ -3859,7 +4291,7 @@ function vendorDefinedExtended(em, bk) {
   const data = [];
   for (let i = 4; i < bk.dataSize; i++) { const b = b8(bk, i); if (b === null) break; data.push(b); }
   f(em, bk, 4, 'Vendor Defined Data [Byte4…]', data.length
-    ? `${data.length} 字节 · ${data.slice(0, 16).map((x) => x.toString(16).padStart(2, '0').toUpperCase()).join(' ')}${data.length > 16 ? ' …' : ''}`
+    ? `${data.length} 字节 · ${data.map((x) => x.toString(16).padStart(2, '0').toUpperCase()).join(' ')}`
     : '（本分块不含该字段）');
   return `厂商扩展消息 SVID 0x${pdHex(svid ?? 0, 4)} · 命令 0x${pdHex(cmd ?? 0, 4)}`;
 }
@@ -3885,11 +4317,14 @@ const atLeast = (revText, target) => revTextNum(revText) >= target;
 function bistParse(em, data, idx, ctx) {
   const mode = pdField(data, 31, 28);
   const legacy = atLeast(ctx.revText, 3.0) ? null : (BIST_MODES_V2[mode] ?? null);
-  const modern = BIST_MODES_V3[mode] ?? null;
+  const modern = atLeast(ctx.revText, 3.0) ? (BIST_MODES_V3[mode] ?? null) : null;
   em.object(`BIST 数据对象 #${idx + 1}`);
   em.detail(`BIST Test Mode [${pdRange(31, 28)}]`, `0x${mode.toString(16).toUpperCase()} · ${modern ?? legacy ?? '无效取值（接收端应忽略本条报文）'}`);
   if (modern && legacy) em.detail('PD 2.0 旧值', `${legacy}（同一数值在旧版规范里含义不同）`);
-  em.detail(`Reserved [${pdRange(27, 0)}]`, `0x${pdHex(data).slice(2)}`);
+  if (legacy && mode === 2) {
+    em.detail('Reserved [B27-16]', pdField(data, 27, 16));
+    em.detail('BIST Error Counter [B15-0]', pdField(data, 15, 0));
+  } else em.detail(`Reserved [${pdRange(27, 0)}]`, `0x${pdHex(data).slice(1)}`);
 
   if (idx > 0) {
     em.note('非法：BIST 只应有 1 个数据对象');
@@ -3926,7 +4361,7 @@ function batteryStatusParse(em, data) {
 
 /* ══════════════════ Alert（ADO）══════════════════ */
 
-function alertParse(em, data, idx) {
+function alertParse(em, data, idx, ctx = {}) {
   const flags = pdField(data, 31, 24);
   em.object(`Alert 数据对象 #${idx + 1}（ADO）`);
   em.detail(`Type of Alert [${pdRange(31, 24)}]`, `0x${flags.toString(16).padStart(2, '0').toUpperCase()} = `
@@ -3936,6 +4371,11 @@ function alertParse(em, data, idx) {
   for (const { bit, name } of ALERT_BITS) {
     if (bit === 24) { em.detail('Reserved [B24]', pdBit(data, 24)); continue; }
     const on = pdBit(data, bit);
+    if (bit === 31 && ctx.specRevision === '3.0') { em.detail('Reserved [B31]', on); continue; }
+    if (bit === 26 && ctx.role === 'SNK') {
+      em.detail('Reserved (Sink OCP) [B26]', on);
+      continue;
+    }
     em.detail(`${name} [B${bit}]`, pdFlag(on));
     if (on) fired.push(name);
   }
@@ -3951,12 +4391,15 @@ function alertParse(em, data, idx) {
   em.detail(`Reserved [${pdRange(15, 4)}]`, `0x${pdField(data, 15, 4).toString(16).toUpperCase()}`);
 
   const extType = pdField(data, 3, 0);
-  em.detail(`Extended Alert Event Type [${pdRange(3, 0)}]`, pdBit(data, 31)
-    ? `${extType} · ${EXT_ALERT_EVENT[extType] ?? '自定义/保留事件'}`
+  const extendedAlert = ctx.specRevision !== '3.0' && pdBit(data, 31);
+  const alertEventName = ctx.specRevision === '3.1' && extType > 4
+    ? undefined : EXT_ALERT_EVENT[extType];
+  em.detail(ctx.specRevision === '3.0' ? 'Reserved [B3-0]' : `Extended Alert Event Type [${pdRange(3, 0)}]`, extendedAlert
+    ? `${extType} · ${alertEventName ?? (ctx.specRevision === '3.1' ? 'Reserved（PD 3.1）' : '自定义/保留事件')}`
     : `0x${extType.toString(16).toUpperCase()}（未置 Extended Alert Event）`);
 
   let s = fired.length ? `告警：${fired.join('、')}` : '无告警位';
-  if (pdBit(data, 31)) s += ` · 扩展事件：${EXT_ALERT_EVENT[extType] ?? `保留值 ${extType}`}`;
+  if (extendedAlert) s += ` · 扩展事件：${alertEventName ?? `保留值 ${extType}`}`;
   if (statusChange && (fixed || hot)) {
     s += ` · 电池 ${batteryList(fixed, 0).concat(batteryList(hot, 4)).join('/')}`;
   }
@@ -3973,19 +4416,22 @@ function batteryList(mask, base) {
 
 /* ══════════════════ Enter_USB（EUDO）══════════════════ */
 
-function enterUsbParse(em, data) {
+function enterUsbParse(em, data, ctx = {}) {
   const mode = pdField(data, 30, 28);
   const speed = pdField(data, 23, 21);
   const ctype = pdField(data, 20, 19);
   const ccur = pdField(data, 18, 17);
+  const old = ctx.specRevision === '3.1';
+  const modeText = mode <= 2 ? USB_MODE[mode] : old ? 'Reserved（PD 3.1 v1.4）' : USB_MODE_UNKNOWN;
+  const speedText = old && speed >= 4 ? 'Reserved（PD 3.1 v1.4）' : speed <= 4 ? USB_SPEED[speed] : USB_SPEED_UNKNOWN;
 
   em.detail(`Reserved [B31]`, pdBit(data, 31));
-  em.detail(`USB Mode [${pdRange(30, 28)}]`, `${mode} · ${mode <= 2 ? USB_MODE[mode] : USB_MODE_UNKNOWN}`);
+  em.detail(`USB Mode [${pdRange(30, 28)}]`, `${mode} · ${modeText}`);
   em.detail(`Reserved [B27]`, pdBit(data, 27));
   em.detail('USB4 DRD [B26]', pdFlag(pdBit(data, 26), 'Host DFP 可作 USB4 Device', '否'));
   em.detail('USB3 DRD [B25]', pdFlag(pdBit(data, 25), 'Host DFP 可作 USB3 Device', '否'));
   em.detail(`Reserved [B24]`, pdBit(data, 24));
-  em.detail(`Cable Speed [${pdRange(23, 21)}]`, `${speed} · ${speed <= 4 ? USB_SPEED[speed] : USB_SPEED_UNKNOWN}`);
+  em.detail(`Cable Speed [${pdRange(23, 21)}]`, `${speed} · ${speedText}`);
   em.detail(`Cable Type [${pdRange(20, 19)}]`, ctype === 3 ? CABLE_TYPE[3] : `${ctype} · ${CABLE_TYPE[ctype]}`);
   em.detail(`Cable Current [${pdRange(18, 17)}]`, `${ccur} · ${CABLE_CURRENT_EUDO[ccur]}`);
   em.detail('PCIe Support [B16]', pdFlag(pdBit(data, 16), 'USB4 PCIe 隧道支持', '不支持'));
@@ -3993,22 +4439,30 @@ function enterUsbParse(em, data) {
   em.detail('TBT Support [B14]', pdFlag(pdBit(data, 14), '支持 Thunderbolt', '不支持'));
   em.detail('Host Present [B13]', pdFlag(pdBit(data, 13), 'USB 树顶存在 Host', '无 Host'));
   em.detail(`Reserved [${pdRange(12, 0)}]`, `0x${pdField(data, 12, 0).toString(16).toUpperCase()}`);
+  if (ctx.link === 'cable') em.detail('接收端规则', '线缆插头忽略 USB4/USB3 DRD、Cable Current、PCIe/DP/TBT Support、Host Present 字段');
 
-  const s = `${mode <= 2 ? USB_MODE[mode] : USB_MODE_UNKNOWN} · 线缆 ${ctype === 3 ? CABLE_TYPE[3] : CABLE_TYPE[ctype]}`
-    + ` ${speed <= 4 ? USB_SPEED[speed] : USB_SPEED_UNKNOWN}`;
+  const s = `${modeText} · 线缆 ${ctype === 3 ? CABLE_TYPE[3] : CABLE_TYPE[ctype]} ${speedText}`;
   em.note(s);
   return s;
 }
 
 /* ══════════════════ Source_Info（SIDO1 / SIDO2）══════════════════ */
 
-function sourceInfoParse(em, data, idx) {
+function sourceInfoParse(em, data, idx, ctx = {}) {
+  if (ctx.specRevision === '3.1' && idx > 0) {
+    em.object(`Source_Info 数据对象 #${idx + 1}（PD 3.1 未定义 SIDO2）`);
+    em.detail('原始值', `0x${pdHex(data)}`);
+    em.warn?.('PD 3.1 Source_Info 消息必须恰好包含一个 SIDO', 'SOURCE_INFO');
+    return 'PD 3.1 未定义的 Source_Info 数据对象';
+  }
   if (idx === 0) {
     /* SIDO1：1W 步长 */
     const portType = pdBit(data, 31);
+    const reserved = pdField(data, 30, 24);
+    if (reserved) em.warn?.('SIDO1 的 Reserved [B30-24] 非零', 'RESERVED');
     em.object('Source_Info 数据对象 #1（SIDO1）');
     em.detail('Port Type [B31]', pdFlag(portType, 'Guaranteed Capability Port（供电能力固定）', 'Managed Capability Port（可动态调整）'));
-    em.detail(`Reserved [${pdRange(30, 24)}]`, `0x${pdField(data, 30, 24).toString(16).toUpperCase()}`);
+    em.detail(`Reserved [${pdRange(30, 24)}]`, `0x${reserved.toString(16).toUpperCase()}`);
     em.detail(`Port Maximum PDP [${pdRange(23, 16)}]`, `${pdField(data, 23, 16)} W（1W 步长，端口最大能提供的功率）`);
     em.detail(`Port Present PDP [${pdRange(15, 8)}]`, `${pdField(data, 15, 8)} W（当前实际可提供，已扣除线缆/温度等限制）`);
     em.detail(`Port Reported PDP [${pdRange(7, 0)}]`, `${pdField(data, 7, 0)} W（Source_Capabilities 里报出的功率）`);
@@ -4020,13 +4474,19 @@ function sourceInfoParse(em, data, idx) {
     /* SIDO2：0.5W 步长，带 DPS 位 */
     const portType = pdBit(data, 31);
     const dps = pdBit(data, 30);
+    const reserved = pdField(data, 29, 18);
+    const maxPdp = pdField(data, 17, 9) * 0.5;
+    const guaranteedPdp = pdField(data, 8, 0) * 0.5;
+    if (dps && portType) em.warn?.('DPS Port 的 Port Type 必须为 Managed (0b)', 'SOURCE_INFO');
+    if (reserved) em.warn?.('SIDO2 的 Reserved [B29-18] 非零', 'RESERVED');
+    if (guaranteedPdp > maxPdp) em.warn?.('SIDO2 Port Guaranteed PDP 超过 Port Maximum PDP', 'SOURCE_INFO');
     em.object('Source_Info 数据对象 #2（SIDO2）');
     em.detail('Port Type [B31]', pdFlag(portType, 'Guaranteed Capability Port', 'Managed Capability Port'));
     em.detail('DPS Port [B30]', pdFlag(dps, '动态电源（DPS），Port Type 应为 0b', '非 DPS'));
-    em.detail(`Reserved [${pdRange(29, 18)}]`, `0x${pdField(data, 29, 18).toString(16).toUpperCase()}`);
-    em.detail(`Port Maximum PDP [${pdRange(17, 9)}]`, `${pdNum(pdField(data, 17, 9) * 0.5)} W（0.5W 步长）`);
-    em.detail(`Port Guaranteed PDP [${pdRange(8, 0)}]`, `${pdNum(pdField(data, 8, 0) * 0.5)} W（保证始终能提供的功率）`);
-    const s = `最大 ${pdNum(pdField(data, 17, 9) * 0.5)}W 保证 ${pdNum(pdField(data, 8, 0) * 0.5)}W${dps ? ' · DPS' : ''}`;
+    em.detail(`Reserved [${pdRange(29, 18)}]`, `0x${reserved.toString(16).toUpperCase()}`);
+    em.detail(`Port Maximum PDP [${pdRange(17, 9)}]`, `${pdNum(maxPdp)} W（0.5W 步长）`);
+    em.detail(`Port Guaranteed PDP [${pdRange(8, 0)}]`, `${pdNum(guaranteedPdp)} W（保证始终能提供的功率）`);
+    const s = `最大 ${pdNum(maxPdp)}W 保证 ${pdNum(guaranteedPdp)}W${dps ? ' · DPS' : ''}`;
     em.note(s);
     return s;
   }
@@ -4052,10 +4512,15 @@ function revisionParse(em, data) {
 
 /* ══════════════════ EPR_Mode（EPRMDO）══════════════════ */
 
-function eprModeParse(em, data, idx) {
+function eprModeParse(em, data, idx, ctx = {}) {
   const action = pdField(data, 31, 24);
   const d = pdField(data, 23, 16);
   const actionText = EPR_MODE_ACTION[action] ?? '无效取值（接收端应忽略本条）';
+  if (!EPR_MODE_ACTION[action]) em.warn?.('EPR_Mode Action 无效', 'EPR_FIELD');
+  if ((action === 1 && ctx.role === 'SRC') || ([2, 3, 4].includes(action) && ctx.role === 'SNK')) em.warn?.('EPR_Mode Action 与发送方电源角色不符', 'ROLE');
+  if (pdField(data, 15, 0) || (action !== 1 && action !== 4 && d)) em.warn?.('EPR_Mode 的保留位非零', 'RESERVED');
+  // Table 6.28 的 Enter Data 为 00h..FFh；PDP 与已捕获 SKEDB 的一致性由会话层检查。
+  if (action === 4 && d > 5) em.warn?.('EPR_Mode 失败原因码无效，接收端忽略该字段', 'EPR_FIELD');
   em.object(`EPR_Mode 数据对象 #${idx + 1}（EPRMDO）`);
   em.detail(`Action [${pdRange(31, 24)}]`, `0x${action.toString(16).padStart(2, '0').toUpperCase()} · ${actionText}`);
   let dText = `0x${d.toString(16).padStart(2, '0').toUpperCase()}`;
@@ -4123,6 +4588,162 @@ function crc32(bytes) {
   return (c ^ 0xFFFFFFFF) >>> 0;
 }
 
+/* ══════ src/js/pd/epr.js ══════ */
+/**
+ * EPR 被动会话观察器：USB PD 3.1 §6.4.10 / 3.2 §7.30、§9.2.26.3。
+ * 只在完整可信且非重传的 SOP 消息上运行；不模拟设备 Policy Engine 或发送消息。
+ * 缺少抓包上下文时保留 unknown，能力查询本身不能证明已经进入 EPR。
+ */
+function pdCreateEprState(mode = 'unknown') {
+  return { mode, phase: 'idle', contract: null, contractKnown: mode !== 'unknown', pending: null,
+    lastRequest: null, keepAlive: null, lastTrafficMs: null };
+}
+
+const PD_EPR_PHASE_TEXT = {
+  idle: '空闲', enter_sent: '已请求进入', enter_acknowledged: '进入请求已确认',
+  await_capabilities: '等待 EPR 能力', await_request: '等待 EPR 请求',
+  negotiating: '等待 Accept', transitioning: '等待 PS_RDY', ready: '合同已建立',
+  failed: '进入失败', await_spr_capabilities: '已退出，等待 SPR 能力', reset_required: '协议异常，预期 Hard Reset',
+  fr_swap_source_off: 'FR_Swap 已接受，等待 New Sink PS_RDY', fr_swap_source_on: '等待 New Source PS_RDY 完成 FR_Swap',
+  fr_swap_unknown: 'FR_Swap 序列中断，完成状态未知',
+};
+
+function pdDescribeEpr(e, em) {
+  em.object('EPR 会话状态');
+  em.detail('模式', ({ unknown: '未知（未捕获完整上下文）', spr: 'SPR', epr: 'EPR' })[e.mode]);
+  em.detail('阶段', PD_EPR_PHASE_TEXT[e.phase] ?? e.phase);
+  em.detail('当前合同', e.contract ? `PDO #${e.contract.position} · ${e.contract.kind} · ${e.contract.range.toUpperCase()}`
+    : e.contractKnown ? '尚无已确认合同' : '未知（未捕获 Request → Accept → PS_RDY）');
+  if (e.keepAlive) em.detail('Keep Alive', e.keepAlive.pending ? '等待 Source Ack' : '已收到 Source Ack');
+}
+
+/** e.request / e.extBytes 由解码器的完整语义解析结果提供。 */
+function pdTrackEpr(st, em, m) {
+  const e = st.epr;
+  const bad = (text, code = 'EPR_SEQUENCE') => em.warn?.(text, code);
+  const isData = !m.ext && m.count > 0;
+  const isControl = !m.ext && !m.count;
+  const source = m.sender === 1;
+  if (e.mode === 'epr') e.lastTrafficMs = m.endTimeMs;
+  if (st.sourceCapQuery && source && !(isControl && [1, 5].includes(m.type)) && !(isData && m.type === 1)) st.sourceCapQuery = false;
+
+  if (isData && m.type === 10) {
+    const action = m.words[0] >>> 24, data = m.words[0] >>> 16 & 255;
+    // Invalid Action 或错误方向应忽略，保留原状态。Reserved Data 不影响合法 Action。
+    if (action < 1 || action > 5 || action === 1 && source || [2, 3, 4].includes(action) && !source) return;
+    if (action === 1) {
+      if (e.mode === 'epr') { bad('已处于 EPR 模式时再次请求 Enter'); return; }
+      if (e.contractKnown && (!e.contract || e.contract.range !== 'spr')) bad('EPR Enter 前未观察到 SPR 显式合同', 'EPR_PREREQUISITE');
+      if (e.pending) bad('EPR Enter 前的电源合同协商尚未完成', 'EPR_PREREQUISITE');
+      const first = st.capabilities.spr.source?.pdoMeta[1];
+      if (first && !(first.raw & 0x800000)) bad('最近 SPR 5V PDO 未置 EPR Capable', 'EPR_PREREQUISITE');
+      if (st.lastSprRequest && !st.lastSprRequest.eprCapable) bad('最近 Request 的 RDO 未置 EPR Capable', 'EPR_PREREQUISITE');
+      if (st.sinkOperationalPdp !== undefined && data !== st.sinkOperationalPdp) bad('EPR Enter PDP 与最近 Sink_Capabilities_Extended 的 Operational PDP 不一致', 'EPR_PDP');
+      e.mode = 'spr'; e.phase = 'enter_sent'; e.pending = null; e.keepAlive = null;
+    } else if (action === 2) {
+      if (e.mode === 'epr') { bad('已处于 EPR 模式时收到 Enter Acknowledged'); return; }
+      e.mode = 'spr'; e.phase = 'enter_acknowledged'; e.pending = null;
+    } else if (action === 3) {
+      if (e.mode === 'epr') { bad('已处于 EPR 模式时重复 Enter Succeeded'); return; }
+      if (e.phase === 'enter_sent') bad('Enter Succeeded 前未观察到 Enter Acknowledged');
+      e.mode = 'epr'; e.phase = 'await_capabilities'; e.pending = null; e.lastTrafficMs = m.endTimeMs;
+    } else if (action === 4) {
+      if (e.mode === 'epr') { bad('已处于 EPR 模式时收到 Enter Failed'); return; }
+      e.mode = 'spr'; e.phase = 'failed'; e.pending = null; e.keepAlive = null;
+    } else {
+      const invalidExit = e.contractKnown && (!e.contract || e.contract.range !== 'spr');
+      if (invalidExit) bad('EPR Exit 前必须先建立 SPR PDO/APDO 合同，预期 Hard Reset', 'EPR_EXIT');
+      e.mode = 'spr'; e.phase = invalidExit ? 'reset_required' : 'await_spr_capabilities'; e.pending = null; e.keepAlive = null;
+    }
+    return;
+  }
+
+  if (isControl && m.type === 13) {
+    e.pending = null; e.keepAlive = null;
+    // Soft Reset 保留当前显式合同和已经进入的 EPR 模式，终止未完成的 Enter AMS。
+    e.phase = e.mode === 'epr' ? 'await_capabilities' : 'idle';
+    st.pendingSwap = null; st.sourceCapQuery = false;
+    return;
+  }
+
+  if (isControl && m.type === 7) { st.sourceCapQuery = !source; e.pending = null; return; }
+  if (isData && m.type === 1 && source) {
+    if (e.mode === 'epr' && !st.sourceCapQuery) bad('EPR 模式中的普通 Source_Capabilities 未对应 Get_Source_Cap，预期 Hard Reset', 'EPR_MODE');
+    st.sourceCapQuery = false;
+    if (e.phase === 'await_spr_capabilities') e.phase = 'idle';
+    // EPR 中用于查询的 SPR 能力响应不改变正在协商的 EPR 合同。
+    if (e.mode !== 'epr') e.pending = null;
+    return;
+  }
+
+  if (m.ext && m.type === 15 && m.extBytes && !source && m.extBytes.length >= 24 && m.extBytes[10] === 1) {
+    const b = m.extBytes;
+    if (b.slice(18, 21).every(v => v <= 100) && b.slice(21, 24).every(v => v <= 240)
+      && b[18] <= b[19] && b[19] <= b[20] && b[21] <= b[22] && b[22] <= b[23]) {
+      st.sinkOperationalPdp = b[22]; st.sinkMaximumPdp = b[23];
+      for (const p of Object.values(st.capabilities.epr.sink?.pdoMeta ?? {})) {
+        if (p.kind === 'epr_avs' && p.power > b[23]) bad('EPR Sink AVS Maximum Power 超过 Sink_Capabilities_Extended 的 EPR Maximum PDP', 'AVS_CAP');
+      }
+    }
+  }
+  if (m.ext && m.type === 17 && m.extBytes && source && e.mode === 'epr') {
+    e.phase = 'await_request'; e.pending = null;
+  }
+  if (m.ext && m.type === 16 && m.extBytes?.length === 2) {
+    const [type, data] = m.extBytes;
+    if (data || ![3, 4].includes(type)) return;
+    if ((type === 3) === source) { bad('EPR Keep Alive 应由 Sink 发送，Ack 应由 Source 发送', 'ROLE'); return; }
+    if (e.mode === 'spr') { bad('在已观察到的 SPR 模式中发送 EPR Keep Alive/Ack', 'EPR_MODE'); return; }
+    if (type === 3) e.keepAlive = { pending: true, sentAtMs: m.endTimeMs, ackAtMs: null };
+    else e.keepAlive = { pending: false, sentAtMs: e.keepAlive?.sentAtMs ?? null, ackAtMs: m.endTimeMs };
+    return;
+  }
+
+  if (isData && [2, 9].includes(m.type) && !source && m.request) {
+    const r = { ...m.request, message: m.type === 9 ? 'EPR_Request' : 'Request' };
+    if ((m.type === 9 && e.mode === 'spr') || (m.type === 2 && e.mode === 'epr')) {
+      bad(`${r.message} 与已观察到的 ${e.mode.toUpperCase()} 模式不符`, 'EPR_MODE'); r.valid = false;
+    }
+    if (m.type === 2) st.lastSprRequest = r;
+    e.lastRequest = r; e.pending = { ...r, stage: 'requested' }; e.phase = 'negotiating';
+    return;
+  }
+
+  if (isControl && [3, 4, 12, 16].includes(m.type) && source && e.pending) {
+    if (m.type === 3) {
+      e.pending.stage = 'accepted'; e.phase = 'transitioning';
+      if (!e.pending.valid) bad('Source Accept 了无效的电源请求', 'EPR_REQUEST');
+    } else { e.pending = null; e.phase = e.contract ? 'ready' : 'idle'; }
+    return;
+  }
+  if (isControl && m.type === 6 && source && e.pending?.stage === 'accepted') {
+    if (e.pending.valid) {
+      const { stage, valid, ...contract } = e.pending;
+      e.contract = contract; e.contractKnown = true;
+      e.mode = contract.message === 'EPR_Request' ? 'epr' : 'spr';
+    }
+    e.pending = null; e.phase = e.contract ? 'ready' : 'idle';
+    return;
+  }
+
+  if (isControl && m.type === 10 && e.mode === 'epr') bad('EPR 模式禁止 PR_Swap，接收方应 Reject', 'EPR_PR_SWAP');
+  // GoodCRC、Ping、分块传输保持未完成协商；其他 AMS 的 PS_RDY 不能确认电源请求。
+  if ((isControl && [9, 10, 11, 19].includes(m.type)) || isData || (m.ext && m.extBytes && ![16, 17, 18].includes(m.type))) {
+    e.pending = null;
+    if (['negotiating', 'transitioning'].includes(e.phase)) e.phase = e.contract ? 'ready' : 'idle';
+  }
+}
+
+/** 接受电源交换后原合同/能力失效，FR_Swap 同时隐式退出 EPR。 */
+function pdEprPowerSwap(st) {
+  st.epr = pdCreateEprState('spr');
+  st.capabilities = { spr: { source: null, sink: null }, epr: { source: null, sink: null } };
+  delete st.sinkOperationalPdp;
+  delete st.sinkMaximumPdp;
+  delete st.lastSprRequest;
+  st.sourceCapQuery = false;
+}
+
 /* ══════ src/js/pd/decoder.js ══════ */
 /**
  * decoder.js — USB Power Delivery 报文解码器（独立库的主入口）
@@ -4141,6 +4762,7 @@ function crc32(bytes) {
  * 本文件属于 `src/js/pd/` 独立库：仅依赖同目录模块，浏览器 / Node 双栈通用，
  * 可整目录复制到别的工程复用（对外只暴露 PdDecoder 与若干解析函数）。
  */
+
 
 
 
@@ -4171,7 +4793,7 @@ const CTRL_SUMMARY = {
   10: '请求交换电源角色 (PR_Swap)',
   11: '请求交换 VCONN 提供方 (VCONN_Swap)',
   12: '暂不能响应，稍后重试',
-  13: '软复位：双方回到默认状态但保持供电',
+  13: '软复位：复位指定链路的协议状态并重新协商，保持供电',
   14: '数据复位',
   15: '数据复位完成',
   16: '不支持该请求',
@@ -4219,23 +4841,32 @@ function createState() {
     svidList: null,                   // 最近一次 Discover SVIDs 结果
     identity: null,                   // 最近一次 Discover Identity（端口/线缆）结果
     lastVdm: null,
-    extCarry: null,                   // EPR 能力分块拼接的跨包尾巴
+    chunks: {},                      // 按发送方和消息类型隔离的扩展数据块
+    messages: {},                    // 每个发送方最近的 MessageID/内容
+    modes: {}, activeModes: {},
+    capabilities: { spr: { source: null, sink: null }, epr: { source: null, sink: null } },
+    epr: pdCreateEprState(),
   };
 }
 
 class PdDecoder {
   /**
-   * @param {{sampleRate:number}} opts
+   * @param {{sampleRate:number, specRevision?:'2.0'|'3.0'|'3.1'|'3.2'|null}} opts
    */
-  constructor({ sampleRate }) {
+  constructor({ sampleRate, specRevision = null }) {
+    if (!(sampleRate > 0)) throw new RangeError('sampleRate 必须大于 0');
+    if (specRevision !== null && !PD_SPEC_PROFILES[specRevision]) throw new RangeError('specRevision 必须为 2.0/3.0/3.1/3.2 或 null');
     this.sampleRate = sampleRate;
+    this.specRevision = specRevision;
     this.reset();
   }
 
   /** 清空跨报文状态。切换通道 / 重新解码前调用。 */
-  reset() {
-    this.packetSeq = 0;
+  reset({ preserveSequence = false } = {}) {
+    if (!preserveSequence || this.packetSeq === undefined) this.packetSeq = 0;
     this.st = createState();
+    this.linkStates = new Map();
+    this.channelRoles = new Map();
     this.lastSopPowerRole = 'SRC';
   }
 
@@ -4249,36 +4880,26 @@ class PdDecoder {
   }
 
   _byte() {
-    const i = this.idx;
-    if (this.bits.length - i <= 10) { this.warn('数据被截断', 'TRUNC'); return 0x0BAD; }
-    const k0 = this._sym(i), k1 = this._sym(i + 5);
-    this.idx += 10;
-    return (k0 & 0x0F) | ((k1 & 0x0F) << 4);
+    const lo = this._nibble(), hi = this._nibble();
+    return lo === null || hi === null ? null : lo | (hi << 4);
   }
 
   _nibble() {
-    if (this.bits.length - this.idx <= 5) { this.warn('数据被截断', 'TRUNC'); return 0x0BAD; }
+    if (this.bits.length - this.idx < 5) { this.warn('数据被截断', 'TRUNC'); this.idx = this.bits.length; return null; }
     const s = this._sym(this.idx);
-    if (s > 0xF) { this.warn(`非法 4B5B 符号 0x${s.toString(16).toUpperCase()}`, 'SYM'); return 0x0BAD; }
     this.idx += 5;
+    if (s > 0xF) { this.warn(`非法 4B5B 符号 0x${s.toString(16).toUpperCase()}`, 'SYM'); return null; }
     return s;
   }
 
   _short() {
-    if (this.bits.length - this.idx <= 20) { this.warn('报文被截断', 'TRUNC'); return 0x0BAD; }
-    let val = 0;
-    for (let i = 0; i < 4; i++) {
-      const s = this._sym(this.idx + i * 5);
-      if (s > 0xF) { this.warn(`非法 4B5B 符号 0x${s.toString(16).toUpperCase()}`, 'SYM'); return 0x0BAD; }
-      val |= (s << (4 * i));      // 低 4bit 先行 → 小端
-    }
-    this.idx += 20;
-    return val >>> 0;
+    const lo = this._byte(), hi = this._byte();
+    return lo === null || hi === null ? null : lo | (hi << 8);
   }
 
   _word() {
     const lo = this._short(), hi = this._short();
-    if (lo === 0x0BAD || hi === 0x0BAD) { this.warn('读取 32bit 对象失败', 'WORD'); return 0x0BAD0BAD; }
+    if (lo === null || hi === null) return null;
     return ((hi << 16) | lo) >>> 0;
   }
 
@@ -4337,6 +4958,7 @@ class PdDecoder {
       object(title) { self.details.push({ key: 'Object', value: String(title) }); },
       detail(key, value) { self.details.push({ key: String(key), value: String(value) }); },
       note(text) { if (text != null && text !== '') self.summaryParts.push(String(text)); },
+      warn(text, code = 'FIELD') { self.warn(text, code); },
     };
   }
 
@@ -4360,6 +4982,13 @@ class PdDecoder {
     this.sopBitOffset = -1;
     this.crcExtra = null;
     this.dataBytesOverride = null;
+    this.extHeadInfo = null;
+    this.extBlock = null;
+    this.extAssembly = null;
+    this.extCompleteBytes = null;
+    this.request = null;
+    this.isRetry = false;
+    this.stateValid = true;
     this.packetRaw = raw;
     this.channel = channel;
     this.em = this._makeEmitter();
@@ -4368,26 +4997,45 @@ class PdDecoder {
 
     if (hdrIdx < 0 && this.specialPacket) return this._specialPacket(raw, channel);
     if (hdrIdx < 0) return null;
+    const existing = this.linkStates.get(`${channel}:${this.packetSop}`);
+    if (existing?.bist && !raw.synthetic && this.bits.length - hdrIdx === 1024) return this._bistFrame(raw, channel, hdrIdx, existing);
 
     this.packetSeq++;
     const tms = raw.startSample / this.sampleRate * 1000;
     this.text = `#${this.packetSeq} (${tms.toFixed(4)}ms): `;
     this.idx = hdrIdx;
     this.head = this._short();
-    if (this.head === 0x0BAD) return null;
+    if (this.head === null) return null;
 
     const t = this.headType();
     const isExt = this.headExt() === 1;
     const nObjects = this.headCount();
 
     let shortm;
-    if (isExt) shortm = EXT_TYPES[t] ?? `EXT?${t}`;
-    else if (nObjects === 0) shortm = CTRL_TYPES[t] ?? `CTRL?${t}`;
-    else shortm = DATA_TYPES[t] ?? `DATA?${t}`;
+    if (isExt) shortm = EXT_TYPES[t] ?? 'Reserved';
+    else if (nObjects === 0) shortm = CTRL_TYPES[t] ?? 'Reserved';
+    else shortm = DATA_TYPES[t] ?? 'Reserved';
+    const profile = this.headModern() ? (this.specRevision ?? '3.2') : '2.0';
+    this.messageDefined = PD_SPEC_PROFILES[profile][isExt ? 'ext' : nObjects ? 'data' : 'control'].includes(t);
+    if (!this.messageDefined) shortm = 'Reserved';
+
+    this.stateKey = `${channel}:${this.packetSop}`;
+    const previousState = this.linkStates.get(this.stateKey) ?? createState();
+    this.st = JSON.parse(JSON.stringify(previousState));
 
     const link = LINK_OF_SOP[this.packetSop] ?? 'port';
     const role = this._resolveRole(link);
     this.resolvedRole = role;
+    this.em.object('Message Header');
+    this.em.detail('原始值', `0x${pdHex(this.head, 4)}`);
+    this.em.detail(this.headModern() ? 'Extended [B15]' : 'Reserved [B15]', (this.head >>> 15) & 1);
+    if (!this.headModern()) this.em.detail('Reserved [B4]', (this.head >>> 4) & 1);
+    this.em.detail('Number of Data Objects [B14-12]', nObjects);
+    this.em.detail('MessageID [B11-9]', this.headId());
+    this.em.detail(link === 'cable' ? 'Cable Plug [B8]' : 'Port Power Role [B8]', link === 'cable' ? (this.headPowerRole() ? 'Plug' : 'Port') : role);
+    this.em.detail('Specification Revision [B7-6]', this.headRevText());
+    this.em.detail(link === 'cable' ? 'Reserved [B5]' : 'Port Data Role [B5]', link === 'cable' ? this.headDataRole() : this.headDataRole() ? 'DFP' : 'UFP');
+    this.em.detail('Message Type', `${t} · ${shortm}`);
 
     const longm = `(r${this.headRev()}) ${role}[${this.headId()}]: ${shortm}`;
     this.text += longm;
@@ -4410,23 +5058,58 @@ class PdDecoder {
       // 先把全部数据对象读进来：VDM 等类型需要「整条报文」才能解析（例如 Discover Identity
       // 的 VDO 链要按顺序配对），不能边读边解析。
       for (let i = 0; i < nObjects; i++) this.dataWords.push(this._word());
-      if (t === 15) {
-        this._vdm(link);
-      } else {
-        for (let i = 0; i < nObjects; i++) this._payload(i, t, link);
-      }
-      if (nObjects === 0 && CTRL_SUMMARY[t]) this.summaryParts.push(CTRL_SUMMARY[t]);
-
       /* CRC + EOP */
       crc = this._word();
       calc = this._computeCrc();
-      crcOk = crc === calc;
+      crcOk = crc !== null && this.dataWords.every(w => w !== null) && crc === calc;
     }
-    if (!crcOk) this.warn(`CRC 校验失败：读到的 0x${pdHex(crc)} ≠ 计算的 0x${pdHex(calc)}`, 'CRC');
+    if (!crcOk) this.warn(`CRC 校验失败：读到的 ${crc === null ? '缺失' : '0x' + pdHex(crc)} ≠ 计算的 0x${pdHex(calc)}`, 'CRC');
 
     let eop = false;
     if (this.bits.length >= this.idx + 5 && this._sym(this.idx) === SYM_EOP) { eop = true; this.idx += 5; }
     else this.warn('缺少 EOP（报文结束符）', 'EOP');
+
+    if (raw.wireBytes && raw.wireBytes.length !== 2 + (this.dataBytesOverride?.length ?? nObjects * 4)) {
+      this.warn('逻辑字节长度与 Header/Extended Header 不匹配', 'LENGTH');
+      this.stateValid = false;
+    }
+    const frameValid = crcOk && eop && !this.warnings.some(w => ['TRUNC', 'SYM', 'LENGTH'].includes(w.short));
+    this._messageHistory(t, isExt, frameValid);
+    if (isExt) this._parseExtended(t, link, frameValid);
+    else if (this.dataWords.every(w => w !== null)) {
+      this._validateMessage(t, nObjects, link);
+      if (nObjects && this.messageDefined && (t === 1 || t === 4)) {
+        const capRole = t === 1 ? 'source' : 'sink';
+        this.st.pdos[capRole] = {}; this.st.pdoMeta[capRole] = {};
+      }
+      if (t === 15 && nObjects > 0 && this.messageDefined) this._vdm(link);
+      else for (let i = 0; i < nObjects; i++) this._payload(i, t, link);
+      if (nObjects && this.messageDefined && (t === 1 || t === 4)) {
+        const capRole = t === 1 ? 'source' : 'sink';
+        this._validateCapabilities(capRole);
+        this._storeCapabilities('spr', capRole);
+      }
+      if (!nObjects && CTRL_SUMMARY[t] && this.messageDefined) this.summaryParts.push(CTRL_SUMMARY[t]);
+      if (!nObjects && t === 13 && this.messageDefined) {
+        this.st.chunks = {}; this.st.messages = {};
+      }
+      if (!nObjects && (t === 14 || t === 15) && this.messageDefined) this.st.activeModes = {};
+    }
+    if (frameValid && this.stateValid && !this.isRetry) {
+      if (this.messageDefined && this.packetSop === 'SOP') {
+        pdTrackEpr(this.st, this.em, { type: t, ext: isExt, count: nObjects, sender: this.headPowerRole(),
+          words: this.dataWords, request: this.request, extBytes: this.extCompleteBytes,
+          endTimeMs: raw.endSample / this.sampleRate * 1000 });
+        this._trackSwap(t, nObjects, isExt);
+      }
+      this.linkStates.set(this.stateKey, this.st);
+      if (this.packetSop === 'SOP') this.channelRoles.set(channel, role);
+    } else this.st = previousState;
+
+    const epr = this.packetSop === 'SOP' ? JSON.parse(JSON.stringify(this.st.epr)) : null;
+    if (epr && ((isExt && [16, 17, 18].includes(t)) || (!isExt && nObjects && [9, 10].includes(t))
+      || epr.mode === 'epr' || previousState.epr.mode === 'epr'
+      || this.warnings.some(w => w.short.startsWith('EPR_') || w.short === 'SWAP_SEQUENCE'))) pdDescribeEpr(epr, this.em);
 
     return this._finish(raw, channel, {
       sop: this.packetSop,
@@ -4447,6 +5130,14 @@ class PdDecoder {
       crcCalc: calc,
       crcOk,
       eop,
+      frameValid,
+      isRetry: this.isRetry,
+      roleInferred: link === 'cable' && !this.headPowerRole(),
+      specProfile: this.headModern() ? this.specRevision : '2.0',
+      extended: this.extHeadInfo,
+      reassembly: this.extAssembly,
+      request: this.request,
+      epr,
       category: MSG_CATEGORY[shortm] ?? (isExt ? 'data' : 'control'),
     });
   }
@@ -4467,16 +5158,14 @@ class PdDecoder {
    *
    * @param {ArrayLike<number>} wire  逻辑字节（Header + Data Objects）
    * @param {{sop?:string, timeMs?:number, channel?:number,
-   *          crcRecorded?:boolean, extra?:object}} [o]
+   *          crcRecorded?:boolean, crc?:number|null, extra?:object}} [o]
    *   sop          有序集名：'SOP' | "SOP'" | "SOP''"
-   *   timeMs       报文时间戳（毫秒）。调用方按「1 采样点 = 1 ms」的约定同时当 startSample 用，
-   *                这样界面里所有「采样点 → 秒」的换算不用为分析仪格式开一条新分支。
-   *   crcRecorded  分析仪是否自己记了 CRC。POWER-Z 不记（只存到数据对象为止），
-   *                此时 CRC 由本方法补齐以便走通流程，并把 crcOk 置 null ——
-   *                **不能**默认它通过，那是在替对方的数据背书。
+   *   timeMs       报文时间戳（毫秒），按 sampleRate 换算成 startSample。
+   *   crc          实收 CRC。未提供时仅补齐内部解码流程，返回 crcOk=null。
+   *   crcRecorded  兼容旧调用；仅设为 true 而没有 crc 时仍不能校验。
    * @returns {object|null}
    */
-  decodeWire(wire, { sop = 'SOP', timeMs = 0, channel = 0, crcRecorded = false, extra = null } = {}) {
+  decodeWire(wire, { sop = 'SOP', timeMs = 0, channel = 0, crcRecorded = false, crc: receivedCrc = null, extra = null } = {}) {
     const set = ORDERED_SET_BY_NAME[sop] || ORDERED_SET_BY_NAME['SOP'];
 
     const bits = [];
@@ -4484,18 +5173,19 @@ class PdDecoder {
     const n = wire.length >>> 0;
     for (let i = 0; i < n; i++) pushByte(bits, wire[i]);
 
-    // 报文线上时长：BMC 600 kbit/s → 1 ms 恰好 600 个比特
+    // 内部重建的编码比特只用于复用解析流程。
     const calc = crc32(wire);
-    for (const b of [calc & 0xFF, (calc >>> 8) & 0xFF, (calc >>> 16) & 0xFF, (calc >>> 24) & 0xFF]) pushByte(bits, b);
+    const crcValue = receivedCrc === null ? calc : receivedCrc >>> 0;
+    for (const b of [crcValue & 0xFF, (crcValue >>> 8) & 0xFF, (crcValue >>> 16) & 0xFF, (crcValue >>> 24) & 0xFF]) pushByte(bits, b);
     pushSymbol(bits, SYM_EOP);
 
-    const durMs = bits.length / 600;
+    const durMs = bits.length / 300; // PD 数据率 300 kbit/s，600 kHz 为半位时钟
     const raw = {
       bits,
       edges: [],
-      startSample: timeMs,
-      endSample: timeMs + durMs,
-      bitrate: 600000,          // 标称 BMC 时钟（分析仪不测这个，取协议定值）
+      startSample: timeMs * this.sampleRate / 1000,
+      endSample: (timeMs + durMs) * this.sampleRate / 1000,
+      bitrate: 300000,
       synthetic: true,
       wireBytes: wire,
     };
@@ -4505,12 +5195,11 @@ class PdDecoder {
 
     pkt.synthetic = true;                 // 报文不是从采样波形解出来的
     pkt.crcCalc = calc;
-    pkt.crcRecorded = !!crcRecorded;
-    // 分析仪只给逻辑字节，测不到线上的码率与时长 —— 上面那个 600 kbps 是 BMC 标称时钟
-    // （PD 规范定值），据此折算出的时长也只能算「线上时长」。界面必须区别对待，
-    // 不能把它当成从波形量出来的实测值。
+    pkt.crcRecorded = receivedCrc !== null;
+    // 按 300 kbit/s 估算编码部分时长，不含前导码/空闲，不是波形实测值。
     pkt.bitrateNominal = true;
-    if (!crcRecorded) { pkt.crc = null; pkt.crcOk = null; }
+    if (receivedCrc === null) { pkt.crc = null; pkt.crcOk = null; pkt.frameValid = null; }
+    if (crcRecorded && receivedCrc === null) pkt.warnings.push({ short: 'CRC_UNKNOWN', long: 'crcRecorded 未提供实收 CRC，无法验证 CRC' });
     if (extra) Object.assign(pkt, extra);
     return pkt;
   }
@@ -4521,41 +5210,191 @@ class PdDecoder {
     const dr = this.headDataRole();
     if (this.packetSop === 'SOP') {
       const role = ppr ? 'SRC' : 'SNK';
-      this.lastSopPowerRole = role;
       return role;
     }
-    if (link === 'cable') return ppr ? 'Plug' : this.lastSopPowerRole;
+    if (link === 'cable') return ppr ? 'Plug' : (this.channelRoles.get(this.channel) ?? this.lastSopPowerRole);
     return this.lastSopPowerRole;
   }
 
   /**
    * 版本合法性提示。
-   * Header 的修订号只能表示到「3.x」，所以「3.1 才定义的报文」出现在 r3 包里**不是错误**，
-   * 只能用一句说明带过；只有连 3.x 都够不着的（如 PD 2.0 包里出现 3.0 才有的类型）才报警告。
+   * Header 的修订号只能表示到「3.x」。未选择基线时，3.x 专属报文只能给出歧义说明；
+   * 调用方显式选择某份本地规范 PDF 时，则可按该基线报告消息过早/已废弃，但不推断设备的精确版本。
    */
   _versionHints(t, isExt, nObjects, shortm) {
     const revText = this.headRevText();
-    if (revText.startsWith('Reserved')) {
-      this.warn('Header 的 Specification Revision 是保留值 11b（规范规定不得使用），版本判定不可靠', 'REV');
+    const revCode = this.headRevCode();
+    const isGoodCrc = !isExt && nObjects === 0 && t === 1;
+    // PD 3.x explicitly makes this field don't-care for GoodCRC. Keep its raw value in
+    // the Header details, but do not reject an otherwise valid acknowledgement because
+    // the two bits happen to be 11b (or any other value).
+    // Use the selected specification's rule even when the received GoodCRC itself carries
+    // a legacy-looking or reserved Revision code. Without an explicit profile, only a 3.x
+    // Header gives us grounds to apply the PD 3.x don't-care rule; PD 2.0 reserves 10b/11b.
+    const modernGoodCrcRules = this.specRevision
+      ? this.specRevision !== '2.0'
+      : this.headModern();
+    const ignoreGoodCrcRevision = isGoodCrc && modernGoodCrcRules;
+    if (ignoreGoodCrcRevision) {
+      this.em.detail('Revision 语义', `GoodCRC 的 Revision 字段按 PD 3.x 忽略（原始值 ${revText}）`);
+    }
+    const reservedRevision = revText.startsWith('Reserved')
+      || (this.specRevision === '2.0' && revCode >= 2);
+    if (!ignoreGoodCrcRevision && reservedRevision) {
+      const reservedBits = revCode.toString(2).padStart(2, '0');
+      this.warn(`Header 的 Specification Revision 是保留值 ${reservedBits}b（所选 PD ${this.specRevision ?? '3.x'} 规范规定不得使用），版本判定不可靠`, 'REV');
+      this.stateValid = false;
       return;
     }
     // 规范：00b（Revision 1.0）已废弃，接收端一律按 Revision 2.0 解读
-    const legacy1 = this.headRevCode() === 0;
+    const legacy1 = revCode === 0;
     const revNum = legacy1 ? 2.0 : revTextNum(revText);
     if (legacy1 && nObjects > 0) {
       this.summaryParts.push('（Revision 域为 00b：已废弃，按 Revision 2.0 解读）');
     }
     const min = isExt ? EXT_MIN_REV[t] : (nObjects === 0 ? CTRL_MIN_REV[t] : DATA_MIN_REV[t]);
-    if (min !== undefined && revNum + 1e-9 < min) {
-      if (revText === '3.x' && min <= 3.2) {
+    // Header 的 10b 只写着 3.x。若调用方明确选择了某份 PDF，按所选配置检查；
+    // 没有选择时才保留 3.0/3.1/3.2 的歧义，避免把已知 3.1/3.2 配置仍报告成未知。
+    const checkRevision = this.headModern() && this.specRevision
+      ? revTextNum(this.specRevision)
+      : (this.headModern() ? null : revNum);
+    if (!ignoreGoodCrcRevision && min !== undefined) {
+      if (checkRevision !== null && checkRevision + 1e-9 < min) {
+        this.warn(`消息类型「${shortm}」自 PD ${min.toFixed(1)} 起才定义，所选规范为 PD ${this.specRevision ?? checkRevision.toFixed(1)}`, 'REV');
+      } else if (checkRevision === null && revText === '3.x' && min > 3.0 && min <= 3.2) {
         this.summaryParts.push(`（「${shortm}」自 PD ${min.toFixed(1)} 起定义；报文头只能标到 3.x，无法区分 3.0/3.1/3.2）`);
-      } else {
-        this.warn(`消息类型「${shortm}」自 PD ${min.toFixed(1)} 起才定义，本包声明为 r${this.headRev()}`, 'REV');
       }
     }
-    if (!isExt && nObjects === 0 && CTRL_DEPRECATED[shortm]) {
-      this.warn(`${shortm}：${CTRL_DEPRECATED[shortm]}`, 'DEPR');
+    if (!isExt && nObjects === 0 && CTRL_DEPRECATED[shortm] && this.headModern()) {
+      this.em.detail('版本差异', `${shortm}：PD 3.2 已废弃；PD 2.0/3.0/3.1 中仍有定义，Header 无法区分 3.x`);
+      if (this.specRevision === '3.2') this.warn(`${shortm} 在 PD 3.2 中已废弃`, 'DEPR');
     }
+    if (!this.headModern() && (this.head & 0x8010)) this.warn('PD 2.0 Header 的 B15/B4 为 Reserved', 'RESERVED');
+    if (this.packetSop !== 'SOP' && this.headDataRole()) this.warn('Cable Header 的 B5 为 Reserved', 'RESERVED');
+  }
+
+  _messageHistory(t, isExt, valid) {
+    if (!valid || (!isExt && !this.headCount() && (t === 1 || t === 13))) return;
+    const sender = String(this.headPowerRole());
+    const fingerprint = `${this.head}:${this.dataBytesOverride ?? this.dataWords}`;
+    const prev = this.st.messages[sender];
+    this.isRetry = !!(prev && prev.id === this.headId() && prev.fingerprint === fingerprint);
+    if (this.isRetry) this.em.detail('重传', `同一发送方、MessageID ${this.headId()} 和内容重复`);
+    // 被动抓包可能缺失消息，不能仅凭 ID 跳变断言违规。
+    this.st.messages[sender] = { id: this.headId(), fingerprint };
+  }
+
+  _context(link) {
+    return { rev: this.headRev(), revText: this.headRevText(), specRevision: this.headModern() ? this.specRevision : '2.0',
+      sop: this.packetSop, sopName: this.packetSop, link, role: this.resolvedRole,
+      dataRole: this.headDataRole(), nObjects: this.headCount() };
+  }
+
+  _validateMessage(t, n, link) {
+    if (!this.messageDefined) return;
+    if (!n) {
+      if (link === 'cable' && ![0, 1, 3, 4, 12, 13, 16, 18, 24].includes(t)
+        && !(t === 21 && this.specRevision === '3.0')) this.warn('该控制消息仅允许 SOP（旧版 Get_Country_Codes 曾允许 SOP*）', 'SOP');
+      return;
+    }
+    const count = ({ 2: [1], 3: [1], 5: [1], 6: [1], 7: [1], 8: [1], 9: [2], 10: [1],
+      11: this.specRevision === '3.1' ? [1] : this.specRevision === '3.2' ? [2] : [1, 2], 12: [1] })[t];
+    if (count && !count.includes(n)) { this.warn(`数据对象数量 ${n} 不符合消息 ${t} 的格式（${count.join('/')}）`, 'COUNT'); this.stateValid = false; }
+    if (link === 'cable' && ![3, 8, 12, 15].includes(t)) this.warn('此数据消息仅允许 SOP', 'SOP');
+    if (t === 11 && this.resolvedRole === 'SNK') this.warn('Source_Info 的发送方应为 Source', 'ROLE');
+    if ([2, 9, 10].includes(t) && t !== 10 && this.resolvedRole === 'SRC') this.warn('Request/EPR_Request 的发送方应为 Sink', 'ROLE');
+  }
+
+  _trackSwap(t, n, isExt = false) {
+    const pending = this.st.pendingSwap;
+    if (isExt) {
+      if (pending?.kind === 'fast_power') {
+        this.warn('FR_Swap 过程中出现扩展消息，交换序列被中断，完成状态未知', 'SWAP_SEQUENCE');
+        this.st.epr.phase = 'fr_swap_unknown';
+      }
+      this.st.pendingSwap = null;
+      return;
+    }
+    if (!n && (t === 10 || t === 11 || t === 19)) {
+      if (t === 19 && this.headPowerRole()) { this.warn('FR_Swap 应由原 Sink 发出', 'ROLE'); return; }
+      this.st.pendingSwap = { kind: t === 11 ? 'vconn' : t === 19 ? 'fast_power' : 'power', sender: this.headPowerRole(),
+        blocked: t === 10 && this.st.epr.mode === 'epr' };
+    } else if (pending?.kind === 'fast_power' && pending.stage && !n && t === 6) {
+      const expected = pending.stage === 'source_off' ? 0 : 1;
+      if (this.headPowerRole() !== expected) {
+        this.warn(`FR_Swap 尚未观察到 ${expected ? 'New Source' : 'New Sink'} 的 PS_RDY，不能确认交换完成`, 'SWAP_SEQUENCE'); return;
+      }
+      if (expected === 0) { pending.stage = 'source_on'; this.st.epr.phase = 'fr_swap_source_on'; }
+      else {
+        this.st.pdos = { source: {}, sink: {} }; this.st.pdoMeta = { source: {}, sink: {} };
+        pdEprPowerSwap(this.st); this.st.messages = {}; this.st.pendingSwap = null;
+      }
+    } else if (pending && !n && [3, 4, 12, 16].includes(t) && pending.sender !== this.headPowerRole()) {
+      if (t === 3 && pending.blocked) this.warn('EPR 模式中接受了禁止的 PR_Swap', 'EPR_PR_SWAP');
+      else if (t === 3 && pending.kind === 'fast_power') {
+        pending.stage = 'source_off'; this.st.epr.phase = 'fr_swap_source_off';
+        // 接下来两个端点的 Header 电源角色互换，不能沿用按旧角色索引的去重历史。
+        const accepted = this.st.messages[String(this.headPowerRole())];
+        this.st.messages = accepted ? { [this.headPowerRole()]: accepted } : {};
+        return;
+      }
+      else if (t === 3 && pending.kind === 'power') {
+        this.st.pdos = { source: {}, sink: {} }; this.st.pdoMeta = { source: {}, sink: {} };
+        pdEprPowerSwap(this.st); this.st.messages = {};
+      }
+      this.st.pendingSwap = null;
+    } else if (pending && (n || ![1, 5].includes(t))) {
+      if (pending.kind === 'fast_power') {
+        this.warn('FR_Swap 的 PS_RDY 序列被其他消息中断，交换完成状态未知', 'SWAP_SEQUENCE');
+        this.st.epr.phase = 'fr_swap_unknown';
+      }
+      this.st.pendingSwap = null;
+    }
+  }
+
+  _validateCapabilities(role) {
+    const entries = Object.values(this.st.pdoMeta[role]);
+    let prev = null;
+    const seen = new Set();
+    const rank = { fixed: 0, battery: 1, variable: 2, spr_avs: 3, pps: 4, epr_avs: 5 };
+    for (const m of entries) {
+      const r = rank[m.kind];
+      const voltage = m.kind === 'fixed' || m.kind === 'pps' ? m.maxVoltage : m.minVoltage;
+      const key = `${m.kind}:${m.minVoltage}:${m.maxVoltage}`;
+      if (seen.has(key)) this.warn(`PDO #${m.position} 的类型和电压与前项重复`, 'PDO_ORDER');
+      if (prev && m.isEpr === prev.isEpr && (r < prev.rank || r === prev.rank && voltage < prev.voltage)) this.warn(`PDO #${m.position} 不符合 PDO 类型和电压排序`, 'PDO_ORDER');
+      seen.add(key); prev = { rank: r, voltage, isEpr: m.isEpr };
+    }
+    if (role !== 'source') {
+      for (const m of entries) if (m.kind === 'epr_avs' && m.power > this.st.sinkMaximumPdp) {
+        this.warn('EPR Sink AVS Maximum Power 超过 Sink_Capabilities_Extended 的 EPR Maximum PDP', 'AVS_CAP'); m.valid = false;
+      }
+      return;
+    }
+    const fixed = entries.filter(m => m.kind === 'fixed');
+    for (const m of entries.filter(m => m.kind === 'spr_avs')) {
+      for (const [v, i] of [[15, m.current15], [20, m.current20]]) {
+        const f = fixed.find(p => !p.isEpr && p.maxVoltage === v);
+        if ((v === 15 || i > 0 || f) && (!f || f.current !== i)) {
+          this.warn(`SPR AVS 的 ${v}V 电流必须与对应 Fixed PDO 一致`, 'AVS_CAP'); m.valid = false;
+        }
+      }
+    }
+    const eprEntries = entries.filter(m => m.isEpr);
+    if (eprEntries.length) {
+      const avs = eprEntries.filter(m => m.kind === 'epr_avs');
+      if (avs.length !== 1) this.warn('EPR 能力区应包含且只包含一个 EPR AVS APDO', 'AVS_CAP');
+      const maxFixed = Math.max(0, ...fixed.filter(m => m.isEpr).map(m => m.maxVoltage));
+      for (const m of avs) if (m.maxVoltage !== maxFixed) {
+        this.warn('EPR Source AVS 的最高电压必须匹配最高 EPR Fixed PDO', 'AVS_CAP'); m.valid = false;
+      }
+    }
+  }
+
+  _storeCapabilities(range, role) {
+    // DRP 可在当前相反电源角色下回复能力查询；该信息不能替换正在供电端的能力表。
+    if (this.headPowerRole() !== (role === 'source' ? 1 : 0)) return;
+    this.st.capabilities[range][role] = { pdos: { ...this.st.pdos[role] }, pdoMeta: { ...this.st.pdoMeta[role] } };
   }
 
   _computeCrc() {
@@ -4571,42 +5410,58 @@ class PdDecoder {
   _payload(idx, t, link) {
     const em = this.em;
     const data = this.dataWords[idx];
-    const ctx = {
-      rev: this.headRev(), revText: this.headRevText(),
-      sop: this.packetSop, link, role: this.resolvedRole,
-    };
+    const ctx = this._context(link);
     let summary = '';
 
+    if (!this.messageDefined) {
+      em.object(`Reserved 数据对象 #${idx + 1}`); em.detail('原始值', `0x${pdHex(data)}`);
+      em.note(`Reserved · 0x${pdHex(data)}`); return;
+    }
+
     if (t === 2) {
-      rdoParse(this.st, em, data, { isEpr: false });
+      this.request = rdoParse(this.st, em, data, { ...ctx, isEpr: false, capabilities: this.st.capabilities.spr.source });
     } else if (t === 1 || t === 4) {
       const role = t === 1 ? 'source' : 'sink';
-      const r = pdoParse(this.st, em, data, { role, position: idx + 1, isEpr: false, revText: ctx.revText });
+      const r = pdoParse(this.st, em, data, { ...ctx, role, position: idx + 1, isEpr: false });
       em.note(r.summary);
     } else if (t === 9) {
       if (idx === 0) {
-        rdoParse(this.st, em, data, { isEpr: true });
+        const pos = data >>> 28;
+        const copy = this.dataWords[1];
+        let meta = null, ref = null;
+        if (copy != null) {
+          const r = pdoParse(this.st, em, copy, { ...ctx, role: 'source', position: pos, isEpr: pos >= 8, register: false });
+          const caps = this.st.capabilities.epr.source;
+          const prior = caps?.pdoMeta[pos];
+          // 已捕获的最近 EPR 能力优先；副本不能放宽广告电流/功率限制。
+          meta = prior ?? r.meta; ref = caps?.pdos[pos] ?? r.ref;
+          if (prior && prior.raw !== copy) this.warn('EPR_Request 的 PDO 副本与最近能力表不一致', 'PDO_COPY');
+          if (caps && !prior) this.warn('EPR_Request 指向最近 EPR 能力表中未提供的 PDO 槽位', 'PDO_COPY');
+          em.detail('PDO 副本', `引用 #${pos}，仅用于本次请求解码`);
+        }
+        this.request = rdoParse(this.st, em, data, { ...ctx, isEpr: true, meta, ref });
+        if (this.warnings.some(w => w.short === 'PDO_COPY')) this.request.valid = false;
       } else {
-        const r = pdoParse(this.st, em, data, { role: 'source', position: idx + 1, isEpr: true, revText: ctx.revText });
-        em.note(`EPR 能力副本 #${idx} · ${r.summary}`);
+        em.detail(`EPR_Request 对象 #${idx + 1}`, `0x${pdHex(data)}（请求的 PDO 副本）`);
       }
     } else if (t === 15) {
       // VDM 需要整条报文，由 decode() 统一调用 _vdm()，不会走到这里
       this._vdm(link);
     } else if (t === 3) {
       summary = bistParse(em, data, idx, ctx);
+      if ((ctx.revText === '2.0' || ctx.revText === '1.0') && (data >>> 28) <= 1) this.st.bist = { register: 255, totalBits: 0, bitErrors: 0 };
     } else if (t === 10) {
-      summary = eprModeParse(em, data, idx);
+      summary = eprModeParse(em, data, idx, ctx);
     } else if (t === 5) {
       em.object('Battery_Status 数据对象（BSDO）');
       summary = batteryStatusParse(em, data);
     } else if (t === 6) {
-      summary = alertParse(em, data, idx);
+      summary = alertParse(em, data, idx, ctx);
     } else if (t === 8) {
       em.object('Enter_USB 数据对象（EUDO）');
-      summary = enterUsbParse(em, data);
+      summary = enterUsbParse(em, data, ctx);
     } else if (t === 11) {
-      summary = sourceInfoParse(em, data, idx);
+      summary = sourceInfoParse(em, data, idx, ctx);
     } else if (t === 12) {
       em.object('Revision 数据对象（RMDO）');
       summary = revisionParse(em, data);
@@ -4624,10 +5479,7 @@ class PdDecoder {
   /** VDM：把整条报文的全部数据对象交给 vdmParse（含 plug 信令的线缆 VDO） */
   _vdm(link) {
     if (!this.dataWords.length) { this.em.note('VDM 未携带数据对象'); return; }
-    const ctx = {
-      rev: this.headRev(), revText: this.headRevText(),
-      sop: this.packetSop, link, role: this.resolvedRole,
-    };
+    const ctx = this._context(link);
     vdmParse(this.st, this.em, this.dataWords, ctx);
   }
 
@@ -4658,6 +5510,14 @@ class PdDecoder {
     const dataSize = extHead & 0x1FF;
 
     this.extHeadInfo = { chunked, chunkNum, reqChunk, dataSize };
+    if (extHead === null) this.stateValid = false;
+    if (extHead & 0x200) this.warn('Extended Header 的 B9 为 Reserved', 'RESERVED');
+    if (dataSize > 260 || chunkNum > 9 || (!chunked && (reqChunk || chunkNum)) || (reqChunk && dataSize)) {
+      this.warn('Extended Header 的 Data Size / Chunk Number / Request Chunk 组合无效', 'EXT_HEADER');
+      this.stateValid = false;
+    }
+    if (chunked && !this.headCount()) { this.warn('Chunked 消息必须携带至少 1 个数据对象', 'COUNT'); this.stateValid = false; }
+    if (!chunked && link === 'cable') { this.warn('线缆扩展消息必须使用 Chunked 格式', 'EXT_HEADER'); this.stateValid = false; }
 
     const hdrBytes = [this.head & 0xFF, (this.head >>> 8) & 0xFF];
     const extBytes = [extHead & 0xFF, (extHead >>> 8) & 0xFF];
@@ -4669,7 +5529,9 @@ class PdDecoder {
       if (r.ok) { pick = r; break; }
       if (!pick) pick = r;                    // 都不匹配时用第一个候选兜底
     }
-    if (!pick.ok) pick = this._readExtTry(cands[0], hdrBytes, extBytes);   // 让 idx 停在正确位置
+    this.idx = pick.endIdx;
+    this.warnings.push(...pick.warnings);
+    if (pick.compat) this.warn('非分块扩展消息含规范之外的补齐字节，已根据 CRC 识别并保留', 'EXT_PADDING');
 
     const { payload, pad, bytes } = pick;
     const payloadBytes = bytes.slice(0, payload);
@@ -4680,22 +5542,20 @@ class PdDecoder {
     // 「数据对象 (hex)」一栏：按 4 字节回填，让界面与其它消息一致地显示原始字节。
     // 末组不足 4 字节时补 0 只为凑齐对象视图，真实字节另由 dataBytesOverride 给出。
     for (let i = 0; i < body.length; i += 4) {
+      if (body.slice(i, i + 4).some(b => b === null)) { this.dataWords.push(null); continue; }
       this.dataWords.push((body[i] | ((body[i + 1] ?? 0) << 8)
         | ((body[i + 2] ?? 0) << 16) | ((body[i + 3] ?? 0) << 24)) >>> 0);
     }
     this.dataBytesOverride = body;
 
-    const ctx = { rev: this.headRev(), revText: this.headRevText(), sop: this.packetSop, link, sopName: this.packetSop };
-    const bk = {
-      bytes: payloadBytes, off: pick.off, dataSize, chunked, chunkNum, reqChunk,
-      _carry: this.st.extCarry,
-    };
-
-    const em2 = this.em;
-    const s = extendedParse(this.st, em2, t, bk, ctx);
-    this.st.extCarry = bk._tail ?? null;
-    if (s) em2.note(s);
-    if (pick.off > 0 && !bk._tail) em2.detail('说明', `本包是分块数据的第 ${chunkNum + 1} 块（从整块偏移 ${pick.off} 字节处开始）`);
+    this.extBlock = { bytes: payloadBytes, off: pick.off, dataSize, chunked, chunkNum, reqChunk };
+    if (bytes.slice(payload).some(b => b !== 0)) this.warn('扩展消息的补齐字节必须为 0', 'PADDING');
+    if (chunked) {
+      const expected = reqChunk ? 1 : Math.ceil((2 + Math.min(Math.max(dataSize - pick.off, 0), 26)) / 4);
+      if (this.headCount() !== expected || (!reqChunk && (pick.off >= dataSize && !(dataSize === 0 && chunkNum === 0)))) {
+        this.warn('扩展分块的长度/编号与总 Data Size 不匹配', 'EXT_LENGTH'); this.stateValid = false;
+      }
+    }
 
     return {
       extHead,
@@ -4707,18 +5567,17 @@ class PdDecoder {
   /** 按「(数据字节数, 补齐字节数, 整块偏移)」列出可尝试的几种读法，顺序即优先级 */
   _extCandidates({ chunked, chunkNum, reqChunk, dataSize }) {
     const out = [];
-    if (reqChunk) return [{ payload: 0, pad: 0, off: 0 }];        // 请求分块：Data Size 必为 0
+    if (reqChunk) return [{ payload: 0, pad: Math.max(this.headCount() * 4 - 2, 0), off: chunkNum * 26 }];
     if (chunked) {
       const cap = Math.max(this.headCount() * 4 - 2, 0);          // 分块消息的计数位有效，用它定本块长度
       const off = chunkNum * EXT_MSG_LIMITS.chunkLen;
-      const payload = Math.min(Math.max(dataSize - off, 0), cap);
+      const payload = Math.min(Math.max(dataSize - off, 0), cap, 26);
       return [{ payload, pad: Math.max(cap - payload, 0), off }];
     }
     const size = Math.min(dataSize, EXT_MSG_LIMITS.maxLen);
     out.push({ payload: size, pad: 0, off: 0 });                 // 规范读法：非分块不补齐
     const padded = Math.max(Math.ceil((2 + size) / 4) * 4 - 2, 0);
-    if (padded > size) out.push({ payload: size, pad: padded - size, off: 0 });   // 兼容补齐 00h 的发送方
-    if (size > 0) out.push({ payload: Math.max(size - 3, 0), pad: 0, off: 0 });   // 兼容少补的发送方
+    if (padded > size) out.push({ payload: size, pad: padded - size, off: 0, compat: true });
     return out;
   }
 
@@ -4731,17 +5590,134 @@ class PdDecoder {
     for (let i = 0; i < n; i++) bytes[i] = this._byte();
     const crc = this._word();
     const calc = crc32(new Uint8Array(hdrBytes.concat(extBytes, bytes)));
-    const ok = crc === calc;
-    if (!ok) { this.idx = saveIdx; this.warnings.length = saveWarn; }
-    return { ...cand, bytes, crc, calc, ok };
+    const warnings = this.warnings.slice(saveWarn);
+    const ok = crc !== null && bytes.every(b => b !== null) && crc === calc && !warnings.length;
+    const endIdx = this.idx;
+    this.idx = saveIdx; this.warnings.length = saveWarn;
+    return { ...cand, bytes, crc, calc, ok, endIdx, warnings };
+  }
+
+  _parseExtended(t, link, frameValid) {
+    const bk = this.extBlock;
+    if (!bk) return;
+    const em = this.em;
+    em.object('Extended Header');
+    for (const [key, value] of Object.entries(this.extHeadInfo)) em.detail(key, value);
+    if (bk.bytes.some(b => b === null)) {
+      this.extAssembly = { status: 'truncated', complete: false, totalBytes: bk.dataSize };
+      em.note('扩展数据被截断或包含非法符号');
+      return;
+    }
+    if (bk.reqChunk) {
+      this.extAssembly = { status: 'request', chunkNum: bk.chunkNum, complete: false };
+      em.note(`请求扩展消息分块 #${bk.chunkNum}`);
+      return; // Request Chunk 不是对应消息的数据块
+    }
+    let assembled = bk;
+    if (bk.chunked) {
+      const key = `${this.headPowerRole()}:${t}`;
+      let transfer = this.st.chunks[key];
+      if (bk.chunkNum === 0 && !this.isRetry) transfer = { size: bk.dataSize, bytes: [], next: 0, parts: {} };
+      if (transfer && transfer.size === bk.dataSize && transfer.parts[bk.chunkNum]?.join() === bk.bytes.join()) {
+        // 同一分块的重传保持已经收到的后续分块。
+      } else if (transfer && transfer.size === bk.dataSize && transfer.next === bk.chunkNum && transfer.bytes.length === bk.off) {
+        transfer.parts[bk.chunkNum] = bk.bytes.slice();
+        transfer.bytes.push(...bk.bytes); transfer.next++;
+      } else {
+        transfer = null;
+        this.warn('扩展分块缺少前块、顺序错误或总长度变化，不能重组', 'CHUNK_GAP');
+      }
+      const complete = !!(frameValid && this.stateValid && transfer && transfer.bytes.length === bk.dataSize);
+      this.extAssembly = { status: complete ? 'complete' : 'partial', complete, chunkNum: bk.chunkNum,
+        receivedBytes: transfer?.bytes.length ?? bk.bytes.length, totalBytes: bk.dataSize,
+        bytes: complete ? transfer.bytes.slice() : null };
+      if (frameValid && this.stateValid) {
+        if (transfer) this.st.chunks[key] = transfer;
+        else delete this.st.chunks[key];
+      }
+      if (!complete) {
+        em.detail('分块', `#${bk.chunkNum}，偏移 ${bk.off}，${bk.bytes.length}/${bk.dataSize} 字节，尚未完整重组`);
+        // 部分块仅展示原始内容，避免半个 PDO 或字符串被解释成完整能力。
+        em.detail('分块数据', bk.bytes.map(b => b === null ? '??' : pdHex(b, 2)).join(' '));
+        em.note(`扩展消息分块 #${bk.chunkNum}（待重组）`);
+        return;
+      }
+      assembled = { ...bk, off: 0, bytes: transfer.bytes.slice(), complete: true };
+      em.detail('重组', `已按顺序重组 ${transfer.next} 块，共 ${bk.dataSize} 字节`);
+    } else {
+      const complete = frameValid && this.stateValid;
+      this.extAssembly = { status: complete ? 'complete' : 'invalid', complete, receivedBytes: bk.bytes.length,
+        totalBytes: bk.dataSize, bytes: complete ? bk.bytes.slice() : null };
+    }
+    if (!this.messageDefined) {
+      em.detail('Reserved 扩展数据', assembled.bytes.map(b => pdHex(b, 2)).join(' '));
+      em.note('该消息类型在选定规范中为 Reserved'); return;
+    }
+    if (t === 17 || t === 18) {
+      const capRole = t === 17 ? 'source' : 'sink';
+      this.st.pdos[capRole] = {}; this.st.pdoMeta[capRole] = {};
+      const bytes = assembled.bytes;
+      const maxBytes = this.specRevision ? 44 : 52;
+      if (bytes.length < 4 || bytes.length % 4 || bytes.length > maxBytes) this.stateValid = false;
+    }
+    const s = extendedParse(this.st, em, t, assembled, this._context(link));
+    if (t === 17 || t === 18) {
+      const capRole = t === 17 ? 'source' : 'sink';
+      this._validateCapabilities(capRole);
+      this._storeCapabilities('epr', capRole);
+      if (link !== 'port' || this.warnings.some(w => w.short === 'EXT_FIELD')) this.stateValid = false;
+    }
+    if (t === 16 && (assembled.bytes.length !== 2 || link !== 'port')) this.stateValid = false;
+    if (frameValid && this.stateValid) this.extCompleteBytes = assembled.bytes;
+    if (s) em.note(s);
   }
 
   /* ────────────────────────── 特殊短报文 ────────────────────────── */
+
+  /** PD 2.0 Figure 5-35/36: 1024 raw PRBS-8 bits, without Header/CRC/EOP. */
+  _bistFrame(raw, channel, off, previous) {
+    this.packetSeq++;
+    this.text = `#${this.packetSeq} (${(raw.startSample / this.sampleRate * 1000).toFixed(4)}ms): BIST_Test_Frame`;
+    this.st = JSON.parse(JSON.stringify(previous));
+    const state = this.st.bist;
+    let register = state.register, errors = 0;
+    const bytes = new Array(128).fill(0);
+    for (let i = 0; i < 1024; i++) {
+      const bit = this.bits[off + i] & 1;
+      const next = ((register >>> 7) ^ (register >>> 5) ^ (register >>> 4) ^ (register >>> 3)) & 1;
+      // Figure 5-35 的 Transmit out 位于反馈节点，不是寄存器 bit7。
+      if (bit !== next) errors++;
+      register = ((register << 1) & 255) | next;
+      bytes[i >>> 3] |= bit << (i & 7);
+    }
+    Object.assign(state, { register, totalBits: state.totalBits + 1024, bitErrors: state.bitErrors + errors });
+    this.linkStates.set(`${channel}:${this.packetSop}`, this.st);
+    this.dataBytesOverride = bytes;
+    this.em.object('BIST Test Frame');
+    this.em.detail('PRBS-8', 'x⁸ + x⁶ + x⁵ + x⁴ + 1，初值 FFh，帧间连续');
+    this.em.detail('位数', 1024);
+    this.em.detail('本帧错误位', errors);
+    this.em.detail('累计错误位', state.bitErrors);
+    this.em.note(`BIST PRBS-8 测试帧：1024 位，${errors} 个错误位`);
+    return this._finish(raw, channel, { sop: this.packetSop, msgType: 'BIST_Test_Frame', msgTypeRaw: null, msgKind: 'test',
+      role: null, header: null, extHeader: null, msgId: null, rev: 2, revText: '2.0', powerRole: null, dataRole: null,
+      link: LINK_OF_SOP[this.packetSop], nObjects: 0, crc: null, crcCalc: null, crcOk: null, eop: null,
+      bist: { bits: 1024, bitErrors: errors, totalBits: state.totalBits, totalBitErrors: state.bitErrors }, category: 'data' });
+  }
 
   _specialPacket(raw, channel) {
     this.packetSeq++;
     const tms = raw.startSample / this.sampleRate * 1000;
     this.text = `#${this.packetSeq} (${tms.toFixed(4)}ms): ${this.specialPacket}`;
+    for (const key of this.linkStates.keys()) {
+      if (key.startsWith(`${channel}:`) && (this.specialPacket === 'Hard Reset' || key !== `${channel}:SOP`)) this.linkStates.delete(key);
+    }
+    this.st = this.linkStates.get(`${channel}:SOP`) ?? createState();
+    if (this.specialPacket === 'Hard Reset') {
+      this.channelRoles.delete(channel); this.lastSopPowerRole = 'SRC';
+      this.st.epr = pdCreateEprState('spr');
+      this.linkStates.set(`${channel}:SOP`, this.st);
+    }
     return this._finish(raw, channel, {
       sop: this.specialPacket,
       msgType: this.specialPacket,
@@ -4765,13 +5741,14 @@ class PdDecoder {
         ? '硬复位：发送方要求链路立即回到默认状态并重新建链'
         : '线缆复位：复位线缆 e-Marker 的 VCONN 相关逻辑',
       category: 'control',
+      epr: JSON.parse(JSON.stringify(this.st.epr)),
     });
   }
 
   /* ────────────────────────── 组装 packet ────────────────────────── */
 
   _finish(raw, channel, o) {
-    const summary = this.summaryParts.filter(Boolean).join(' ; ');
+    const summary = this.summaryParts.filter(Boolean).join(' ; ') || o.summary || '';
     if (summary) this.text += ` - ${summary}`;
 
     let bytes;
@@ -4779,7 +5756,7 @@ class PdDecoder {
       bytes = this.dataBytesOverride.slice();      // 扩展消息：线上真实字节（可能不是 4 的整数倍）
     } else {
       bytes = [];
-      for (const w of this.dataWords) bytes.push(w & 0xFF, (w >>> 8) & 0xFF, (w >>> 16) & 0xFF, (w >>> 24) & 0xFF);
+      for (const w of this.dataWords) bytes.push(...(w === null ? [null, null, null, null] : [w & 0xFF, (w >>> 8) & 0xFF, (w >>> 16) & 0xFF, (w >>> 24) & 0xFF]));
     }
 
     return {
@@ -4795,7 +5772,7 @@ class PdDecoder {
       bitrate: raw.bitrate,
       dataWords: this.dataWords.slice(),
       dataBytes: bytes,
-      dataHex: bytes.map((b) => b.toString(16).padStart(2, '0').toUpperCase()).join(' '),
+      dataHex: bytes.map((b) => b === null ? '??' : b.toString(16).padStart(2, '0').toUpperCase()).join(' '),
       details: this.details,
       warnings: this.warnings.slice(),
       text: this.text,
@@ -4886,7 +5863,7 @@ const YIELD_BUDGET_MS = 20;
 /**
  * @param {AtkccCapture} capture
  * @param {number} channel
- * @param {{inflate:Function, onProgress?:Function, shouldStop?:()=>boolean, sampleRate?:number}} opts
+ * @param {{inflate:Function, onProgress?:Function, shouldStop?:()=>boolean, sampleRate?:number, specRevision?:'2.0'|'3.0'|'3.1'|'3.2'|null}} opts
  * @returns {Promise<{packets:object[], stats:object}>}
  */
 async function decodeChannel(capture, channel, opts) {
@@ -4899,7 +5876,7 @@ async function decodeChannel(capture, channel, opts) {
   const sampleRate = rate.rate;
 
   const bmc = new BmcDecoder({ sampleRate });
-  const pd = new PdDecoder({ sampleRate });
+  const pd = new PdDecoder({ sampleRate, specRevision: opts.specRevision ?? null });
   const ex = new EdgeExtractor({ bitOrder: opts.bitOrder || 'lsb' });
   const packets = [];
 
@@ -4987,6 +5964,7 @@ async function decodeChannel(capture, channel, opts) {
     packets,
     stats: {
       channel,
+      specRevision: opts.specRevision ?? null,
       totalSamples: sampleBase,
       durationSec: sampleBase / sampleRate,
       sampleRate,
@@ -5100,12 +6078,10 @@ async function resolveSampleRate(capture, channel, inflate, opts = {}) {
  *   p.ackType —— 被确认报文的类型名（便于展示）
  *
  * 判据来源：
- *   ① **紧邻性**——GoodCRC 是对报文的即时应答，必然落在被确认报文之后最近处。
- *      向前找最近一条「非 GoodCRC 且方向相反」的报文，即物理上唯一合理的对象。
- *      这一条也能覆盖 Hard Reset / Cable Reset 这类没有 MessageID 的报文。
+ *   ① 向前找最近一条同 SOP、方向相反的普通报文；复位信令不参与确认配对。
  *   ② **MessageID**——PD 规范要求 GoodCRC 的 MessageID 与被确认报文相同。
- *      用它校验 ①；若邻近报文 CRC 完好却 ID 对不上（说明中间夹了别的方向的报文），
- *      再向后找同 ID 的那条。找不到仍按邻近关系配对。
+ *      邻近报文 CRC 未报错却 ID 对不上时，在窗口内继续向前找同 ID 的报文。
+ *      没有匹配对象时保留未配对状态。
  *
  * 注意不能只用 ②：被确认报文本身是坏包时 MessageID 不可信，若拿它去查
  * 「最近登记的同 ID 报文」，会误配到几十条报文之前的一条陈旧记录上。
@@ -5116,18 +6092,20 @@ function linkGoodCrc(packets) {
   const pick = (p, needId) => {
     for (let j = p.index - 1; j >= 0 && j > p.index - ACK_WINDOW; j--) {
       const q = packets[j];
-      if (q.msgType === 'GoodCRC' || q.role === p.role) continue;
+      if (q.msgType === 'GoodCRC' || q.role === p.role || q.sop !== p.sop || q.msgKind === 'special') continue;
       if (needId && q.crcOk !== false && q.msgId !== p.msgId) continue;
       return q;
     }
     return null;
   };
   for (const p of packets) {
+    if (p.msgType === 'GoodCRC') { delete p.ackOf; delete p.ackType; }
     if (p.msgType !== 'GoodCRC' || p.crcOk === false) continue;
     let ref = pick(p, false);
     if (!ref) continue;
     // 邻近报文 CRC 完好但 MessageID 对不上 → 改按 MessageID 精确匹配
-    if (ref.crcOk !== false && ref.msgId !== p.msgId) ref = pick(p, true) || ref;
+    if (ref.crcOk !== false && ref.msgId !== p.msgId) ref = pick(p, true);
+    if (!ref) continue;
     p.ackOf = ref.index;
     p.ackType = ref.msgType;
   }
@@ -5137,13 +6115,22 @@ function linkGoodCrc(packets) {
 
 /** 取某个采样点处的 VBUS/IBUS（阶梯保持） */
 function busAt(bus, sample) {
-  if (!bus || !bus.length) return { vbus: 0, ibus: 0 };
+  if (!bus || !bus.length || sample < bus[0].sample) return { vbus: null, ibus: null };
   let lo = 0, hi = bus.length - 1, ans = 0;
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
     if (bus[mid].sample <= sample) { ans = mid; lo = mid + 1; } else hi = mid - 1;
   }
   return bus[ans];
+}
+
+/** 保留容器逐报文测量；仅在缺失时用 ADC 序列阶梯保持回填。 */
+function attachBusValues(packets, bus) {
+  for (const p of packets) {
+    const b = busAt(bus, p.startSample);
+    if (!Number.isFinite(p.vbus)) p.vbus = Number.isFinite(b.vbus) ? b.vbus : null;
+    if (!Number.isFinite(p.ibus)) p.ibus = Number.isFinite(b.ibus) ? b.ibus : null;
+  }
 }
 
 /**
@@ -5975,6 +6962,8 @@ function ufcsSplitFrames(bytes, off, withCrc, maxFrames = 64) {
 function ufcsLocateFrames(blob, { maxPrefix = 16 } = {}) {
   const n = blob.length;
   if (n < 3) return null;                 // 最小的一帧是「控制消息 + 无 CRC」= 3 字节
+  // 状态事件的时间戳偶尔也能凑成合法消息头，必须在穷举之前排除。
+  if (ufcsParseEvent(blob)) return null;
 
   // ── 0. 先试分析仪容器布局（见下方 ufcsParseRecord）──
   // 认得出来就用它：它额外给出「物理链路」与容器长度域，是穷举拿不到的信息。
@@ -7449,9 +8438,9 @@ class PowerzCapture {
    * 解析成报文列表。产出与 `core/pipeline.js#decodeChannel()` 同形的 `{packets, stats}`，
    * 因此界面侧两条路径可以共用同一段渲染代码。
    *
-   * @param {{onProgress?:Function, shouldStop?:()=>boolean}} [opts]
+   * @param {{onProgress?:Function, shouldStop?:()=>boolean, specRevision?:'2.0'|'3.0'|'3.1'|'3.2'|null}} [opts]
    */
-  async decode({ onProgress, shouldStop } = {}) {
+  async decode({ onProgress, shouldStop, specRevision = null } = {}) {
     const { db, kind, info } = this;
 
     // ── 1. 取全部行并按时间排序（导出文件一般已有序，这里不依赖它）──
@@ -7459,7 +8448,7 @@ class PowerzCapture {
     const tableRows = this.meta.tableRows || 0;
     let i = 0;
     for (const r of this._tableRows()) {
-      rows.push({ t: Number(r[0]) || 0, vbus: Number(r[1]) || 0, ibus: Number(r[2]) || 0, raw: r[3] });
+      rows.push({ t: Number(r[0]) || 0, vbus: powerzMeasurement(r[1]), ibus: powerzMeasurement(r[2]), raw: r[3] });
       if ((i++ & 2047) === 2047) {
         onProgress?.({ phase: 'read', ratio: tableRows ? i / tableRows : 0, packets: 0 });
         await yieldToMain();
@@ -7518,16 +8507,12 @@ class PowerzCapture {
 
     if (kind === 'pd') {
       // 与 .atkcc 路径共用同一个解码器 → 跨报文状态（PDO 登记表、SOP 电源角色）语义一致
-      const pd = new PdDecoder({ sampleRate: POWERZ_RATE });
-      const msgs = events.filter((e) => e.kind === 'msg');
+      const pd = new PdDecoder({ sampleRate: POWERZ_RATE, specRevision });
+      const msgs = events.filter((e) => ['msg', 'connect', 'disconnect'].includes(e.kind));
       for (let k = 0; k < msgs.length; k++) {
         const ev = msgs[k];
+        if (ev.kind !== 'msg') { pd.reset({ preserveSequence: true }); continue; }
         const wire = ev.wire;
-        // 自检：Header 声明的对象数应当与 blob 给的长度吻合，不吻合说明拆帧错了
-        if (wire.length >= 2) {
-          const hdr = wire[0] | (wire[1] << 8);
-          if (2 + 4 * ((hdr >> 12) & 7) !== wire.length) badWire++;
-        } else badWire++;
 
         const pkt = pd.decodeWire(wire, {
           sop: SOP_BY_BYTE[ev.sopByte] ?? 'SOP',
@@ -7536,7 +8521,9 @@ class PowerzCapture {
           crcRecorded: false,
           extra: { sopByte: ev.sopByte, powerz: true },
         });
-        if (pkt) packets.push(pkt);
+        // 长度判断统一由 PD 库完成：Unchunked Extended 的 NDO 为保留域。
+        if (!pkt || pkt.warnings.some(w => ['LENGTH', 'TRUNC', 'SYM', 'EXT_LENGTH', 'EXT_HEADER'].includes(w.short))) badWire++;
+        if (pkt) { pkt.vbus = ev.vbus; pkt.ibus = ev.ibus; packets.push(pkt); }
 
         if ((k & 255) === 255) {
           onProgress?.({ phase: 'decode', ratio: (k + 1) / msgs.length, packets: packets.length });
@@ -7567,7 +8554,7 @@ class PowerzCapture {
             layout: b.layout,
             channel: 0,
           });
-          if (pkt) packets.push(pkt);
+          if (pkt) { pkt.vbus = b.vbus; pkt.ibus = b.ibus; packets.push(pkt); }
           if ((++k & 255) === 0) {
             onProgress?.({ phase: 'decode', ratio: k / totalFrames, packets: packets.length });
             await yieldToMain();
@@ -7591,6 +8578,7 @@ class PowerzCapture {
       source: 'powerz',
       kind,
       protocol: info.protocol,
+      specRevision: kind === 'pd' ? specRevision : null,
       unsupported: info.unsupported || null,
       totalSamples,
       durationSec: totalSamples / POWERZ_RATE,
@@ -7634,18 +8622,26 @@ function toU8(raw) {
   return null;
 }
 
+/** NULL/缺失测量保持未知，数值 0 才表示实际测得零。 */
+function powerzMeasurement(value) {
+  if (value == null) return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
 /* ══════ src/js/core/pdstream.js ══════ */
 /**
- * pdstream.js — POWER-Z 的 `.pdStream` 容器
+ * pdstream.js — POWER-Z 的 `.pdStream` / `.ufcsStream` 容器
  *
  * ── 这是什么 ────────────────────────────────────────────────────────
- * 同一份抓包，POWER-Z 上位机可以导出两种文件：
+ * POWER-Z 上位机可以导出 SQLite 或独立记录流：
  *
  *   · `.sqlite`   三张表：`pd_chart`（ADC 采样序列）、`pd_table`（事件行 + `Raw` blob）、
  *                 `pd_table_key`（会话密钥，导出文件里为空）
  *   · `.pdStream` **只有 `pd_table` 那部分**：二进制、无文件头 / 无索引 / 无校验和
+ *   · `.ufcsStream` 同样的外层布局，payload 来自 `ufcs_table.Raw`
  *
- * 所以这里**不是第三种协议**：报文语义照样交给 `PdDecoder`（PD）那一套，
+ * 协议由 Raw 的已知记录布局确定，报文语义交给对应的 PD / UFCS 解码器，
  * 本文件只负责把「表格」从二进制里读出来，然后交给 `PowerzCapture` 现成的解码流程。
  * 与 `.sqlite` 的唯一实质差别是**没有 ADC 波形**（没有 `pd_chart`），
  * 于是时间轴没有曲线可画 —— 界面已有的「这份抓包没有模拟量轨迹数据」分支正好接住。
@@ -7667,14 +8663,16 @@ function toU8(raw) {
  * 文件开头就是一条普通记录，所以只能**靠结构自证**：按上面的布局走一遍，要求
  *   ① 每一步长度都落在合理区间；
  *   ② **结束位置正好等于文件长度**（多一个字节都不认）；
- *   ③ Time 有限、非负、单调不减；Vbus / Ibus 在物理量程内。
- * 三条同时成立才认。这个判据很强（随机数据几乎不可能正好走完），
+ *   ③ Time 有限、非负、单调不减；Vbus / Ibus 在物理量程内；
+ *   ④ 至少三条记录，且可识别的 Raw 属于同一种协议。
+ * 外层结构相同不能证明是 PD，必须同时检查 Raw 内容。结构检查
  * 也顺带排除了 ZIP（首 4 字节 `PK\x03\x04` = 0x504b0304，远超长度上限）与 SQLite
  * （`SQLite format 3` 同理）。
  *
  * 反过来，把行写成流也支持（`writePdStream`）：测试要造样本，用户也可能想把
  * 手里的 `.sqlite` 转成更小的 `.pdStream`。
  */
+
 
 
 
@@ -7690,15 +8688,12 @@ const PDSTREAM_MAX_PAYLOAD = 4096;
  */
 const MIN_RECORDS = 3;
 
-/** 认容器时最多走多少条记录（防御超大文件：真样本 3677 条，这里给足两个数量级） */
-const SNIFF_MAX_RECORDS = 200000;
-
 /** 物理量程兜底（PD 3.1 EPR 上限 48V / 5A，各留一倍余量） */
 const MAX_VOLT = 120;
 const MAX_AMP = 20;
 
 /**
- * 把 `.pdStream` 读成记录数组。
+ * 把 POWER-Z 记录流读成数组（函数名保留以兼容原调用）。
  *
  * 不做任何猜测：任何一步对不上就抛错并说明**卡在哪里**（偏移 + 原因），
  * 这样「打不开」时能直接看出是文件被截断、还是根本不是这个格式。
@@ -7750,48 +8745,78 @@ function readPdStream(u8) {
 }
 
 /**
- * 只看结构，判断是不是 `.pdStream`。不抛错（认不出就 false），不复制字节。
- *
- * 调用点：界面/CLI 的格式分流。它排在 `sniffPowerz` 之后，所以正常不会碰到
- * SQLite 文件；但为了防御「随便丢进来一个大文件」，走满 `SNIFF_MAX_RECORDS`
- * 就先认下来 —— 真样本不会有那么多条记录，而走到这一步本身已经说明结构自洽。
+ * 检查完整外层结构与 Raw 协议。未知、混合或截断的流返回 null，不复制字节。
  *
  * @param {Uint8Array} u8
- * @returns {boolean}
+ * @returns {'pd'|'ufcs'|null}
  */
-function sniffPdStream(u8) {
-  if (!(u8 instanceof Uint8Array)) return false;
-  if (u8.length < PDSTREAM_REC_FIXED * MIN_RECORDS) return false;
+function sniffPowerzStream(u8) {
+  if (!(u8 instanceof Uint8Array)) return null;
+  if (u8.length < PDSTREAM_REC_FIXED * MIN_RECORDS) return null;
   try {
     const view = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
     let off = 0;
     let n = 0;
     let lastTime = -Infinity;
-    while (off < u8.length && n < SNIFF_MAX_RECORDS) {
-      if (off + PDSTREAM_REC_FIXED > u8.length) return false;
+    let kind = null;
+    while (off < u8.length) {
+      if (off + PDSTREAM_REC_FIXED > u8.length) return null;
       const len = view.getUint32(off, false);
-      if (len === 0 || len > PDSTREAM_MAX_PAYLOAD) return false;
+      if (len === 0 || len > PDSTREAM_MAX_PAYLOAD) return null;
       const end = off + 4 + len + 24;
-      if (end > u8.length) return false;
+      if (end > u8.length) return null;
       const time = view.getFloat64(off + 4 + len, false);
       const vbus = view.getFloat64(off + 12 + len, false);
       const ibus = view.getFloat64(off + 20 + len, false);
-      if (!Number.isFinite(time) || time < 0 || time < lastTime) return false;
-      if (!Number.isFinite(vbus) || vbus < 0 || vbus > MAX_VOLT) return false;
-      if (!Number.isFinite(ibus) || Math.abs(ibus) > MAX_AMP) return false;
+      if (!Number.isFinite(time) || time < 0 || time < lastTime) return null;
+      if (!Number.isFinite(vbus) || vbus < 0 || vbus > MAX_VOLT) return null;
+      if (!Number.isFinite(ibus) || Math.abs(ibus) > MAX_AMP) return null;
+      const rowKind = powerzStreamRowKind(u8.subarray(off + 4, off + 4 + len));
+      if (rowKind) {
+        if (kind && kind !== rowKind) return null;
+        kind = rowKind;
+      }
       lastTime = time;
       off = end;
       n++;
     }
-    // 走满上限（超大文件）或正好走完 —— 两种都算认出来；中途对不上早在上面 return false 了
-    return n >= MIN_RECORDS;
+    return n >= MIN_RECORDS ? kind : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
+/** 两种流共享外层结构，协议由 Raw 的已知记录布局确定，不能只看扩展名。 */
+function powerzStreamRowKind(raw) {
+  if (ufcsParseRecord(raw)) return 'ufcs';
+  const pd = parsePowerzBlob(raw);
+  if (!pd.truncated && pd.events.length && pd.events.every(e => e.kind !== 'msg'
+    || (e.sopByte <= 2 && pdStreamWireLengthValid(e.wire)))) return 'pd';
+  if (ufcsParseEvent(raw)) return 'ufcs';
+  return null;
+}
+
+function pdStreamWireLengthValid(wire) {
+  if (wire.length < 2) return false;
+  if ((wire[1] & 0x80) && ((wire[0] >>> 6) & 3) >= 2) {
+    if (wire.length < 4) return false;
+    if (!(wire[3] & 0x80)) {
+      const size = wire[2] | ((wire[3] & 1) << 8);
+      if (size > 260) return false;
+      const end = 4 + size;
+      return wire.length === end || wire.length === 2 + Math.ceil((2 + size) / 4) * 4 && wire.slice(end).every(b => b === 0);
+    }
+  }
+  return wire.length === 2 + 4 * ((wire[1] >>> 4) & 7);
+}
+
+/** 兼容原有 PD-only 调用；UFCS 流不会被识别为 PD。 */
+function sniffPdStream(u8) { return sniffPowerzStream(u8) === 'pd'; }
+function sniffUfcsStream(u8) { return sniffPowerzStream(u8) === 'ufcs'; }
+
 /**
- * 把行写成 `.pdStream` 字节。行的形状与 `pd_table` 一致（`{time, vbus, ibus, raw}`），
+ * 把 PD / UFCS 表行写成共享的记录流字节（函数名保留以兼容原调用）。
+ * 行的形状为 `{time, vbus, ibus, raw}`，
  * 时间必须是非减的（写入前按 Time 排序，与 sqlite 路径的读法保持一致）。
  *
  * @param {Array<{time:number, vbus:number, ibus:number, raw:Uint8Array|ArrayBuffer}>} rows
@@ -7824,14 +8849,14 @@ function writePdStream(rows) {
 /* ────────────────────────── 抓包对象 ────────────────────────── */
 
 /**
- * `.pdStream` 只有一张「表」。这里做一个**只读的虚拟表适配器**，
+ * 记录流只有一张「表」。这里做一个**只读的虚拟表适配器**，
  * 形状对齐 `SqliteReader` 的那几个方法，于是 `PowerzCapture` 的构造与解码流程
  * 一行都不用改（报文语义、事件拆分、CRC 口径全部复用）。
  */
 class PdStreamTable {
-  constructor(parsed) {
+  constructor(parsed, kind) {
     this.parsed = parsed;
-    this.name = POWERZ_KINDS.pd.table;
+    this.name = POWERZ_KINDS[kind].table;
     this.rows_ = parsed.records;
   }
 
@@ -7849,14 +8874,14 @@ class PdStreamTable {
   writeVersion = null;
 }
 
-class PdStreamCapture extends PowerzCapture {
+class PowerzStreamCapture extends PowerzCapture {
   /**
    * @param {Uint8Array} u8
    * @param {ReturnType<typeof readPdStream>} parsed
    */
-  constructor(u8, parsed) {
-    super(new PdStreamTable(parsed), 'pd', u8);
-    this.container = 'pdstream';
+  constructor(u8, parsed, kind) {
+    super(new PdStreamTable(parsed, kind), kind, u8);
+    this.container = kind === 'ufcs' ? 'ufcsstream' : 'pdstream';
     this.parsed = parsed;
 
     const m = this.meta;
@@ -7867,8 +8892,9 @@ class PdStreamCapture extends PowerzCapture {
     m.durationSec = totalSamples / POWERZ_RATE;
     m.channels[0].totalSamples = totalSamples;
 
-    m.title = 'POWER-Z · .pdStream';
-    m.container = 'pdstream';
+    const extension = kind === 'ufcs' ? '.ufcsStream' : '.pdStream';
+    m.title = `POWER-Z · ${extension}`;
+    m.container = this.container;
     m.sqlite = null;                                  // 不是 SQLite，别让界面去读页大小
     m.busLabels = [];                                 // 没有第三、第四路模拟量 → 也没有「差分线」档
     m.stream = {
@@ -7878,22 +8904,33 @@ class PdStreamCapture extends PowerzCapture {
       firstTime: parsed.records[0].time,
       lastTime: parsed.records[parsed.records.length - 1].time,
     };
-    m.sampleRateNote = 'POWER-Z 的 .pdStream 只有报文与毫秒时间戳，没有 ADC 波形；'
+    m.sampleRateNote = `POWER-Z 的 ${extension} 含报文、时间戳和逐报文测量值，没有 ADC 波形；`
       + '时间轴按「1 采样点 = 1 ms」映射（与同名的 .sqlite 一致）';
   }
 
   /**
    * @param {Uint8Array} u8
-   * @returns {PdStreamCapture}
+   * @returns {PowerzStreamCapture}
    */
   static open(u8) {
     const parsed = readPdStream(u8);                  // 认不出会抛错并指出卡在哪个偏移
-    return new PdStreamCapture(u8, parsed);
+    const kinds = new Set(parsed.records.map(r => powerzStreamRowKind(r.raw)).filter(Boolean));
+    if (kinds.size !== 1) throw new Error('POWER-Z 记录流的协议无法确定或混有 PD / UFCS 记录');
+    return new PowerzStreamCapture(u8, parsed, [...kinds][0]);
   }
 
   /** 覆写取行方式：流程照旧，只是行来自二进制流而不是 SQLite 表 */
   *_tableRows() {
     for (const r of this.parsed.records) yield [r.time, r.vbus, r.ibus, r.raw];
+  }
+}
+
+class PdStreamCapture extends PowerzStreamCapture {
+  constructor(u8, parsed) { super(u8, parsed, 'pd'); }
+  static open(u8) {
+    const cap = PowerzStreamCapture.open(u8);
+    if (cap.kind !== 'pd') throw new Error('这是 UFCS 记录流，不能按 USB PD 解析');
+    return new PdStreamCapture(u8, cap.parsed);
   }
 }
 
@@ -7980,7 +9017,9 @@ const CSV_EOL = '\r\n';
  * 界面顶栏、表格、详情面板与 CSV 用的是同一个（app.js 的 `fmtTime` 就是转发到这里）。
  */
 function csvClock(ms) {
-  const s = (Number(ms) || 0) / 1000;
+  // 先舍入到整数毫秒，再分解时/分/秒，保证 59.9996s 正确进位。
+  const value = Number(ms);
+  const s = Math.max(0, Math.round(Number.isFinite(value) ? value : 0)) / 1000;
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
   const sec = s % 60;
@@ -8000,7 +9039,7 @@ function csvHead(protocol) {
 /** 一条报文 → 一行单元格（顺序与 `csvHead` 严格对应） */
 function csvRow(p, protocol) {
   const ufcs = protocol === 'UFCS';
-  const num = (v, digits) => (Number.isFinite(v) ? v : 0).toFixed(digits);
+  const num = (v, digits) => Number.isFinite(v) ? v.toFixed(digits) : '';
   return [
     p.index,
     p.sop ?? '',
@@ -8038,9 +9077,9 @@ function csvText(packets, { protocol = 'USB PD', bom = true } = {}) {
   return (bom ? CSV_BOM : '') + lines.join(CSV_EOL);
 }
 
-/** 导出用的文件名主干：去掉抓包扩展名（`.atkcc` / `.sqlite` / `.db`） */
+/** 导出用的文件名主干：去掉所有支持的抓包扩展名。 */
 function csvBase(fileName) {
-  return String(fileName || 'pdscope').replace(/\.(atkcc|sqlite|db)$/i, '');
+  return String(fileName || 'pdscope').replace(/\.(atkcc|sqlite|db|pdstream|ufcsstream)$/i, '');
 }
 
 /**
@@ -8169,6 +9208,7 @@ function csvExport(doc, { limit = 0, bom = true } = {}) {
 
 
 
+
 /* ═══════════════════════ 运行形态探测 ═══════════════════════ */
 /**
  * 判定当前跑在哪种形态里。判据只有「地址协议」和「有没有 Tauri 注入的全局对象」，
@@ -8196,6 +9236,7 @@ const ENV = (() => {
 
 /* ═══════════════════════ 小工具 ═══════════════════════ */
 const $  = (s, r = document) => r.querySelector(s);
+const fmtMeasurement = (value) => Number.isFinite(value) ? value.toFixed(3) : '—';
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const el = (tag, cls, txt) => {
   const n = document.createElement(tag);
@@ -8221,7 +9262,7 @@ function toneOf(p) {
   if (p.msgType === 'VDM') return 'VDM';
   if (p.msgKind === 'custom') return 'Custom';     // UFCS 厂家自定义消息
   if (p.msgKind === 'ext') return 'Extended';
-  if (p.msgKind === 'data') return 'Data';
+  if (p.msgKind === 'data' || p.msgKind === 'test') return 'Data';
   if (p.msgKind === 'special') return 'Error';
   return 'Control';
 }
@@ -8249,6 +9290,7 @@ const linkTitle = () => (isUfcs() ? '物理链路' : 'SOP 类型');
 const linkValues = () => (isUfcs()
   ? [['D+', 'D+'], ['D-', 'D−'], ['D±', 'D±']]
   : [['SOP', 'SOP'], ["SOP'", 'SOP&prime;'], ["SOP''", 'SOP&Prime;'],
+    ["SOP' Debug", 'SOP&prime; Debug'], ["SOP'' Debug", 'SOP&Prime; Debug'],
     ['Hard Reset', 'Hard Reset'], ['Cable Reset', 'Cable Reset']]);
 /** 报文类别一栏的候选 */
 const catValues = () => (isUfcs()
@@ -8311,7 +9353,7 @@ function newFilters(protocol = 'pd') {
     roles: new Set(['SRC', 'SNK', 'Plug']),
     sops: new Set(ufcs
       ? ['D+', 'D-', 'D±']
-      : ['SOP', "SOP'", "SOP''", 'Hard Reset', 'Cable Reset']),
+      : ['SOP', "SOP'", "SOP''", "SOP' Debug", "SOP'' Debug", 'Hard Reset', 'Cable Reset']),
     cats: new Set(ufcs
       ? ['Control', 'Data', 'Custom', 'Error']
       : ['Control', 'Data', 'Extended', 'VDM', 'Error']),
@@ -8340,6 +9382,7 @@ function newDoc(file) {
     cap: null,
     meta: null,
     channel: 0,
+    specRevision: null,
     /** 本文件实际采用的采样率（声明 → 波形自检 → 兜底，见 pipeline.resolveSampleRate） */
     rate: 0,
     packets: [],
@@ -8470,7 +9513,7 @@ addEventListener('drop', (e) => {
  * 所以先按「名字像不像抓包」筛一道。但只要**一个都不像**，就把全部放进来交给内容嗅探
  * （`sniffPowerz` / ZIP 魔数）自己判 —— 免得用户把抓包改了个扩展名就再也打不开。
  */
-const CAPTURE_EXT = /\.(atkcc|sqlite|db|bin|zip)$/i;
+const CAPTURE_EXT = /\.(atkcc|sqlite|db|bin|zip|pdstream|ufcsstream)$/i;
 function pickCaptureFiles(list) {
   const all = [...list].filter((f) => f && (f.size > 0 || f.name));
   const named = all.filter((f) => CAPTURE_EXT.test(f.name));
@@ -8546,12 +9589,12 @@ async function loadContainer(file) {
 
     // ── 格式分流：只看文件内容（魔数 + 结构自证），不看扩展名 ──
     // 三种容器：ATK-C 的 ZIP 原始采样、POWER-Z 的 SQLite（`.sqlite`）、
-    // POWER-Z 的二进制记录流（`.pdStream`，本质就是 `.sqlite` 里那张 `pd_table`）。
+    // POWER-Z 的二进制记录流（`.pdStream` / `.ufcsStream`，来自对应协议的表行）。
     // 后两者的**报文解码流程完全相同**（见 core/pdstream.js），所以这里只是选个对象。
     const cap = sniffPowerz(buf)
       ? PowerzCapture.open(buf)
-      : sniffPdStream(buf)
-        ? PdStreamCapture.open(buf)
+      : sniffPowerzStream(buf)
+        ? PowerzStreamCapture.open(buf)
         : await AtkccCapture.open(buf, { inflate });
 
     doc.cap = cap;
@@ -8653,6 +9696,20 @@ function activateDoc(doc, channel) {
   return enqueue(async () => { doc.pending = false; await decodeDoc(doc); });
 }
 
+/** 精确规范选择跟随文件；报文头中的 2.0 仍按旧编码解释。 */
+function setSpecRevision(value, doc = S) {
+  const profile = value === '' || value === 'auto' || value == null ? null : String(value);
+  if (profile !== null && !PD_SPEC_PROFILES[profile]) throw new RangeError('PD 规范版本必须为 2.0/3.0/3.1/3.2 或 auto');
+  if (!doc?.cap || doc.meta?.protocol === 'UFCS') return Promise.resolve(false);
+  if (doc.specRevision === profile && doc.state === 'done') return Promise.resolve(true);
+  doc.specRevision = profile;
+  return activateDoc(doc, doc.channel).then(() => doc.state === 'done');
+}
+
+$('#specRevision').addEventListener('change', () => {
+  setSpecRevision($('#specRevision').value).catch(err => toast(err.message, 'err'));
+});
+
 /**
  * 解码指定文档（用 `doc.channel` 那个通道），然后把整个界面刷新成它的样子。
  *
@@ -8666,12 +9723,12 @@ async function decodeDoc(doc) {
   doc.cancel = false;
   doc.state = 'running';
   const pz = doc.meta?.source === 'powerz';
-  const pds = doc.meta?.container === 'pdstream';
+  const streamLabel = doc.meta?.stream ? (doc.meta.protocol === 'UFCS' ? '.ufcsStream' : '.pdStream') : null;
   /** 这段解码期间用户可能已经切走 —— 那就只把结果收进界面，一行界面都别动 */
   const visible = () => S === doc;
   renderTabs();
   showProgress(pz ? `正在解析通道 ${channel}…` : `正在解码通道 ${channel}…`,
-    pz ? `${pds ? '.pdStream' : 'SQLite'} 事件流 → PD 报文` : 'BMC 位流 → 4B5B → PD 报文');
+    pz ? `${streamLabel || 'SQLite'} 事件流 → ${doc.meta.protocol} 报文` : 'BMC 位流 → 4B5B → PD 报文');
 
   /**
    * 进度有两个去处：界面那根进度条（只在本文档还激活时动），以及
@@ -8687,6 +9744,7 @@ async function decodeDoc(doc) {
   try {
     const { packets, stats } = pz
       ? await doc.cap.decode({
+        specRevision: doc.specRevision,
         shouldStop: () => doc.cancel,
         onProgress: (p) => {
           if (p.phase === 'read') report(0.30 + 0.30 * p.ratio, `读取事件行 ${Math.round(p.ratio * 100)}%`);
@@ -8696,6 +9754,7 @@ async function decodeDoc(doc) {
       : await decodeChannel(doc.cap, channel, {
         inflate,
         bitOrder: 'lsb',
+        specRevision: doc.specRevision,
         shouldStop: () => doc.cancel,
         onProgress: (p) => {
           report(0.3 + 0.65 * p.ratio, `分块 ${p.chunk}/${p.chunks} · 已解出 ${p.packets} 条`);
@@ -8707,14 +9766,8 @@ async function decodeDoc(doc) {
 
     // 附上 VBUS / IBUS
     const bus = doc.cap.meta.bus;
+    attachBusValues(packets, bus);
     for (const p of packets) {
-      let v = 0, i = 0;
-      if (bus && bus.length) {
-        let lo = 0, hi = bus.length - 1, ans = 0;
-        while (lo <= hi) { const m = (lo + hi) >> 1; if (bus[m].sample <= p.startSample) { ans = m; lo = m + 1; } else hi = m - 1; }
-        v = bus[ans].vbus; i = bus[ans].ibus;
-      }
-      p.vbus = v; p.ibus = i;
       p.kind = kindOf(p);
     }
     pairAckTone(packets);   // GoodCRC 与它确认的报文同色
@@ -9028,6 +10081,8 @@ function syncFilterUI() {
 
 function renderMeta() {
   syncAppbarChip();
+  $('#specRevision').value = S.specRevision ?? '';
+  $('#specRevision').disabled = !S.cap || isUfcs() || S.state === 'running';
 
   const box = $('#metaChips');
   box.innerHTML = '';
@@ -9047,6 +10102,7 @@ function renderMeta() {
   const add = (k, v) => box.appendChild(Object.assign(el('span', 'mchip'), { innerHTML: `${k} <b>${v}</b>` }));
 
   add('来源', pz ? esc(m.title) : 'ATK-C · .atkcc');
+  if (!isUfcs()) add('规范', S.specRevision ? `PD ${S.specRevision}` : '自动');
 
   // 时间基准 / 采样率：数值 + 来源标记。值不是写死的 —— ATK-C 来自 channel.ini 的声明，
   // 也可能由波形自检反推；POWER-Z 只有毫秒时间戳，按「1 采样点 = 1 ms」映射。
@@ -9104,7 +10160,7 @@ function renderChannels() {
     const b = el('div', 'chitem static is-on');
     b.innerHTML = `<b>${esc(m.protocol)}</b><span>${(pz?.tableRows ?? m.tableRows)} 行事件</span>`;
     // `.pdStream` 不是 SQLite（没有页、也没有 ADC 采样表），别去读那些字段
-    b.title = m.container === 'pdstream'
+    b.title = m.stream
       ? `${m.title}｜${m.stream.records} 条记录 · ${fmtSize(m.stream.bytes)}`
         + `（净荷 ${fmtSize(m.stream.payloadBytes)}）｜无 ADC 波形`
       : `${m.title}｜SQLite ${m.sqlite.pageSize} B/页 · ${m.sqlite.pageCount} 页`
@@ -9280,7 +10336,7 @@ function applyFilters(keepScroll) {
   const q = f.q.toLowerCase();
   const out = [];
   for (const p of S.packets) {
-    if (!f.roles.has(p.role)) continue;
+    if (p.role != null && !f.roles.has(p.role)) continue;
     if (!f.sops.has(p.sop)) continue;
     if (!f.cats.has(p.kind)) continue;
     if (f.types.size && !f.types.has(p.msgType)) continue;
@@ -9400,7 +10456,7 @@ function setEmptyState(kind, extra) {
     t.textContent = '这份文件打不开';
     p.textContent = extra || '无法识别它的格式。';
     n.textContent = '只认 ATK-C 的 .atkcc（ZIP 容器）、POWER-Z 的 .sqlite（SQLite 库）'
-      + '与 .pdStream（同一个抓包的二进制导出）—— 按文件内容与结构判断，不看扩展名。';
+      + '与 .pdStream / .ufcsStream（二进制记录流）—— 按文件内容与结构判断，不看扩展名。';
     n.hidden = false;
     return;
   }
@@ -9494,7 +10550,7 @@ function rowEl(p, i) {
   + `<div class="td"><span class="pill ${p.role}">${esc(p.role)}</span></div>`
   + `<div class="td num">${p.protocol === 'UFCS' ? (p.dataLen ?? '') : (p.nObjects ?? '')}</div>`
   + `<div class="td time">${fmtTime(p.timeMs)}</div>`
-  + `<div class="td bus">${p.vbus.toFixed(3)} V <em>/</em> ${p.ibus.toFixed(3)} A</div>`
+  + `<div class="td bus">${fmtMeasurement(p.vbus)} V <em>/</em> ${fmtMeasurement(p.ibus)} A</div>`
   + `<div class="td mono">${highlightHex(hex)}</div>`
   + `<div class="td note">${note || (p.crcOk === false ? '<span style="color:var(--err)">CRC 校验失败</span>' : '')}</div>`;
   r.addEventListener('click', () => select(i, true));
@@ -9574,7 +10630,7 @@ function renderDetail(p) {
 
   h.push(`<div class="dhero ${p.crcOk === false ? 'dhero-bad' : ''}">
     <div class="t1 ${cls}">${esc(p.msgType)}</div>
-    <div class="t2">#${p.index} · ${esc(p.sop)} · ${esc(p.role)} · ID ${p.msgId ?? '-'} · ${esc(revLabel)} · ${fmtTime(p.timeMs)}`
+    <div class="t2">#${p.index} · ${esc(p.sop)} · ${esc(p.role ?? '未编码角色')} · ID ${p.msgId ?? '-'} · ${esc(revLabel)} · ${fmtTime(p.timeMs)}`
     + (p.synthetic ? '<span class="srcbadge">分析仪逻辑字节</span>' : '') + `</div>
   </div>`);
 
@@ -9584,13 +10640,13 @@ function renderDetail(p) {
 
   // 概览
   h.push(`<div class="dsec"><h5>链路概览</h5><div class="dgrid">
-    ${cell('VBUS', p.vbus.toFixed(3) + ' V')}
-    ${cell('IBUS', p.ibus.toFixed(3) + ' A')}
+    ${cell('VBUS', fmtMeasurement(p.vbus) + ' V')}
+    ${cell('IBUS', fmtMeasurement(p.ibus) + ' A')}
     ${cell('起始时间', fmtTime(p.timeMs))}
-    ${cell(p.bitrateNominal ? '线上时长' : '报文时长', p.durationUs.toFixed(1) + ' µs')}
+    ${cell(p.bitrateNominal ? '估算编码时长' : '报文时长', p.durationUs.toFixed(1) + ' µs')}
     ${cell(ufcs ? '数据长度' : '数据对象', ufcs ? `${p.dataLen ?? 0} B` : String(p.nObjects ?? 0))}
-    ${cell(p.bitrateNominal ? (ufcs ? '标称波特率' : 'BMC 码率') : '实测码率', (p.bitrate / 1000).toFixed(1) + ' kbps')}
-    ${cell('CRC', p.crcOk === null ? '未记录（分析仪不存）' : p.crcOk ? '通过' : '校验失败')}
+    ${cell(p.bitrateNominal ? (ufcs ? '标称波特率' : '标称数据率') : '实测码率', (p.bitrate / 1000).toFixed(1) + ' kbps')}
+    ${cell('CRC', p.header == null ? '本帧格式不含 CRC' : p.crcOk === null ? '未记录' : p.crcOk ? '通过' : '校验失败')}
     ${p.ackOf != null ? cell(ufcs ? '应答的报文' : '确认的报文', `#${p.ackOf} · ${p.ackType || ''}`) : ''}
   </div></div>`);
 
@@ -9603,15 +10659,15 @@ function renderDetail(p) {
       ${bit('B8-3', '协议版本编号', bid(p.header, 3, 8), `UFCS ${p.revText || ''}`)}
       ${bit('B2-0', '消息类型', bid(p.header, 0, 2), `${p.msgKind === 'custom' ? '自定义消息' : p.msgKind === 'data' ? '数据消息' : '控制消息'} · 命令 0x${(p.msgTypeRaw ?? 0).toString(16).toUpperCase().padStart(2, '0')}`)}
     </div></div>`);
-  } else {
+  } else if (p.header != null) {
     h.push(`<div class="dsec"><h5>报文头 (16 bit)</h5><div class="dbits">
-      ${bit('B15', 'Extended', bid(p.header, 15, 15), p.msgKind === 'ext' ? '扩展消息' : '标准消息')}
+      ${bit('B15', p.rev < 3 ? 'Reserved' : 'Extended', bid(p.header, 15, 15), p.rev < 3 ? '接收端忽略' : p.msgKind === 'ext' ? '扩展消息' : '标准消息')}
       ${bit('B14-12', 'Object 数', bid(p.header, 12, 14), String(p.nObjects ?? 0))}
       ${bit('B11-9', 'Message ID', bid(p.header, 9, 11), String(p.msgId ?? 0))}
-      ${bit('B8', 'Power Role', bid(p.header, 8, 8), p.powerRole ? '1 · Source' : '0 · Sink')}
-      ${bit('B7-6', 'Spec Revision', bid(p.header, 6, 7), `${bid(p.header, 6, 7)} · PD ${p.rev === 3 ? '3.x' : '2.0'}`)}
-      ${bit('B5', 'Data Role', bid(p.header, 5, 5), p.dataRole ? '1 · DFP' : '0 · UFP')}
-      ${bit('B4-0', 'Message Type', bid(p.header, 0, 4), `${p.msgTypeRaw ?? 0} · ${p.msgType}`)}
+      ${bit('B8', p.link === 'cable' ? 'Cable Plug' : 'Power Role', bid(p.header, 8, 8), p.link === 'cable' ? (p.powerRole ? '1 · Plug' : '0 · Port') : p.powerRole ? '1 · Source' : '0 · Sink')}
+      ${bit('B7-6', 'Spec Revision', bid(p.header, 6, 7), `${bid(p.header, 6, 7)} · PD ${p.revText || '?'}`)}
+      ${bit('B5', p.link === 'cable' ? 'Reserved' : 'Data Role', bid(p.header, 5, 5), p.link === 'cable' ? '接收端忽略' : p.dataRole ? '1 · DFP' : '0 · UFP')}
+      ${bit(p.rev < 3 ? 'B3-0' : 'B4-0', 'Message Type', bid(p.header, 0, p.rev < 3 ? 3 : 4), `${p.msgTypeRaw ?? 0} · ${p.msgType}`)}
     </div></div>`);
   }
 
@@ -9620,7 +10676,8 @@ function renderDetail(p) {
       ${bit('B15', 'Chunked', bid(p.extHeader, 15, 15), (p.extHeader >> 15) & 1 ? '分块' : '不分块')}
       ${bit('B14-11', 'Chunk Number', bid(p.extHeader, 11, 14), String((p.extHeader >> 11) & 0xf))}
       ${bit('B10', 'Request Chunk', bid(p.extHeader, 10, 10), String((p.extHeader >> 10) & 1))}
-      ${bit('B9-0', 'Data Size', bid(p.extHeader, 0, 9), String(p.extHeader & 0x3ff) + ' B')}
+      ${bit('B9', 'Reserved', bid(p.extHeader, 9, 9), '接收端忽略')}
+      ${bit('B8-0', 'Data Size', bid(p.extHeader, 0, 8), String(p.extHeader & 0x1ff) + ' B')}
     </div></div>`);
   }
 
@@ -10368,7 +11425,7 @@ function exportAs(fmt) {
     blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
     name = csvFileName(S.fileName, S.channel);
   } else {
-    const base = (S.fileName || 'pdscope').replace(/\.(atkcc|sqlite|db)$/i, '');
+    const base = csvBase(S.fileName);
     blob = new Blob([JSON.stringify({
       file: S.fileName, channel: S.channel,
       // 实际采用的采样率 + 文件里声明的那个（不一致时 stats.sampleRateNote 里有人话解释）
@@ -10504,7 +11561,8 @@ window.pdscopeOpenUrl = async (name, url) => {
  *   外壳的默认输出路径用它（命名规则与界面导出一致，只有 csv.js 一处定义）。
  *   失败一律**抛异常**（不吞），让外壳决定怎么报 —— 命令行里没有 toast 可弹。
  */
-window.pdscopeExportCsv = async ({ name, bytes, channel, limit, bom = true, onProgress } = {}) => {
+window.pdscopeExportCsv = async ({ name, bytes, channel, limit, bom = true, onProgress, specRevision = null } = {}) => {
+  if (specRevision !== null && !PD_SPEC_PROFILES[specRevision]) throw new RangeError('PD 规范版本必须为 2.0/3.0/3.1/3.2 或 null');
   const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes ?? []);
   const file = new File([u8], name || 'capture.atkcc');
 
@@ -10514,6 +11572,7 @@ window.pdscopeExportCsv = async ({ name, bytes, channel, limit, bom = true, onPr
 
   // ② 指定通道优先于自动选道
   if (channel !== undefined && channel !== null && channel !== '') doc.channel = Number(channel);
+  doc.specRevision = specRevision;
 
   // ③ 解码。进度走 progressCb 旁路（decodeDoc 里 report 的第二站）
   doc.progressCb = typeof onProgress === 'function' ? onProgress : null;
@@ -10541,12 +11600,14 @@ window.PDScope = {
    * 与界面导出共用 `src/js/core/csv.js`，见该函数的注释。
    */
   exportCsv: window.pdscopeExportCsv,
+  setSpecRevision,
   /** 当前状态快照，供外壳自检 / 调试面板读取 */
   status: () => ({
     env: ENV.name,
     file: S.fileName,
     source: S.meta?.source ?? null,        // 'atkcc'（容器里没有这个字段）| 'powerz'
     protocol: S.meta?.protocol ?? 'USB PD',
+    specRevision: S.meta?.protocol === 'UFCS' ? null : S.specRevision,
     channel: S.channel,
     packets: S.packets?.length ?? 0,
     filtered: S.view?.length ?? 0,
@@ -10565,6 +11626,7 @@ window.PDScope = {
     error: d.error || null,
     source: d.meta?.source ?? null,
     protocol: d.meta?.protocol ?? null,
+    specRevision: d.meta?.protocol === 'UFCS' ? null : d.specRevision,
     channel: d.channel,
     packets: d.packets.length,
     filtered: d.view.length,

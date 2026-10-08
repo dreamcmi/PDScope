@@ -199,11 +199,10 @@ const hasDetail = (p, key, needle) =>
 const hasField = (p, needle) => (p.details || []).some((d) => String(d.key).includes(needle));
 
 /** 组装一条扩展消息：Header 的 Extended 位置位 + 16bit 扩展头 + 数据块 */
-function buildExtPacket(sopIndex, type, payload, { rev = 3, id = 0, chunked = false, chunkNum = 0, reqChunk = false } = {}) {
-  const dataSize = payload.length;
-  const nObjects = Math.max(1, Math.ceil((2 + dataSize) / 4));
+function buildExtPacket(sopIndex, type, payload, { rev = 3, id = 0, chunked = false, chunkNum = 0, reqChunk = false, dataSize = payload.length } = {}) {
+  const nObjects = Math.max(1, Math.ceil((2 + payload.length) / 4));
   const capacity = Math.max(nObjects * 4 - 2, 0);
-  const pad = capacity - dataSize;
+  const pad = capacity - payload.length;
   const extHead = ((chunked ? 1 : 0) << 15) | ((chunkNum & 0xF) << 11) | ((reqChunk ? 1 : 0) << 10) | (dataSize & 0x1FF);
   const header = mkHeader({ type, n: nObjects, rev, id }) | (1 << 15);
   const bytes = [header & 0xFF, (header >>> 8) & 0xFF, extHead & 0xFF, (extHead >>> 8) & 0xFF,
@@ -259,39 +258,40 @@ const passiveCableVdo = ((2 << 18) | (1 << 17) | (1 << 13) | (3 << 9) | (2 << 5)
 /* ── ③.3 EPR_Source_Capabilities 扩展消息 ── */
 {
   const eprFixed = ((0 << 30) | (560 << 10) | 500) >>> 0;                      // 28 V / 5 A
-  const eprAvs = ((3 << 30) | (1 << 28) | (480 << 17) | (150 << 8) | 140) >>> 0; // 15~48 V / 140 W
-  const { bits, crc } = buildExtPacket(0, 17, b4(eprFixed).concat(b4(eprAvs)), { rev: 3, id: 4 });
+  const eprAvs = ((3 << 30) | (1 << 28) | (280 << 17) | (150 << 8) | 140) >>> 0; // 15~28 V / 140 W，匹配最高 Fixed28
+  const { bits, crc } = buildExtPacket(0, 17, b4(fixedPdo).concat(new Array(24).fill(0), b4(eprFixed), b4(eprAvs)), { rev: 3, id: 4 });
   const p = decodeBits(bits);
   check('EPR_Source_Capabilities', !!p && p.crcOk === true && p.crc === crc
     && p.msgType === 'EPR_Source_Capabilities' && p.msgKind === 'ext' && p.extHeader != null
-    && hasDetail(p, 'Object', 'PDO #1') && hasDetail(p, 'Object', 'PDO #2')
+    && hasDetail(p, 'Object', 'PDO #8') && hasDetail(p, 'Object', 'PDO #9')
     && (p.summary || '').includes('EPR_Fixed') && (p.summary || '').includes('EPR_AVS')
+    && !p.warnings.some(w => ['PDO_RANGE', 'AVS_CAP'].includes(w.short))
     && (p.dataHex || '').length > 0,
     `extHeader=0x${p?.extHeader?.toString(16)} summary: ${p?.summary}`);
 }
 
 /* ── ③.4 分块扩展消息：跨块的 PDO 要拼回来，拼不回来的要如实标注 ── */
 {
-  // 8 个 PDO（32 字节），声明 dataSize=30 → 块 0 覆盖 byte0-25，块 1 覆盖 byte26-29，
+  // 8 个 PDO（32 字节），声明总 dataSize=32 → 块 0 byte0-25，块 1 byte26-31，
   // 第 7 个 PDO 正好被切成 2+2 字节，考验跨分块拼接。
   const pdos = [];
   for (let i = 0; i < 8; i++) pdos.push(((0 << 30) | ((100 + i * 20) << 10) | 300) >>> 0);
   const whole = pdos.flatMap(b4);
 
-  const c0 = decodeBits(buildExtPacket(0, 17, whole.slice(0, 26), { rev: 3, id: 4, chunked: true, chunkNum: 0 }).bits);
-  const c1 = decodeBits(buildExtPacket(0, 17, whole.slice(26, 30), { rev: 3, id: 4, chunked: true, chunkNum: 1 }).bits);
-  const ok0 = c0?.crcOk === true && hasDetail(c0, 'Object', 'PDO #6');
+  const c0 = decodeBits(buildExtPacket(0, 17, whole.slice(0, 26), { rev: 3, id: 4, chunked: true, chunkNum: 0, dataSize: 32 }).bits);
+  const c1 = decodeBits(buildExtPacket(0, 17, whole.slice(26), { rev: 3, id: 5, chunked: true, chunkNum: 1, dataSize: 32 }).bits);
+  const ok0 = c0?.crcOk === true && c0.reassembly?.complete === false;
 
   // 跨块拼接：同一解码器实例连续解两块，块 1 应把第 7 个 PDO 补全
   const fresh = new PdDecoder({ sampleRate: 2500000 });
   const raw = (bits) => ({ bits, edges: bits.map((_, i) => i), startSample: 0, endSample: bits.length, bitrate: 600000 });
-  fresh.decode(raw(buildExtPacket(0, 17, whole.slice(0, 26), { rev: 3, id: 4, chunked: true, chunkNum: 0 }).bits), 0);
-  const j = fresh.decode(raw(buildExtPacket(0, 17, whole.slice(26, 30), { rev: 3, id: 4, chunked: true, chunkNum: 1 }).bits), 0);
-  const okJoin = hasDetail(j, '分块对齐', '由上一分块') && hasDetail(j, 'Object', 'PDO #7');
+  fresh.decode(raw(buildExtPacket(0, 17, whole.slice(0, 26), { rev: 3, id: 4, chunked: true, chunkNum: 0, dataSize: 32 }).bits), 0);
+  const j = fresh.decode(raw(buildExtPacket(0, 17, whole.slice(26), { rev: 3, id: 5, chunked: true, chunkNum: 1, dataSize: 32 }).bits), 0);
+  const okJoin = j.reassembly?.complete && hasDetail(j, 'Object', 'PDO #7') && j.reassembly.bytes.length === 32;
 
   // 没有前块时，不能猜：必须标注「跨分块」
-  const lone = decodeBits(buildExtPacket(0, 17, whole.slice(26, 30), { rev: 3, id: 4, chunked: true, chunkNum: 1 }).bits);
-  const okLone = hasDetail(lone, '状态', '跨分块') && (lone.summary || '').includes('无 PDO');
+  const lone = new PdDecoder({ sampleRate: 2500000 }).decode(raw(buildExtPacket(0, 17, whole.slice(26), { rev: 3, id: 5, chunked: true, chunkNum: 1, dataSize: 32 }).bits), 0);
+  const okLone = !lone.reassembly?.complete && lone.warnings.some(w => w.short === 'CHUNK_GAP');
 
   check('分块扩展消息拼接', ok0 && okJoin && okLone,
     `块0:${c0?.summary?.slice(0, 40)} | 拼接:${okJoin} | 无前块:${lone?.summary}`);
@@ -529,9 +529,10 @@ function buildSqlite(specs) {
     pzHeader & 0xff, (pzHeader >>> 8) & 0xff, ...b4(fixedPdo),
   ]);
   const wrap = (sop, ts) => {
-    const total = pzWire.length + 5;
+    const wire = sop === 1 ? Uint8Array.from([0x8F, 0x10, 0x01, 0x80, 0x00, 0xFF]) : pzWire;
+    const total = wire.length + 5;
     return Uint8Array.from([0x80 | total, ts & 0xff, (ts >>> 8) & 0xff, (ts >>> 16) & 0xff,
-      (ts >>> 24) & 0xff, sop, ...pzWire]);
+      (ts >>> 24) & 0xff, sop, ...wire]);
   };
 
   const db = buildSqlite([
@@ -575,7 +576,7 @@ function buildSqlite(specs) {
 
   const { packets, stats } = await cap.decode();
   check('PowerzCapture：端到端解出报文', packets.length === 2
-    && packets[0].msgType === 'Source_Cap' && packets[1].msgType === 'Source_Cap'
+    && packets[0].msgType === 'Source_Cap' && packets[1].msgType === 'VDM'
     && packets[0].sop === 'SOP' && packets[1].sop === "SOP'"
     && packets[0].startSample === 250 && packets[1].startSample === 400
     && packets.every((p) => p.crcOk === null),

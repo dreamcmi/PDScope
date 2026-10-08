@@ -1,0 +1,250 @@
+{
+  "auditDate": "2026-10-08",
+  "scope": "四份本地 USB Power Delivery 规范的物理层/BMC/4b5b/CRC/帧与 Header/扩展分块/MessageID 与重传/GoodCRC/复位/被动 EPR 与 FRS 状态观察。此矩阵描述可观察的协议报文解码，不代表设备符合性认证。",
+  "statusLegend": {
+    "implemented": "对照所引条款，范围内逻辑已实现并有可复核依据。",
+    "partial": "有解码或局部规则，但不能覆盖所引条款的全部要求。",
+    "missing": "该版本定义且属本次检查范围，但当前未实现。",
+    "not-defined": "该版本规范未定义此功能，不计为实现缺口。",
+    "out_of_scope": "硬件模拟测量、主动设备控制或 Policy Engine 等不属于被动逻辑报文解码范围。"
+  },
+  "interpretation": [
+    "本工具从捕获波形或分析仪逻辑字节被动重建 PD 消息，不发送 GoodCRC、不控制 VBUS/CC，也不运行 USB PD Policy Engine。",
+    "实际抓包可能缺包、截断或由容器省略 CRC；能解析已观察消息不等于能证明对端发送、接收、计时或电源动作合规。",
+    "Header Revision=10b 只能表示 3.x。显式选择 3.0/3.1/3.2 是让解码器按相应本地 PDF 做基线检查，不是识别设备精确修订版。"
+  ],
+  "features": [
+    {
+      "id": "bmc-waveform-decoding",
+      "title": "BMC 边沿解码与码元定时",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "partial", "notes": "BMC 边沿游程可还原 0/1 位；阈值按 600 kHz half-bit UI 的固定启发式计算。未实现规范接收掩模、噪声容限或模拟电气认证。PD 2.0 还描述 VBUS 上 BFSK 信令，本项目仅解 CC 上 BMC。", "refs": [{ "section": "§5.8.3, §5.8.4", "table": "Tables 5-23–5-26", "page": "PDF pp.124–138" }] },
+        "3.0": { "status": "partial", "notes": "实现 BMC 位流重建；波形有效性采用固定门限，不执行规范接收掩模/电气容差测试。", "refs": [{ "section": "§5.8.1, §5.8.6", "table": "Tables 5-16–5-19", "page": "PDF pp.76, 87–90" }] },
+        "3.1": { "status": "partial", "notes": "实现 BMC 位流重建；没有对 Table 5-16 接收掩模、幅度/噪声及 Tx/Rx 电气限制作符合性判定。", "refs": [{ "section": "§5.8.1, §5.8.6", "table": "Tables 5-16–5-19", "page": "PDF pp.104, 114–119" }] },
+        "3.2": { "status": "partial", "notes": "实现 BMC 边沿位判决；名义 300 kbit/s/600 kHz 作为估算基础，不等于按 Table 5.9/5.11 对实际模拟波形做验证。", "refs": [{ "section": "§5.3.1.2, §5.5.1", "table": "Tables 5.9, 5.11", "page": "PDF pp.90–91, 110–111" }] }
+      },
+      "code": [{ "file": "src/js/core/bmc.js", "start": 25, "end": 25, "symbol": "BMC_HZ" }, { "file": "src/js/core/bmc.js", "start": 73, "end": 73, "symbol": "UI_US" }, { "file": "src/js/core/bmc.js", "start": 74, "end": 74, "symbol": "THRESHOLD_US" }, { "file": "src/js/core/bmc.js", "start": 75, "end": 75, "symbol": "MAXBIT_US" }, { "file": "src/js/core/bmc.js", "start": 197, "end": 297, "symbol": "BmcDecoder" }],
+      "evidence": ["固定边沿向量验证 1 UI/2 UI BMC 的位解码与无 bad-edge 结果；测试名为 PD 3.2 §5.3.1.2。", "采样率可从波形游程估算；判决输出包括 bitrate 与异常 edge 列表。"],
+      "limitations": ["没有幅值、上升/下降时间、接收阈值、CC 负载、电缆/噪声或接收 mask 数据，不能给出 PHY 电气合规结论。", "PD 2.0 BFSK-over-VBUS 实现范围外。"]
+    },
+    {
+      "id": "fourb-fiveb-and-kcodes",
+      "title": "4b5b 数据符号、K-code 与线上位序",
+      "status": "implemented",
+      "versions": {
+        "2.0": { "status": "implemented", "notes": "数据符号与 SYNC/RST/EOP K-code 映射及 LSB-first 采样位序与表相符。", "refs": [{ "section": "§5.3, §5.5", "table": "Table 5-1, Table 5-4", "page": "PDF pp.105, 107" }] },
+        "3.0": { "status": "implemented", "notes": "数据符号/K-code 和位序按规范表解码。", "refs": [{ "section": "§5.3, §5.5", "table": "Table 5-1, Table 5-4", "page": "PDF pp.67, 69" }] },
+        "3.1": { "status": "implemented", "notes": "数据符号/K-code 和位序按规范表解码。", "refs": [{ "section": "§5.3, §5.5", "table": "Table 5-1, Table 5-4", "page": "PDF pp.95, 97" }] },
+        "3.2": { "status": "implemented", "notes": "全部 16 个数据码、6 个 K-code 及保留非法 5-bit 码均由独立字面向量逐项核对。", "refs": [{ "section": "§5.3.1.1.2", "table": "Table 5.2", "page": "PDF p.89" }] }
+      },
+      "code": [{ "file": "src/js/pd/symbols.js", "start": 12, "end": 18, "symbol": "SYM_ERR" }, { "file": "src/js/pd/symbols.js", "start": 25, "end": 30, "symbol": "DEC4B5B" }, { "file": "src/js/pd/decoder.js", "start": 76, "end": 83, "symbol": "CODE_TO_INDEX" }, { "file": "src/js/pd/decoder.js", "start": 86, "end": 89, "symbol": "pushSymbol" }, { "file": "src/js/pd/decoder.js", "start": 92, "end": 95, "symbol": "pushByte" }],
+      "evidence": ["tools/pd-audit-wire.mjs 的 literal Table 5.2 向量检查全部 16 个数据符号、全部 K-code 和 10 个非法码，方向按线序反转规范印刷码字。", "同一映射适用于四份基线所引用的表；原始字段仍保留供审阅。"],
+      "limitations": []
+    },
+    {
+      "id": "ordered-sets-and-preamble",
+      "title": "SOP/SOP*/Debug/Reset 有序集、前导码与 EOP 边界",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "partial", "notes": "7 种有序集逐字映射；接收器按 4 个 K-code 中至少 3 个匹配识别。物理解码未验证规范要求的 64-bit 交替前导码、前导起止相位或完整信号时序。", "refs": [{ "section": "§5.4, §5.6, §5.6.1.1", "table": "Tables 5-2, 5-3", "page": "PDF pp.106–110" }] },
+        "3.0": { "status": "partial", "notes": "7 种有序集映射并检查 EOP；不要求物理波形中一定捕获到完整 64-bit 前导码。", "refs": [{ "section": "§5.4, §5.6", "table": "Tables 5-2, 5-3", "page": "PDF pp.68–71" }] },
+        "3.1": { "status": "partial", "notes": "有序集/复位码映射和接收容错存在；前导码长度、起始边沿及 idle/EOP 全套 PHY 接收规则未验证。", "refs": [{ "section": "§5.4, §5.6", "table": "Tables 5-2, 5-3, 5-11, 5-12", "page": "PDF pp.96–103" }] },
+        "3.2": { "status": "partial", "notes": "全部 7 个序列有独立字面测试；物理波形入口从 SOP* 搜索，没有验证 §5.3.1.1.1 的 64-bit alternating preamble。", "refs": [{ "section": "§5.3.1.1.1, §5.3.2.2", "table": "Table 5.3 (SOP ordered sets)", "page": "PDF pp.89–91" }] }
+      },
+      "code": [{ "file": "src/js/pd/symbols.js", "start": 51, "end": 59, "symbol": "SOP_ORDERED_SETS" }, { "file": "src/js/pd/symbols.js", "start": 86, "end": 96, "symbol": "matchOrderedSet" }, { "file": "src/js/pd/decoder.js", "start": 177, "end": 198, "symbol": "_scanSop" }, { "file": "src/js/pd/decoder.js", "start": 329, "end": 331, "symbol": "decode" }],
+      "evidence": ["Independent literal test compares exact SOP, SOP', SOP'', both Debug sets, Hard Reset and Cable Reset sequences and exercises 3-of-4 matching."],
+      "limitations": ["Parser scans for SOP at any bit offset; a truncated or missing preamble can still produce a decoded packet. This is useful for partial captures but is not a preamble-conformance check."]
+    },
+    {
+      "id": "crc32-frame-validation",
+      "title": "CRC-32 计算、接收 CRC 比较与帧有效性",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "partial", "notes": "反射 CRC-32 算法覆盖 Header 与载荷，符合规范生成/输出映射；带接收 CRC 的真实报文可核验。逻辑字节输入未提供实收 CRC 时返回 crcOk=null。", "refs": [{ "section": "§5.6.2", "table": "Figure 5-4, Table 5-10", "page": "PDF pp.110–111" }] },
+        "3.0": { "status": "partial", "notes": "CRC 算法和 CRC/EOP 判定同样实现；CRC 未被容器记录时仅能报告 unknown。", "refs": [{ "section": "§5.6.2", "table": "Figure 5-4, Table 5-10", "page": "PDF pp.72–73" }] },
+        "3.1": { "status": "partial", "notes": "CRC 算法和 CRC/EOP 判定同样实现；逻辑报文来源可能不携带实收 CRC。", "refs": [{ "section": "§5.6.2", "table": "Figure 5-4, Table 5-10", "page": "PDF pp.100–101" }] },
+        "3.2": { "status": "partial", "notes": "CRC 覆盖 Header、Extended Header、数据和分块填充；CRC 算法有固定结果向量。", "refs": [{ "section": "§5.3.1.1.4", "table": "CRC-32 generation/output mapping", "page": "PDF pp.90–91" }] }
+      },
+      "code": [{ "file": "src/js/pd/crc.js", "start": 24, "end": 27, "symbol": "crc32" }, { "file": "src/js/pd/decoder.js", "start": 318, "end": 338, "symbol": "decode" }, { "file": "src/js/pd/decoder.js", "start": 661, "end": 667, "symbol": "_computeCrc" }, { "file": "src/js/pd/decoder.js", "start": 429, "end": 464, "symbol": "decodeWire" }],
+      "evidence": ["Literal GoodCRC Header bytes 41 02 must produce CRC 46B50D97; test also compares a received CRC through decodeWire.", "Extended-message parse includes Extended Header and padding bytes in CRC input.", "CRC mismatch prevents frameValid and prevents cross-message state commit."],
+      "limitations": ["decodeWire() cannot verify CRC unless the caller supplies the recorded CRC; it then returns crcOk/frameValid=null rather than treating locally generated CRC as observed evidence.", "A valid message CRC proves captured bytes are internally consistent, not that the analog signal met PHY timing or voltage limits."]
+    },
+    {
+      "id": "packet-and-header",
+      "title": "Packet 格式、Header 字段、Data Object 数量與消息分类",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "partial", "notes": "解析 16-bit Header、角色、MessageID、对象数和 PD 2.0 类型/保留位；将 legacy 00b Revision 按 2.0 解释。没有覆盖全部协议消息合法性与上下文规则。", "refs": [{ "section": "§6.2.1.1, §6.2.1.3, §6.2.1.5", "table": "Table 6-1", "page": "PDF pp.143–144" }] },
+        "3.0": { "status": "partial", "notes": "解析 Header 的 Extended、对象数、MessageID、角色、Revision 和 5-bit Message Type；版本型消息集合按选定 3.0 基线检查。", "refs": [{ "section": "§6.2.1.1", "table": "Table 6-1", "page": "PDF pp.96–98" }] },
+        "3.1": { "status": "partial", "notes": "解析相同 Header 位域并对已知 3.1 基线检查消息最早定义版本；Header 的 Revision=3.x 本身不能区分实际 3.0/3.1/3.2。", "refs": [{ "section": "§6.2.1.1, §6.2.1.1.5", "table": "Table 6-1", "page": "PDF pp.124–126" }] },
+        "3.2": { "status": "partial", "notes": "解析 Header、MessageID、对象数、Revision、Extended 位；基线选择不宣称从线上 Header 得到精确版本。", "refs": [{ "section": "§6.2.1, §6.1.2–§6.1.3", "table": "Tables 6.2–6.3", "page": "PDF pp.112–118" }] }
+      },
+      "code": [{ "file": "src/js/pd/decoder.js", "start": 202, "end": 202, "symbol": "headRevCode" }, { "file": "src/js/pd/decoder.js", "start": 203, "end": 203, "symbol": "headRev" }, { "file": "src/js/pd/decoder.js", "start": 204, "end": 204, "symbol": "headRevText" }, { "file": "src/js/pd/decoder.js", "start": 206, "end": 206, "symbol": "headModern" }, { "file": "src/js/pd/decoder.js", "start": 207, "end": 207, "symbol": "headExt" }, { "file": "src/js/pd/decoder.js", "start": 208, "end": 208, "symbol": "headId" }, { "file": "src/js/pd/decoder.js", "start": 209, "end": 209, "symbol": "headPowerRole" }, { "file": "src/js/pd/decoder.js", "start": 210, "end": 210, "symbol": "headDataRole" }, { "file": "src/js/pd/decoder.js", "start": 211, "end": 211, "symbol": "headCount" }, { "file": "src/js/pd/decoder.js", "start": 212, "end": 212, "symbol": "headType" }, { "file": "src/js/pd/decoder.js", "start": 264, "end": 305, "symbol": "decode" }, { "file": "src/js/pd/decoder.js", "start": 554, "end": 567, "symbol": "_validateMessage" }],
+      "evidence": ["Message Header raw value and decoded bit fields are exposed in packet details; data objects are read little-endian and count is checked for selected message types.", "Known profile supports baseline-dependent minimum/deprecated message hints."],
+      "limitations": ["A capture cannot establish exact 3.x spec revision from Revision=10b. Profile selection is an explicit interpretation baseline, not device identification.", "Reserved fields and legality rules are not exhaustively checked for every message type, role, link, and protocol state."]
+    },
+    {
+      "id": "revision-profile-and-goodcrc",
+      "title": "Specification Revision 版本差异与 GoodCRC Revision 豁免",
+      "status": "implemented",
+      "versions": {
+        "2.0": { "status": "implemented", "notes": "显式 PD 2.0 基线下，Revision 10b/11b 均按 Reserved 诊断；不套用后续规范对 GoodCRC 的 don't-care 豁免。", "refs": [{ "section": "§6.2.1.5, §6.3.1", "table": "Table 6-1", "page": "PDF pp.144–145" }] },
+        "3.0": { "status": "implemented", "notes": "PD 3.0 GoodCRC 的 Revision 字段按 don't-care 忽略，保留原始值但不阻止有效 GoodCRC 被配对。", "refs": [{ "section": "§6.2.1.1.5, §6.3.1", "table": "Table 6-1", "page": "PDF pp.98, 107" }] },
+        "3.1": { "status": "implemented", "notes": "PD 3.1 规定 GoodCRC Revision 为 don't-care；保留字段原始值用于显示，不以此拒绝 ACK。", "refs": [{ "section": "§6.2.1.1.5, §6.3.1", "table": "Table 6-1", "page": "PDF pp.126, 135" }] },
+        "3.2": { "status": "implemented", "notes": "PD 3.2 明确 GoodCRC 的 2-bit Specification Revision 不具语义，00b/01b/10b/11b 均由接收方忽略。", "refs": [{ "section": "§6.1.3, §6.3.1", "table": "Table 6.2", "page": "PDF pp.112–113, 119" }] }
+      },
+      "code": [{ "file": "src/js/pd/decoder.js", "start": 480, "end": 535, "symbol": "_versionHints" }],
+      "evidence": ["Independent literal tests exercise Revision values 00b/01b/10b/11b for GoodCRC under 3.0, 3.1 and 3.2 profiles, and Reserved 10b/11b under PD 2.0.", "3.x profiles do not produce a REV warning or invalidate a GoodCRC only because its Revision field is 11b; raw Header value remains visible."],
+      "limitations": ["Tests validate the field rule; they do not prove a GoodCRC was transmitted within the normative response timing."]
+    },
+    {
+      "id": "messageid-retry-and-goodcrc-association",
+      "title": "MessageID、重传识别與 GoodCRC 关联",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "partial", "notes": "可关联邻近且相反方向、同 SOP、MessageID 相同的 GoodCRC；解码器只提示同发送方相同 ID/内容的重复。未维护规范 MessageID 滚动计数或 CRCReceiveTimer/重试计数。", "refs": [{ "section": "§6.2.1.3, §6.3.1, §6.5.1, §6.6.1–§6.6.2", "table": "MessageID Counter and Retry Counter rules", "page": "PDF pp.143, 145, 188–199" }] },
+        "3.0": { "status": "partial", "notes": "GoodCRC 相关联基于方向/SOP/MessageID 近邻启发式；不验证时间窗、nRetryCount、tRetry 或计数器每条链路增量。", "refs": [{ "section": "§6.2.1.1, §6.3.1, §6.6.1, §6.7", "table": "CRCReceiveTimer / Retry Counter", "page": "PDF pp.97, 107, 168–182" }] },
+        "3.1": { "status": "partial", "notes": "重传是重复报文提示，ACK 是抓包近邻关联；未运行完整 Protocol Layer 重试状态机或定时器。", "refs": [{ "section": "§6.2.1.1, §6.3.1, §6.6.1, §6.7", "table": "CRCReceiveTimer / Retry Counter", "page": "PDF pp.125–126, 135, 231, 247" }] },
+        "3.2": { "status": "partial", "notes": "重复 MessageID+相同内容只作重传观察；GoodCRC 关联按相同 SOP、对向角色、相同 ID 和最多 16 条消息的窗口挑选候选。", "refs": [{ "section": "§6.1.2, §6.3.1, §7.31.1, §7.32.4", "table": "MessageID, CRCReceiveTimer, Retry Counter", "page": "PDF pp.112, 119, 224, 239" }] }
+      },
+      "code": [{ "file": "src/js/pd/decoder.js", "start": 537, "end": 546, "symbol": "_messageHistory" }, { "file": "src/js/core/pipeline.js", "start": 246, "end": 285, "symbol": "linkGoodCrc" }],
+      "evidence": ["Pipeline association excludes special reset packets and other GoodCRC messages; when the nearest opposite-direction candidate has a different ID, it searches the bounded window for a same-ID message.", "Invalid received CRCs are not paired as GoodCRC.", "State comment explicitly avoids inferring missing or illegal ID increments because passive captures may omit messages."],
+      "limitations": ["ACK_WINDOW is a row-count heuristic, not normative tTransmit/tReceive timing.", "No independent MessageIDCounter per SOP/SOP*/sender, no modulo-8 progression check, no RetryCounter ceiling, no retransmit-time check and no CRCReceiveTimer expiry detection.", "A repeated ID/content is evidence consistent with retransmission but cannot prove retry cause; the original or retry can be absent from a partial trace."]
+    },
+    {
+      "id": "extended-messages-and-chunking",
+      "title": "Extended Header、Chunking、分块重组與 Padding",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "not-defined", "notes": "该版本 Profile 未定义 Extended Message 类型；解析器不把 3.x 扩展格式套用到 PD 2.0。", "refs": [{ "section": "§6.2.1, §6.3", "table": "Table 6-1; control-message definitions", "page": "PDF pp.143–151" }] },
+        "3.0": { "status": "partial", "notes": "按 Data Size、Chunk Number、Request Chunk 读扩展头；chunked 每块最多 26 字节、检查对象计数、顺序并重组；未实现完整 Chunk Tx/Rx 协议状态机和所有交互超时。", "refs": [{ "section": "§6.2.1.2, §6.11.2.1.2", "table": "Table 6-3; Figure 6-47 Chunked Rx State Diagram", "page": "PDF pp.100–101, 190–192" }] },
+        "3.1": { "status": "partial", "notes": "解析扩展头、分块偏移和 Request Chunk，检查重组连续性；已知 final chunk padding 不属于 Data Size 载荷。没有覆盖规范接收状态机和 ChunkSender/Response 定时器。", "refs": [{ "section": "§6.2.1.2.3–§6.2.1.2.4, §6.12.2.1.2", "table": "Table 6-3; Figure 6-59 Chunked Rx State Diagram", "page": "PDF pp.128–129, 256–258" }] },
+        "3.2": { "status": "partial", "notes": "读取 Extended Header/Data Size，按 26-byte chunk offset 顺序重组。额外接收字节按最后一块 padding 忽略，不加入 Extended Message；若 padding 非零仅给 sender-format warning，不拒收已 CRC 正确且 Data Size 完整的消息。", "refs": [{ "section": "§6.5.1.1, §9.1.2.1.2.3", "table": "Table 6.48; Chunked Rx state machine", "page": "PDF pp.172–173, 257–258" }] }
+      },
+      "code": [{ "file": "src/js/pd/decoder.js", "start": 766, "end": 825, "symbol": "_readExtended" }, { "file": "src/js/pd/decoder.js", "start": 829, "end": 843, "symbol": "_extCandidates" }, { "file": "src/js/pd/decoder.js", "start": 846, "end": 859, "symbol": "_readExtTry" }, { "file": "src/js/pd/decoder.js", "start": 861, "end": 934, "symbol": "_parseExtended" }],
+      "evidence": ["Literal PD 3.2 final-chunk vector uses Data Size=1 with payload A5 and nonzero extra 7E. Test confirms CRC is valid, frameValid remains true, reassembled bytes contain only A5, and PADDING warning is retained.", "Decoder uses Data Size for unchunked payload, chunkNum×26 for offsets, and commits assembly only after valid frames with sequential chunks."],
+      "limitations": ["Does not maintain the complete normative Chunked Rx/Tx state machines, peer support/capability gates, request/response sequencing or chunk sender/receiver timeout behavior.", "A missing chunk and a capture that simply omitted the chunk are observationally indistinguishable; warning describes the captured trace, not necessarily the live link.", "The decoder tries CRC-backed alternate lengths to tolerate observed unchunked capture variations; this does not certify such a sender format as normative."]
+    },
+    {
+      "id": "reset-signaling-and-visible-reset-state",
+      "title": "Soft Reset、Hard Reset、Cable Reset 與可觀察協議狀態清理",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "partial", "notes": "識別 Hard/Cable Reset ordered set 和 Soft_Reset 控制消息；清理對應协议重复/分块状态。不能证明软复位协商或 Hard Reset 后 VBUS 电源复位时序。", "refs": [{ "section": "§5.6.4–§5.6.5, §6.7.1–§6.7.3", "table": "Tables 5-11, 5-12", "page": "PDF pp.112–113, 201–203" }] },
+        "3.0": { "status": "partial", "notes": "按有序集和控制消息作被动状态清理；未模拟 Policy Engine reset response、电源回到默认值或恢复计时。", "refs": [{ "section": "§5.6.4–§5.6.5, §6.8.1–§6.8.3", "table": "Tables 5-11, 5-12", "page": "PDF pp.74–75, 184–185" }] },
+        "3.1": { "status": "partial", "notes": "Soft Reset 清理 MessageID/分块历史，Hard Reset 清空链路状态，Cable Reset 清 Cable Plug 状态；电气和控制器复位动作不模拟。", "refs": [{ "section": "§5.6.4–§5.6.5, §6.8.1–§6.8.3", "table": "Tables 5-11, 5-12", "page": "PDF pp.102–103, 250–251" }] },
+        "3.2": { "status": "partial", "notes": "实现 Hard Reset/Cable Reset 信令分类、Soft Reset 相关去重/分块状态清理；Reset/AMS 状态图的全部响应行为未执行。", "refs": [{ "section": "§5.3.1.1.4, §7.1.1–§7.1.4", "table": "Table 5.4; Reset state diagrams", "page": "PDF pp.90–91, 194–197" }] }
+      },
+      "code": [{ "file": "src/js/pd/decoder.js", "start": 354, "end": 358, "symbol": "decode" }, { "file": "src/js/pd/decoder.js", "start": 969, "end": 1006, "symbol": "_specialPacket" }],
+      "evidence": ["Soft_Reset only resets state after a valid observed message; Hard Reset clears channel link snapshots and resets EPR observation; Cable Reset removes Cable Plug link state while retaining SOP port state."],
+      "limitations": ["Passive message history cannot prove the transmitter and receiver each performed all local reset actions.", "No VBUS discharge/re-application or hard-reset/recovery timers are checked."]
+    },
+    {
+      "id": "passive-ams-snapshot",
+      "title": "消息可见的 Request/Accept/PS_RDY 合同与 AMS 状态快照",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "partial", "notes": "只根据完整且可信的 SOP 消息观察 PDO、Request、Accept、PS_RDY 等阶段；缺失报文不推导对端真实状态。", "refs": [{ "section": "§8.3.2.3 Power Negotiation", "table": "Table 8-5 Steps for a successful Power Negotiation", "page": "PDF pp.298–300" }] },
+        "3.0": { "status": "partial", "notes": "消息驱动的协商快照，不实现主动 Policy Engine、发送调度和电源输出控制。", "refs": [{ "section": "§8.3.2.2 Power Negotiation", "table": "Table 8-5 Steps for a successful Power Negotiation", "page": "PDF pp.295–296" }] },
+        "3.1": { "status": "partial", "notes": "消息驱动的协商快照；只在 CRC/EOP 完整且未识别为重传的帧上更新持久状态。", "refs": [{ "section": "§8.3.2.2 Power Negotiation", "table": "Table 8-5 Steps for a successful Power Negotiation", "page": "PDF pp.385–386" }] },
+        "3.2": { "status": "partial", "notes": "以 SOP 有效报文更新观察到的合同、EPR 阶段及交换阶段；不能代替设备 Policy Engine State Diagram。", "refs": [{ "section": "§7.9 Power Negotiation (SPR) AMS, §9.2.3.4, §9.2.4.5", "table": "PE_SRC_Negotiate_Capability / PE_SNK_Select_Capability states", "page": "PDF pp.207–209, 284, 291" }] }
+      },
+      "code": [{ "file": "src/js/pd/decoder.js", "start": 359, "end": 368, "symbol": "decode" }, { "file": "src/js/pd/epr.js", "start": 30, "end": 144, "symbol": "pdTrackEpr" }],
+      "evidence": ["State commits only for CRC/EOP-complete, state-valid, non-retry SOP messages; cable and port conversation states are isolated.", "Contracts remain unknown when Request → Accept → PS_RDY could not be observed."],
+      "limitations": ["No active Policy Engine or DPM decisions, no protocol messages are emitted, and no VBUS/CC controls are available.", "A trace missing an event can only yield unknown/partial context; current packet observations are not a claim about hidden internal state."]
+    },
+    {
+      "id": "frs-message-sequence",
+      "title": "Fast Role Swap 的可见消息序列與角色切换",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "not-defined", "notes": "FR_Swap/FRS 未定义于 PD 2.0 profile。", "refs": [{ "section": "§6.3 control message definitions", "table": "Table 6-1; control-message definitions", "page": "PDF pp.143–151" }] },
+        "3.0": { "status": "partial", "notes": "解析 FR_Swap → Accept → 两侧 PS_RDY 的消息可见阶段；不验证发起前提、CC FRS 电气信号、VBUS 实际切换或时限。", "refs": [{ "section": "§6.3.17, §8.3.2.7", "table": "Table 8-13 Steps for a Successful Fast Role Swap Sequence", "page": "PDF pp.112, 323–325" }] },
+        "3.1": { "status": "partial", "notes": "被动检查 FR_Swap/Accept/PS_RDY 角色序列；不测 FRS CC 短接信号、电源保持或时序。", "refs": [{ "section": "§5.8.5.6, §5.8.6.3, §6.3.19, §8.3.2.7", "table": "Table 8-25", "page": "PDF pp.118–120, 143, 465" }] },
+        "3.2": { "status": "partial", "notes": "按 FR_Swap、Accept 和 New Sink/New Source 的 PS_RDY Header 角色追踪完成；序列中断时状态记未知。", "refs": [{ "section": "§6.3.19, §7.11, Ch.10 §§10.3–10.4.1", "table": "FRS sequence", "page": "PDF pp.123, 210, 393–397" }] }
+      },
+      "code": [{ "file": "src/js/pd/decoder.js", "start": 569, "end": 614, "symbol": "_trackSwap" }],
+      "evidence": ["Implementation expects FR_Swap, peer Accept, New Sink PS_RDY with power role Sink then New Source PS_RDY with power role Source; resets negotiated capability and EPR snapshots on observed completion."],
+      "limitations": ["Does not observe the pre-message CC FRS signal/voltage duration, VBUS hold-up/discharge or FRS timers; those requirements need analog capture and continuity.", "A message-only trace cannot prove Rp/Rd was electrically switched as required."]
+    },
+    {
+      "id": "epr-passive-state",
+      "title": "EPR Enter/Exit、EPR capability、EPR Request 與 KeepAlive 消息状态",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "not-defined", "notes": "EPR 未定义于 PD 2.0。", "refs": [{ "section": "§6.2.1, §6.4.1–§6.4.2", "table": "PD 2.0 message/PDO definitions", "page": "PDF pp.143–166" }] },
+        "3.0": { "status": "not-defined", "notes": "该版未定义 EPR Mode；不应用后续 EPR 状态规则。", "refs": [{ "section": "§6.2.1.1, §6.4.1–§6.4.2", "table": "Table 6-1; Source/Sink PDO definitions", "page": "PDF pp.96–98, 116–125" }] },
+        "3.1": { "status": "partial", "notes": "被动追踪 EPR Mode enter/action、能力与 Request/Accept/PS_RDY、exit 和 KeepAlive/Ack；依赖可见有效消息，不运行策略层。", "refs": [{ "section": "§6.5.14–§6.5.15, §8.3.3.26", "table": "Tables 8-11, 8-12; EPR Mode state diagrams", "page": "PDF pp.228–230, 411–421, 706–710" }] },
+        "3.2": { "status": "partial", "notes": "被动追踪 Enter/Acknowledged/Succeeded/Failed/Exit、EPR 能力与请求、KeepAlive/Ack、软/硬复位和 FRS 导致的模式变化；未知上下文保持 unknown。", "refs": [{ "section": "§6.3.19, §7.30, §9.2.26.3", "table": "Figures 9.96–9.99; Table 8.12", "page": "PDF pp.123, 217–223, 381–387" }] }
+      },
+      "code": [{ "file": "src/js/pd/epr.js", "start": 6, "end": 9, "symbol": "pdCreateEprState" }, { "file": "src/js/pd/epr.js", "start": 30, "end": 144, "symbol": "pdTrackEpr" }, { "file": "src/js/pd/epr.js", "start": 147, "end": 154, "symbol": "pdEprPowerSwap" }, { "file": "src/js/pd/decoder.js", "start": 359, "end": 374, "symbol": "decode" }],
+      "evidence": ["Tracker consumes only complete, state-valid, non-retry SOP packet events; capability queries alone do not imply EPR mode.", "Observed EPR KeepAlive and Ack messages have direction/mode checks; message-level PR_Swap/EPR mode rules have diagnostics."],
+      "limitations": ["No complete EPR Policy Engine state machine, VCONN/EPR cable electrical prerequisite proof, VBUS transition or power capability test.", "No EPR timing/deadline checks. EPR timeout coverage is separately recorded as missing for 3.1/3.2."]
+    },
+    {
+      "id": "epr-timers",
+      "title": "EPR KeepAlive、EPR AMS 與 EPR 电源转换计时器",
+      "status": "missing",
+      "versions": {
+        "2.0": { "status": "not-defined", "notes": "PD 2.0 无 EPR 定时要求。", "refs": [{ "section": "§6.5 timers", "table": "PD 2.0 timer definitions", "page": "PDF pp.188–194" }] },
+        "3.0": { "status": "not-defined", "notes": "PD 3.0 baseline 未定义 EPR Mode timers。", "refs": [{ "section": "§6.6 timers", "table": "PD 3.0 timer definitions", "page": "PDF pp.168–176" }] },
+        "3.1": { "status": "missing", "notes": "未检查 EPR Keep Alive 的周期/响应 deadline，亦未验证 EPR AMS 与电源转换窗口。", "refs": [{ "section": "§6.6.21, §8.3.3.26", "table": "Table 6-68 Time Values; Tables 8-11, 8-12", "page": "PDF pp.242–243, 411–421, 706–710" }] },
+        "3.2": { "status": "missing", "notes": "代码存储 KeepAlive 到达时间和 lastTrafficMs，但未对 EPR KeepAliveTimer、EPR AMS deadline 或 EPR 电压转换 timer 与 trace 时间比较。", "refs": [{ "section": "§7.30 EPR Mode AMS, §7.31 Timers, §7.32 Counters", "table": "Table 7.9 and EPR timers", "page": "PDF pp.217–236, 239" }] }
+      },
+      "code": [{ "file": "src/js/pd/epr.js", "start": 6, "end": 9, "symbol": "pdCreateEprState" }, { "file": "src/js/pd/epr.js", "start": 30, "end": 144, "symbol": "pdTrackEpr" }],
+      "evidence": ["endTimeMs is available to tracker and KeepAlive timestamps are retained, but no timer threshold comparison or timeout event exists."],
+      "limitations": ["A timing checker would also need to know capture gaps, sampling/timestamp uncertainty and whether the relevant SOP link was continuously observed; current implementation has none of those checks."]
+    },
+    {
+      "id": "electrical-and-policy-engine",
+      "title": "PHY 模拟电气、CC/VBUS/VCONN 动作與主动 Policy Engine",
+      "status": "out_of_scope",
+      "versions": {
+        "2.0": { "status": "out_of_scope", "notes": "规范包含 CC BMC/BFSK 电气和电源响应/Policy Engine 要求；本次实现只解码捕获位与报文，不控制或认证设备。", "refs": [{ "section": "§5.8, Ch.7–8", "table": "BMC Tx/Rx electrical masks and power/Policy Engine rules", "page": "PDF pp.124–138, 217–480" }] },
+        "3.0": { "status": "out_of_scope", "notes": "没有 PHY 电气接收掩模、模拟 CC/VBUS/VCONN 验证或主动 Policy Engine。", "refs": [{ "section": "§5.8, Ch.7–8", "table": "BMC electrical requirements and PE state diagrams", "page": "PDF pp.76–90, 193–450" }] },
+        "3.1": { "status": "out_of_scope", "notes": "没有模拟物理量符合性测试、功率器件控制或主动协议状态机。", "refs": [{ "section": "§5.8.4–§5.8.6, Ch.7–8", "table": "BMC Tx/Rx masks and PE state diagrams", "page": "PDF pp.108–120, 297–700" }] },
+        "3.2": { "status": "out_of_scope", "notes": "保存分析仪已经采集的 VBUS/IBUS 数值不等于按规范验证 CC/VBUS 电气边界；无主动 PE/DPM。", "refs": [{ "section": "§5.5, Ch.4, Ch.9", "table": "Tables 5.9, 5.11; PE state diagrams", "page": "PDF pp.48–72, 110–111, 276–391" }] }
+      },
+      "code": [{ "file": "src/js/core/bmc.js", "symbol": "BmcDecoder" }, { "file": "src/js/pd/decoder.js", "symbol": "PdDecoder" }, { "file": "src/js/core/pipeline.js", "symbol": "attachBusValues" }],
+      "evidence": ["No API in the decoder sends messages or changes CC/VBUS/VCONN state; pipeline only attaches recorded bus samples when available."],
+      "limitations": ["No power supply response, analog waveform mask, CC resistor/pulse, current/voltage threshold, load response, discharge, protection or policy decision testing."]
+    }
+  ],
+  "findings": [
+    {
+      "id": "PD2_HEADER_REV10_RESERVED",
+      "title": "PD 2.0 显式基线下 Header Revision 10b 未诊断 Reserved",
+      "before": "Header Revision 10b 显示成通用 3.x，PD 2.0 profile 未触发 REV 警告；这让保留 Revision 码漏过版本合法性诊断。",
+      "after": "_versionHints 在显式 PD 2.0 profile 下将 Revision 10b 和 11b 都作为 Reserved，并标记本包 state invalid。PD 3.x GoodCRC 的规范例外仍按所选 profile 适用，原始 Revision 继续显示。",
+      "code": [{ "file": "src/js/pd/decoder.js", "start": 485, "end": 509, "symbol": "_versionHints" }],
+      "refs": [{ "version": "2.0", "section": "§6.2.1.5", "table": "Table 6-1", "page": 144 }, { "version": "3.2", "section": "§6.1.3", "table": "Table 6.2", "page": 112 }],
+      "tests": ["tools/pd-audit-wire.mjs: PD 2.0 GoodCRC Revision 10b/11b receives REV; PD 3.0/3.1/3.2 GoodCRC values 00b/01b/10b/11b are ignored per each selected baseline.", "artifacts/pd-spec-audit/wire-audit-results.json: 7 passed, 0 failed."]
+    },
+    {
+      "id": "GOODCRC_REVISION_DONT_CARE_CONFIRMED",
+      "title": "确认后续规范要求 GoodCRC Revision 字段按 don't-care 忽略",
+      "before": "旧逻辑统一对 Header Revision 11b 报 REV 并阻止语义状态提交，未按所选 3.x 规范忽略 GoodCRC 的此字段；独立 ACK 配对函数未据 REV 拒绝配对。",
+      "after": "经核对 PD 3.0 §6.2.1.1.5、PD 3.1 §6.2.1.1.5 和 PD 3.2 §6.1.3，GoodCRC Revision 是 don’t-care；3.x profile 不对其发 REV 警告或因此拒绝有效 ACK。该点是已确认规范行为，不是保留缺陷。",
+      "code": [{ "file": "src/js/pd/decoder.js", "start": 488, "end": 500, "symbol": "_versionHints" }],
+      "refs": [{ "version": "3.0", "section": "§6.2.1.1.5", "page": 98 }, { "version": "3.1", "section": "§6.2.1.1.5", "page": 126 }, { "version": "3.2", "section": "§6.1.3", "page": 112 }],
+      "tests": ["tools/pd-audit-wire.mjs: all four two-bit values under 3.0/3.1/3.2 profiles; 12 independently decoded packets remain CRC-valid and frame-valid without REV warning."]
+    },
+    {
+      "id": "EXT_PADDING_RECEIVER_TOLERANCE",
+      "kind": "verification",
+      "title": "将最终 chunk 的额外字节识别为 padding 而非 Extended Message 数据",
+      "before": "主要风险是把 sender 的 zero-padding 要求误读成接收端对非零 padding 的硬性拒收。",
+      "after": "按 PD 3.2 §9.1.2.1.2.3，完整消息条件允许 Num bytes received ≥ Data Size；多出的最后 chunk bytes 是 padding，不属于 Extended Message。解码器剪掉它们并保留 PADDING sender-format warning，不把其并入重组数据，也不因该 warning 单独使 frame invalid。",
+      "code": [{ "file": "src/js/pd/decoder.js", "start": 797, "end": 813, "symbol": "_readExtended" }, { "file": "src/js/pd/decoder.js", "start": 891, "end": 895, "symbol": "_parseExtended" }],
+      "refs": [{ "version": "3.2", "section": "§6.5.1.1", "page": 172 }, { "version": "3.2", "section": "§9.1.2.1.2.3", "page": 258 }],
+      "tests": ["tools/pd-audit-wire.mjs: received CRC-valid chunk with Data Size=1, payload A5, nonzero trailing 7E; asserts frameValid=true, reassembly=[A5], and PADDING warning."]
+    }
+  ],
+  "verification": {
+    "suite": "tools/pd-audit-wire.mjs",
+    "results": "artifacts/pd-spec-audit/wire-audit-results.json",
+    "status": "7 passed, 0 failed (parent-run result, 2026-10-08T06:31:49Z)",
+    "coverageBasis": "Coverage status is based on code inspection against the cited normative sections and explicit limitations, not on test pass rate. Literal vectors exercise selected fixed behaviors only."
+  }
+}

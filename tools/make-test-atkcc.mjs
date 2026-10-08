@@ -7,7 +7,10 @@
  * 空闲段（全 0xFF / 0x00）几乎不产生边沿，所以真实抓包里大多数块都很便宜。
  * 要复现「卡死」必须造出**边沿密集**的块。
  *
- * 两种模式：
+ * 模式：
+ *   --pd            12 条可解码 PD 报文 / 6 对 GoodCRC，默认回归与 CI 使用。
+ *   --pd-bist       PD 2.0 BIST：能力/测试请求/GoodCRC/两帧 PRBS/Hard Reset。
+ *   --no-bus        --pd 时省略 bus.ini，验证缺失模拟量的展示与导出。
  *   --fill 0x55     每块全部填 0x55（逐位交替 1/0）→ **每位都是跳变**，840 万个边沿/块。
  *                   这种块 deflate 后只有 1 KB 左右，所以是「文件极小、解码极重」的极端样本，
  *                   正对应「几十 KB 的文件打开却卡死」。
@@ -22,12 +25,13 @@
  *   node tools/make-test-atkcc.mjs --fill 0x55 --chunks 16 --out "../_worst.atkcc"
  *   node tools/make-test-atkcc.mjs --src "../苹果40w-ip18pro.atkcc" --rounds 30 --out "../_long.atkcc"
  */
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { resolve, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { deflateRawSync } from 'node:zlib';
 import { ZipReader, ZipEntry } from '../src/js/core/zip.js';
 import { CHUNK_SIZE } from '../src/js/core/atkcc.js';
+import { DEC4B5B, SOP_SEQUENCES, EOP_SYM } from '../src/js/core/pd_tables.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -40,9 +44,73 @@ const FILL = arg('--fill', null);
 const CHUNKS = Number(arg('--chunks', 16));
 const ROUNDS = Number(arg('--rounds', 0));
 const CHANNELS = Number(arg('--channels', 1));
+const BIST = argv.includes('--pd-bist');
+const PD = argv.includes('--pd') || BIST;
+const NO_BUS = argv.includes('--no-bus');
 
 const ENC = new TextEncoder();
 const entryOf = (zr, n) => zr.entries.find((e) => e.name === n);
+
+/** 可解码的确定性协商样本，供默认回归和 CI 使用，无需私人抓包。 */
+function pdSamples() {
+  const inverse = {};
+  for (let i = 0; i < 32; i++) if (inverse[DEC4B5B[i]] === undefined) inverse[DEC4B5B[i]] = i;
+  const messages = [];
+  const add = (type, id, source, words = []) => {
+    const header = (words.length << 12) | (id << 9) | (source ? 0x100 : 0) | 0x80 | (source ? 0x20 : 0) | type;
+    messages.push({ header, words });
+  };
+  const pdo = (100 << 10) | 300;
+  add(1, 0, true, [pdo]); add(1, 0, false);
+  add(2, 0, false, [(1 << 28) | (300 << 10) | 300]); add(1, 0, true);
+  add(3, 1, true); add(1, 1, false);
+  add(6, 2, true); add(1, 2, false);
+  add(4, 1, false, [pdo]); add(1, 1, true);
+  add(15, 3, true, [0xFF008001]); add(1, 3, false);
+  if (BIST) messages.splice(0,messages.length,{header:0x1141,words:[pdo]},{header:0x1343,words:[0]},{header:0x0241,words:[]});
+  const frames=[];
+  const symbolBits=s=>Array.from({length:5},(_,k)=>inverse[s]>>>k&1);
+  for (const { header, words } of messages) {
+    const bits = SOP_SEQUENCES[0].flatMap(symbolBits);
+    const nibbles = (v, n) => { for (let k=0;k<n;k++) bits.push(...symbolBits((v >>> (4*k)) & 15)); };
+    nibbles(header,4);
+    const bytes=[header&255,header>>>8];
+    for(const w of words) { nibbles(w,8); for(let k=0;k<4;k++) bytes.push(w>>>8*k&255); }
+    nibbles(crc32(bytes),8);bits.push(...symbolBits(EOP_SYM));frames.push(bits);
+  }
+  if(BIST) {
+    let register=255;
+    for(let frame=0;frame<2;frame++) {
+      const bits=SOP_SEQUENCES[0].flatMap(symbolBits);
+      for(let i=0;i<1024;i++) {
+        const feedback=(register>>>7 ^ register>>>5 ^ register>>>4 ^ register>>>3)&1;
+        register=(register<<1&255)|feedback;bits.push(feedback ^ (frame===1 && i===42 ? 1 : 0));
+      }
+      frames.push(bits);
+    }
+    frames.push([0x14,0x14,0x14,0x15].flatMap(symbolBits)); // RST1/RST1/RST1/RST2
+  }
+  const edges = [];
+  let t = 25; // 10 us @ 2.5 MHz
+  for (const frame of frames) {
+    const bits=BIST ? [...Array.from({length:64},(_,i)=>i&1),...frame] : frame;
+    edges.push(t);
+    for (const bit of bits) {
+      if (bit) edges.push(t + 25 / 6);
+      t += 25 / 3;
+      edges.push(t);
+    }
+    t += 5000; // 每包之间留 2 ms 空闲
+  }
+  const samples = Math.ceil(t);
+  const data = new Uint8Array(Math.ceil(samples / 8));
+  let ei = 0, high = 1;
+  for (let s = 0; s < data.length * 8; s++) {
+    while (ei < edges.length && Math.round(edges[ei]) <= s) { high ^= 1; ei++; }
+    if (high) data[s >> 3] |= 1 << (s & 7);
+  }
+  return data;
+}
 
 /* ── 造数据块内容 ─────────────────────────────────────── */
 function fillChunk() {
@@ -119,7 +187,15 @@ const items = [];
 let totalSamples = 0;
 let mode = '';
 
-if (FILL) {
+if (PD) {
+  mode = BIST ? 'PD 2.0 BIST（6 条报文，含 2 帧 PRBS）' : '合成 PD 协商（12 条报文 / 6 对 GoodCRC）';
+  const data = pdSamples();
+  totalSamples = data.length * 8;
+  items.push({ name: 'channel.ini', data: ENC.encode('SamplingFrequency=2500\n') });
+  items.push({ name: '0/channel.ini', data: ENC.encode(`0\n${totalSamples}\n`) });
+  if (!NO_BUS) items.push({ name: 'bus.ini', data: ENC.encode(`sample=0,vbus=5.000,ibus=0.100\nsample=${Math.floor(totalSamples / 2)},vbus=9.000,ibus=1.500\n`) });
+  items.push({ name: '0/0-0.bin', data });
+} else if (FILL) {
   mode = `合成填充 ${FILL}`;
   const perCh = Math.max(1, Math.ceil(CHUNKS / CHANNELS));
   items.push({ name: 'channel.ini', data: ENC.encode('SamplingFrequency=2500\n') });
@@ -173,15 +249,18 @@ if (FILL) {
 }
 
 const out = buildZip(items);
+await mkdir(dirname(OUT), { recursive: true });
 await writeFile(OUT, out);
-const binCount = items.filter((x) => x.name.endsWith('.bin')).length;
+const binItems = items.filter((x) => x.name.endsWith('.bin'));
+const binCount = binItems.length;
+const binBytes = binItems.reduce((sum, x) => sum + x.data.length, 0);
 
 console.log('');
 console.log('  造测试样本');
 console.log('  ─────────────────────────────────────────────');
 console.log(`  模式：    ${mode}`);
 console.log(`  通道数：  ${FILL ? CHANNELS : 1}`);
-console.log(`  数据块：  ${binCount} 块 × 1 MiB = ${binCount} MiB 未压缩`);
+console.log(`  数据块：  ${binCount} 块，合计 ${(binBytes / 1048576).toFixed(3)} MiB 未压缩`);
 console.log(`  声明采样：${totalSamples}（${(totalSamples / 2500000).toFixed(1)} s @2.5MHz）`);
 console.log(`  产物：    ${OUT}`);
 console.log(`  体积：    ${(out.length / 1048576).toFixed(2)} MB`);

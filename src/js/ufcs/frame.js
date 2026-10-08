@@ -169,6 +169,8 @@ export function ufcsSplitFrames(bytes, off, withCrc, maxFrames = 64) {
 export function ufcsLocateFrames(blob, { maxPrefix = 16 } = {}) {
   const n = blob.length;
   if (n < 3) return null;                 // 最小的一帧是「控制消息 + 无 CRC」= 3 字节
+  // 状态事件的时间戳偶尔也能凑成合法消息头，必须在穷举之前排除。
+  if (ufcsParseEvent(blob)) return null;
 
   // ── 0. 先试分析仪容器布局（见下方 ufcsParseRecord）──
   // 认得出来就用它：它额外给出「物理链路」与容器长度域，是穷举拿不到的信息。

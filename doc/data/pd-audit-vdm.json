@@ -1,0 +1,245 @@
+{
+  "title": "USB PD VDM、Identity、SVID 与模式关联四版本审计",
+  "auditDate": "2026-10-08",
+  "method": {
+    "scope": "逐条对照仓库中的 PD 2.0 v1.3、PD 3.0 v1.1、PD 3.1 v1.4、PD 3.2 v1.2 PDF 及其提取文本；核对 VDM Header、Structured/Unstructured VDM、Identity、SVID、Mode、Cable Plug、AMA/AMC、VPD、DRD、Enter_USB 与 Data_Reset 关联。引用的 page 是 PDF 物理页。",
+    "sources": [
+      { "revision": "2.0", "pdf": "doc/USB_PD_Revision 2.0_Version_1.3_20170112.pdf", "extract": "artifacts/pd-spec-audit/pd-2.0.txt" },
+      { "revision": "3.0", "pdf": "doc/USB_PD_Revision_3.0_Version_1.1_20170112.pdf", "extract": "artifacts/pd-spec-audit/pd-3.0.txt" },
+      { "revision": "3.1", "pdf": "doc/USB_PD_Revision_3.1_Version_1.4_2022-04.pdf", "extract": "artifacts/pd-spec-audit/pd-3.1.txt" },
+      { "revision": "3.2", "pdf": "doc/USB_PD_Revision_3.2_Version_1.2_2026_05_20.pdf", "extract": "artifacts/pd-spec-audit/pd-3.2.txt" }
+    ],
+    "validation": "独立规范字段固定向量位于 tools/pd-audit-vdm.mjs；主代理执行结果为 18 组通过、0 组失败，逐组结果写入 artifacts/pd-spec-audit/vdm-audit-results.json。脚本捕获每组异常并汇总，避免单项失败遮蔽后续结果。通过只证明这些固定向量，不等价于完整协议符合性。",
+    "scopeLimit": "本审计衡量当前可见报文解码和部分观察状态关联。它不模拟设备响应、Alternate Mode/USB4 Policy Engine、线缆 VCONN Source 策略、电气动作或未捕获消息；未知抓包上下文不自动视为协议违规。"
+  },
+  "summary": {
+    "complete": "具备版本基线感知的 SVDM Major/Minor 解析、标准命令字段解析、Identity 主要产品类型分派、SVID 表版本门控和已观察 Mode 的按链路关联。",
+    "partial": "标准命令角色/SOP/对象数量限制、完整 Identity 与保留位校验、Cable Plug/VPD、UVDM VID/状态约束、模式索引状态关联及 Data_Reset 影响均只部分实现。",
+    "notDefined": "PD 2.0/3.0 未定义 Enter_USB 与 Data_Reset；PD 2.0 的 DFP Product Type 和 PD 3.1 的旧 AMA/AMC 产品类型编码属于 Reserved。",
+    "outOfScope": "SVID 厂商/Alt Mode 自定义载荷语义、主动 Alternate Mode 与 USB4 握手状态机、响应调度、VCONN/数据线切换以及完整定时行为。",
+    "profileCaveat": "线上 Specification Revision=10b 只表示 PD 3.x，不能仅凭该 Header 区分 3.0/3.1/3.2。精确版本差异须基于用户选择的 PDF 基线；未选版本时保留可见歧义。"
+  },
+  "features": [
+    {
+      "id": "svdm-version-header",
+      "title": "SVDM Header 的 Major/Minor 版本差异",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "partial", "notes": "Major=00b 表示本版唯一的 SVDM 1.0；Major=01b…11b 为 Reserved。标准命令 Minor 保留；命令 16–31 的 Minor 由 SVID 定义。解码器按 PD 2.0 基线展示/告警，但不会模拟接收方收到更高版本时以自身最高版本响应。", "refs": [{ "section": "§6.4.4.2.3", "table": "Table 6-19 Structured VDM Header", "page": "PDF p.167" }] },
+        "3.0": { "status": "partial", "notes": "新报文使用 Major=01b（SVDM 2.0）；Major=00b（SVDM 1.0）在本规范中 Shall Not be used。标准命令 Minor 为 Reserved，SVID 自定义命令 Minor 由 SVID 定义。旧版接收兼容行为不会由被动解析器执行。", "refs": [{ "section": "§6.4.4.2.3", "table": "Table 6-25 Structured VDM Header", "page": "PDF pp.131–132" }] },
+        "3.1": { "status": "partial", "notes": "Major=01b 表示 SVDM 2.0；Major=00b 不得用于新报文；标准命令 Minor 仍 Reserved。按显式基线校验，报文 Header 本身不能确定对端实际采用 3.1。", "refs": [{ "section": "§6.4.4.2.3", "table": "Table 6-29 Structured VDM Header", "page": "PDF pp.166–167" }] },
+        "3.2": { "status": "partial", "notes": "Major=00b 的 V1.0 对旧实现仍可接收但已不建议新设计使用；Major=01b 的 Minor=00b/01b 分别表示 V2.0/V2.1，标准命令的 10b/11b 无效；自定义命令 Minor 由 SVID 定义。Major=10b/11b 按接收兼容条款视作 Major=01b，但当前实现告警而不模拟接收方降级处理。", "refs": [{ "section": "§6.4.12.2.1, §8.5.1", "table": "Table 6.33 Structured VDM Header; SVDM Version Negotiation", "page": "PDF pp.151–153, 242" }] }
+      },
+      "code": [{ "file": "src/js/pd/vdm.js", "start": 120, "end": 155, "symbol": "vdmParse" }, { "file": "src/js/pd/vdm.js", "start": 754, "end": 777, "symbol": "pdValidateVdm" }],
+      "evidence": ["tools/pd-audit-vdm.mjs 的向量分别检查 PD 2.0 Major=00、3.0/3.1 Major=01、Major=00 的版本合法性差异、3.2 V2.0/V2.1 Minor、自定义命令 Minor 和无精确 3.x 基线时的歧义。", "验证结果见 artifacts/pd-spec-audit/vdm-audit-results.json；测试组通过不代表所有接收兼容行为已实现。"],
+      "limitations": ["Header Revision=3.x 不能单独选择 3.0、3.1 或 3.2 的 Minor 定义；CLI/profile 选择只是解释基线，不是设备版本鉴定。", "SVDM Major 超过当前基线支持值时，本工具只给出版本诊断，不能执行规范接收方的最高共同版本应答。"]
+    },
+    {
+      "id": "svdm-standard-command-limits",
+      "title": "标准 SVDM 命令编码、响应、位置、SOP 与角色限制",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "partial", "notes": "已检查标准命令范围、Discover Identity/SVIDs 的 PD SID、命令对象位置、ACK/NAK/BUSY 数据对象数量、SVDM 1.0 的 DFP 发起/UFP 响应及 UFP Attention。Port SOP 的 B5 是 Data Role；SOP′/SOP″ 的同位保留，角色判断只用于 SOP。VCONN Source、Explicit Contract、AMS 次序和响应计时未由本模块证明。", "refs": [{ "section": "§6.4.4.2.2–§6.4.4.2.4", "table": "Tables 6-20, 6-22", "page": "PDF pp.168–170" }] },
+        "3.0": { "status": "partial", "notes": "已检查命令号、PD SID、数据对象数量和 SOP 链路限制。V2.0 允许端口双方发起发现；Enter/Exit Mode 仍须 DFP 发起。Major=00 的旧兼容接收语义和规范状态机没有模拟。", "refs": [{ "section": "§6.4.4.2", "table": "Tables 6-26, 6-28", "page": "PDF pp.132–134" }] },
+        "3.1": { "status": "partial", "notes": "命令/SOP 限制和 Enter/Exit 角色已有静态检查；捕获缺包时不能把未知命令历史或 Mode 数量断定为无效。未实现 VCONN Source/AMS 状态、tVDMResponse 等时序。", "refs": [{ "section": "§6.4.4.2", "table": "Tables 6-30, 6-32", "page": "PDF pp.166–169" }] },
+        "3.2": { "status": "partial", "notes": "对结构化命令检查无效/保留命令、标准命令 Minor、Object Position、已观察的 Mode 数量、命令数据对象数量、Attention 无响应、Enter/Exit 不能返回 BUSY，以及 SOP/SOP′/SOP″ 允许范围；Cable Plug 仅作响应方。不会因未捕获请求历史而推导违规。", "refs": [{ "section": "§6.4.12.2.1, §6.4.12.5–§6.4.12.8", "table": "Table 6.33; Table 8.1 Command Response", "page": "PDF pp.151–153, 170–171, 243" }] }
+      },
+      "code": [{ "file": "src/js/pd/vdm.js", "start": 754, "end": 814, "symbol": "pdValidateVdm" }, { "file": "src/js/pd/decoder.js", "start": 548, "end": 552, "symbol": "_context" }],
+      "evidence": ["独立向量覆盖标准命令 Minor、无效命令/SOP、Mode Object Position、Enter/Exit BUSY 和 PD 2.0 SOP Header B5 角色检查。", "当前 Decoder 将 Data Role 与 Specification Revision/Profile 一并传入 VDM 解析；PD 2.0 下 SOP Header B5 不能误判为 Reserved。"],
+      "limitations": ["缺少 Explicit Contract、VCONN Source、已支持 SVID/Mode、AMS 互斥与规范定时器的完整状态输入；检查结果仅基于观察到的帧。", "命令有效性并不证明设备实际按规范接收、响应或执行命令。"]
+    },
+    {
+      "id": "unstructured-vdm",
+      "title": "Unstructured VDM 的 VID、载荷与发起方检查",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "partial", "notes": "B31–16 作为 USB-IF 分配的 VID，低 15 位为厂商自定义字段；代码保留原始载荷，拒绝 0 和已知标准 SVID，SOP 端仅接受 DFP 发起。", "refs": [{ "section": "§6.4.4.1", "table": "Table 6-18 Unstructured VDM Header", "page": "PDF p.167" }] },
+        "3.0": { "status": "partial", "notes": "保留厂商 VID 与私有载荷；非结构化 VDM 不可使用标准 SID，Port 端由 DFP 发起，Cable Plug 不能发起。", "refs": [{ "section": "§6.4.4.1", "table": "Table 6-24 Unstructured VDM Header", "page": "PDF p.130" }] },
+        "3.1": { "status": "partial", "notes": "字段维持厂商 VID/厂商载荷形态；实现检查可知的 0/标准 SVID、SOP* 和发起方条件，但不查询 USB-IF 完整 VID 分配库。", "refs": [{ "section": "§6.4.4.1", "table": "Table 6-28 Unstructured VDM Header", "page": "PDF p.165" }] },
+        "3.2": { "status": "partial", "notes": "按 Table 6.32 解码 B31–16 VID 与 B14–0 Vendor Use；对未知但非零/非标准 ID 作为不透明 VID 接受。未检查显式供电合约、活动 Mode/SVID 状态及 VID 是否真实分配。", "refs": [{ "section": "§6.4.12.1, §8.4", "table": "Table 6.32 Unstructured VDM Header", "page": "PDF pp.151, 241" }] }
+      },
+      "code": [{ "file": "src/js/pd/vdm.js", "start": 93, "end": 117, "symbol": "vdmParse" }, { "file": "src/js/pd/svid.js", "start": 21, "end": 59, "symbol": "svidName" }],
+      "evidence": ["独立向量确认 0xFF00 不能用作非结构化厂商 VID，未知非零 ID 可保持不透明数据，SOP 端 UFP 发起会告警。", "已知厂商名表是便利用途，不是 USB-IF 全部分配记录。"],
+      "limitations": ["仅能过滤 0 与本地已知 PD 标准 SVID，无法判定未知 VID 是否实际由 USB-IF 分配。", "Cable Plug 在代码中按响应方角色限制；显式合约、VCONN 源与会话状态未建模。"]
+    },
+    {
+      "id": "identity-base-and-product-types",
+      "title": "Discover Identity、ID Header、Cert Stat、Product 与产品类型版本映射",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "partial", "notes": "解析 USB Host/Device、Modal、UFP Product Type、VID、Cert Stat/XID、PID/bcdDevice；ID Header B25–16 保留，DFP Product Type 未定义。UFP Hub/Peripheral 不带 Product Type VDO；AMA 使用 PD 2.0 旧格式。", "refs": [{ "section": "§6.4.4.3.1", "table": "Tables 6-23–6-30 ID Header / Product Types / Cert Stat / Product / AMA VDO", "page": "PDF pp.172–177" }] },
+        "3.0": { "status": "partial", "notes": "ID Header 增加 DFP Product Type；UFP 011b/PSD 仍 Reserved，101b 为 AMA，DFP 100b 为 AMC 并复用旧 AMA VDO；Connector Type 字段本版保留。产品字段可解析，所有类型/保留组合尚未穷尽。", "refs": [{ "section": "§6.4.4.3.1", "table": "Tables 6-29–6-37", "page": "PDF pp.135–142" }] },
+        "3.1": { "status": "partial", "notes": "引入新的 UFP/DFP VDO 结构与 DRD 编码；UFP Product Type 100b 及以上、DFP Product Type 100b 及以上为 Reserved，旧 AMA/AMC 码不再可用。", "refs": [{ "section": "§6.4.4.3.1", "table": "Tables 6-33–6-40; Figure 6-16 DRD Identity", "page": "PDF pp.170–175" }] },
+        "3.2": { "status": "partial", "notes": "沿用新型 ID Header、UFP/DFP VDO 与 DRD 形态；旧 UFP AMA=101b、DFP AMC=100b 仅按已弃用兼容 Identity 格式分派。标准 VDO 字段大多可解码，但不是全字段合规验证器。", "refs": [{ "section": "§6.4.12.3", "table": "Tables 6.34–6.41; §6.4.12.3.10 legacy AMA/AMC", "page": "PDF pp.154–161" }] }
+      },
+      "code": [{ "file": "src/js/pd/vdm.js", "start": 195, "end": 301, "symbol": "decodeDiscoverIdentity" }, { "file": "src/js/pd/vdm.js", "start": 304, "end": 383, "symbol": "idHeaderVdo" }, { "file": "src/js/pd/vdm.js", "start": 385, "end": 407, "symbol": "ufpProductTypeText" }],
+      "evidence": ["18 组向量中的身份类型向量验证 PD 3.0 AMC/旧 AMA VDO、PD 3.1 Reserved 旧编码、PD 3.2 保留弃用 AMA/AMC 兼容格式。", "字段解析和状态检查的结论来自对照每版 ID Header 与 Product Type VDO 表，不由测试组数量推导。"],
+      "limitations": ["ACK 数据对象个数、非法保留位/类型组合和不同 Product Type 所需对象布局仅部分校验。PD 3.1 DFP Product Type 101b…111b、PD 3.2 Cable Product Type 111b 等无效码会显示无效文案，但并非每个编码都产生独立告警。", "USB-IF VID/PID/XID 注册真伪不在本地实现可证明范围。"]
+    },
+    {
+      "id": "ufp-dfp-vdo-drd",
+      "title": "新型 UFP/DFP Product Type VDO 与 DRD Identity 布局",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "not-defined", "notes": "本版没有后来定义的通用 UFP VDO/DFP VDO；AMA 使用专用旧 AMA VDO，Hub/Peripheral Product Type 不返回该类 VDO。", "refs": [{ "section": "§6.4.4.3.1", "table": "Tables 6-24, 6-30", "page": "PDF pp.172, 177" }] },
+        "3.0": { "status": "not-defined", "notes": "本版仍使用旧 ID Header 产品类型/AMA VDO，没有 PD 3.1 引入的通用 UFP/DFP VDO 组合。", "refs": [{ "section": "§6.4.4.3.1", "table": "Tables 6-29–6-37", "page": "PDF pp.135–142" }] },
+        "3.1": { "status": "partial", "notes": "解析 UFP VDO、DRD 中的全零 Padding 与 DFP VDO，并区分 PSD 新代码及 USB 2.0 能力枚举。若同时声明端口侧 UFP 与 DFP，按对象 5/6/7 布局检查；UFP/DFP 所有 Reserved、设备能力和产品类别交互未完全校验。", "refs": [{ "section": "§6.4.4.3.1", "table": "Tables 6-39, 6-40; Figure 6-16", "page": "PDF pp.170–175" }] },
+        "3.2": { "status": "partial", "notes": "解码 UFP/DFP VDO；USB2 capability 码沿用 3.2 表布局，不能把 3.1 v1.4 的码值解释带入本版。DRD ACK 中 UFP VDO、全零 Padding、DFP VDO 的位置可检查；全部字段取值合法性仍未穷尽。", "refs": [{ "section": "§6.4.12.3", "table": "Tables 6.40–6.41", "page": "PDF pp.158, 161" }] }
+      },
+      "code": [{ "file": "src/js/pd/vdm.js", "start": 271, "end": 285, "symbol": "decodeDiscoverIdentity" }, { "file": "src/js/pd/vdm.js", "start": 437, "end": 488, "symbol": "ufpVdo" }],
+      "evidence": ["身份向量确认 3.1 旧 AMA/AMC 不再进入专用 VDO 分支、DRD 仍按新版对象位置解码；USB2 码值按选定 3.1/3.2 基线分别解释。"],
+      "limitations": ["部分 VDO 只显示字段/保留内容，未对所有 capability 与 connector/product-type 的组合执行规范一致性验证。", "若抓包省略 Padding 或 DFP VDO，报告为结构缺失；无法证明设备线上实际发送内容以外的隐藏对象。"]
+    },
+    {
+      "id": "ama-vdo",
+      "title": "AMA/AMC 历史产品码与 AMA VDO 字段布局",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "partial", "notes": "UFP Product Type 101b 为 AMA；其旧 VDO 将 B23–12 视为保留并将 B11–8 解作四路 SuperSpeed 方向属性。", "refs": [{ "section": "§6.4.4.3.1", "table": "Table 6-30 AMA VDO", "page": "PDF p.177" }] },
+        "3.0": { "status": "partial", "notes": "UFP 101b 为 AMA，DFP 100b 为 AMC；二者使用后续版 AMA VDO 布局，含 VDO Version B23–21，且 AMC 复用 AMA VDO 解释。", "refs": [{ "section": "§6.4.4.3.1", "table": "Tables 6-32, 6-37", "page": "PDF pp.137, 142" }] },
+        "3.1": { "status": "not-defined", "notes": "旧 AMA/AMC Product Type 编码改为 Reserved；新产品应使用相应 UFP/DFP VDO。解析器拒绝按旧 AMA VDO 展开这些编码。", "refs": [{ "section": "§6.4.4.3.1", "table": "Tables 6-34, 6-36, 6-39, 6-40", "page": "PDF pp.172–175" }] },
+        "3.2": { "status": "partial", "notes": "保留旧 AMA/AMC Identity 仅用于弃用的兼容格式；解码标注已弃用，字段沿用 PD 3.x AMA VDO 而不误用 PD 2.0 方向位布局。", "refs": [{ "section": "§6.4.12.3.10", "table": "Tables 6.35, 6.37, 6.40, 6.41", "page": "PDF pp.156–161" }] }
+      },
+      "code": [{ "file": "src/js/pd/vdm.js", "start": 431, "end": 435, "symbol": "amaDeprecatedText" }, { "file": "src/js/pd/vdm.js", "start": 618, "end": 643, "symbol": "amaVdo" }],
+      "evidence": ["独立向量直接区分 PD 2.0 AMA、PD 3.0 AMC、PD 3.1 Reserved、PD 3.2 deprecated AMA/AMC。"],
+      "limitations": ["AMA 是历史兼容 Identity 格式；本解析器不执行 AMA 的 Alt Mode 配置、供电或信号重配置过程。"]
+    },
+    {
+      "id": "cable-vpd-identity",
+      "title": "Cable Plug Identity、有源/无源线缆 VDO 与 VPD",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "partial", "notes": "识别 Cable Plug Product Type 与旧单 VDO；PD 2.0 位布局中的线缆能力/方向、Termination 与 SuperSpeed 字段按旧表解释。Discover Identity 应先从 SOP′ 发起；Plug 是响应方。", "refs": [{ "section": "§6.4.4.3.1", "table": "Tables 6-25, 6-28, 6-29", "page": "PDF pp.173–175" }] },
+        "3.0": { "status": "partial", "notes": "仍使用旧单 Cable VDO；PD 3.0 的 VBUS/Current/Speed 字段布局与 3.1+ 新格式不同。", "refs": [{ "section": "§6.4.4.3.1", "table": "Tables 6-31, 6-35, 6-36", "page": "PDF pp.137–140" }] },
+        "3.1": { "status": "partial", "notes": "引入分开的 Passive Cable、Active Cable VDO1/VDO2 和 VPD；Cable PT=110b 为 VPD、101b Reserved。Active Cable VDO Version 1.2/1.3 需要第二对象；部分保留字段及版本差异有检查。", "refs": [{ "section": "§6.4.4.3.1", "table": "Tables 6-35, 6-41–6-44", "page": "PDF pp.172, 176–182" }] },
+        "3.2": { "status": "partial", "notes": "沿用 Passive/Active/VPD 分立格式；显示新 USB/electrical 能力、VPD Charge Through 字段和 VDO2；Active Cable VDO2 的旧/新字段按版本选择。只校验部分必需对象、范围与 Reserved 位。", "refs": [{ "section": "§6.4.12.3", "table": "Tables 6.36, 6.42–6.45", "page": "PDF pp.156, 161–168" }] }
+      },
+      "code": [{ "file": "src/js/pd/vdm.js", "start": 244, "end": 270, "symbol": "decodeDiscoverIdentity" }, { "file": "src/js/pd/vdm.js", "start": 495, "end": 615, "symbol": "passiveCableVdo" }, { "file": "src/js/pd/vdm.js", "start": 817, "end": 839, "symbol": "pdLegacyCableVdo" }],
+      "evidence": ["从四版 Identity 产品类型表逐版对照 Cable/VPD 类型和 VDO 分派；向量覆盖新版/旧版 AMA 产品映射及新旧解析入口。", "代码在 cable-link context 下分派 legacy、Passive、Active、VPD，并检查新版 Active Cable VDO2 缺失。"],
+      "limitations": ["未穷尽所有 Cable VDO2 保留位/电气组合，也不检查 Cable Plug 的 VCONN 供电状态、Discover Identity 定时器或线缆实际物理能力。", "PD 3.2 要求 SOP′ 的发现响应可用于 SOP″ Cable Plug；Decoder 的链路状态按 SOP′/SOP″ 隔离，因此当前不会将观察到的 SOP′ Mode 列表复制到 SOP″ 的 Object Position 校验上下文。"]
+    },
+    {
+      "id": "discover-svids-and-standard-svids",
+      "title": "Discover SVIDs 列表解析与版本化标准 SVID 表",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "partial", "notes": "解析每个响应 VDO 中两个 16-bit SVID，0x0000 终止列表，最多 6 个响应 VDO；本版标准表列出 PD SID 0xFF00。厂商名对照不完整且不能证明 VID/SVID 注册状态。", "refs": [{ "section": "§6.4.4.3.2", "table": "Table 6-21 SVID Values; Table 6-31 Discover SVIDs response", "page": "PDF pp.168, 179" }] },
+        "3.0": { "status": "partial", "notes": "成对 SVID 列表、终止符与 6 VDO 上限按新版响应表解析；标准表仍列 PD SID 0xFF00。", "refs": [{ "section": "§6.4.4.2–§6.4.4.3", "table": "Table 6-27 SVID Values; Table 6-38 Discover SVIDs Responder VDO", "page": "PDF pp.132, 143" }] },
+        "3.1": { "status": "partial", "notes": "解析 Discover SVIDs ACK 与终止符；PD 3.1 本地标准 SVID 表只将 PD SID 0xFF00 识别为核心标准 ID。", "refs": [{ "section": "§6.4.4.2–§6.4.4.3", "table": "Table 6-31 SVID Values; Table 6-45 Discover SVIDs Responder VDO", "page": "PDF pp.167, 184" }] },
+        "3.2": { "status": "partial", "notes": "标准表包括 PD SID 0xFF00 与 DPTC SID 0xFF01；FF01 只在 PD 3.2 Profile 下命名/视为标准 SVID。未知非零值保留原始值，0x0000 之后若又出现非零项会告警。", "refs": [{ "section": "§6.4.12.2.1, §6.4.12.3", "table": "Table 6.33 SVID header; Table 6.46 Discover SVIDs response", "page": "PDF pp.151–154, 169" }] }
+      },
+      "code": [{ "file": "src/js/pd/vdm.js", "start": 672, "end": 700, "symbol": "decodeDiscoverSvids" }, { "file": "src/js/pd/svid.js", "start": 50, "end": 78, "symbol": "svidName" }],
+      "evidence": ["独立向量检查 0xFF01 在 PD 3.1 不是此 PDF 列出的标准 SVID，而 PD 3.2 将其识别为 DPTC SID。", "另有向量验证 0x0000 列表终止后出现非零 SVID 时发出格式告警。"],
+      "limitations": ["常见厂商 ID 表是非穷举帮助表，Discover SVIDs 解码不会向 USB-IF registry 查询分配真伪。", "列表去重和按报文累积只形成观察快照，不保证捕获覆盖完整或设备曾发送所有 SVID。"]
+    },
+    {
+      "id": "discover-modes-association",
+      "title": "Discover Modes VDO、Object Position 与每链路观察状态",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "partial", "notes": "Discover Modes ACK 的 Mode VDO 内容由 SVID 定义，当前保留原始 32-bit 数据；按捕获顺序建立 1–6 位置。PD SID 本身不应返回 Mode VDO。未实现所有 Alternate Mode 的 Mode VDO 格式。", "refs": [{ "section": "§6.4.4.2.2", "table": "Table 6-20 Structured VDM Commands", "page": "PDF pp.168–170" }] },
+        "3.0": { "status": "partial", "notes": "保存 SVID 到已观察 Mode VDO 数组的对应关系，Enter/Exit 的 Object Position 可被同包前文 ACK 约束；SVID 自定义 Mode 字段语义仍是原始数据。", "refs": [{ "section": "§6.4.4.2", "table": "Tables 6-26, 6-28", "page": "PDF pp.132–134" }] },
+        "3.1": { "status": "partial", "notes": "按规范的 1–6 Mode 位置读取并关联；未捕获 Discover Modes ACK 时不将缺失状态作为非法的直接证据。", "refs": [{ "section": "§6.4.4.2", "table": "Tables 6-30, 6-32", "page": "PDF pp.166–169" }] },
+        "3.2": { "status": "partial", "notes": "Object Position 1–6 对照该 SOP 链路已观察到的 Discover Modes ACK 数量；Exit Mode 7 清除全部 Active Modes。Cable Plug Discovery 不得向 SOP″ 发发现请求，SOP′ 的发现响应应适用于 SOP″。", "refs": [{ "section": "§6.4.12.5–§6.4.12.7, §8.7.1.2", "table": "Discover Modes/Enter/Exit commands; Cable Plug Discovery", "page": "PDF pp.170–171, 251" }] }
+      },
+      "code": [{ "file": "src/js/pd/vdm.js", "start": 704, "end": 728, "symbol": "decodeDiscoverModes" }, { "file": "src/js/pd/vdm.js", "start": 779, "end": 782, "symbol": "pdValidateVdm" }, { "file": "src/js/pd/decoder.js", "start": 261, "end": 285, "symbol": "linkStates" }],
+      "evidence": ["独立向量提供已知 Discover Modes ACK 列表后，验证越界 Object Position 会告警；位置限制不在没有已捕获 ACK 时强行判定。", "Decoder 的状态键为 channel:SOP，使不同物理链路状态隔离；此审计不把 standalone vdmParse 共用 state 的行为冒充产品端跨 SOP 混淆。"],
+      "limitations": ["因链路状态隔离，PD 3.2 SOP′ Discover Modes 结果未用于 SOP″ Object Position 校验；规范说明两端发现结果可视为适用于同一 Cable Plug 组合。", "当前不分析任意 SVID 的 Mode VDO 字段、Mode Alternate Setting、信号/复用行为或 SVID 特定约束。"]
+    },
+    {
+      "id": "enter-exit-attention",
+      "title": "Enter Mode、Exit Mode、Attention 与 Active Mode 快照",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "partial", "notes": "解析命令、位置与最多一个 SVID 自定义 VDO；DFP 发起 Enter/Exit、UFP 发 Attention，Exit position 7 表示退出所有 Mode。只跟踪观察到的 ACK/Exit 事件，不执行 Alt Mode 过程。", "refs": [{ "section": "§6.4.4.2.2–§6.4.4.2.4", "table": "Tables 6-20, 6-22", "page": "PDF pp.168–170" }] },
+        "3.0": { "status": "partial", "notes": "V2.0 仍由 DFP 发起 Enter/Exit；Attention 不要求应用层响应，Mode VDO 内容归 SVID 定义。代码保留原始内容并按观察帧维护进入/退出集合。", "refs": [{ "section": "§6.4.4.2", "table": "Tables 6-26, 6-28", "page": "PDF pp.132–134" }] },
+        "3.1": { "status": "partial", "notes": "按 SVDM 命令语义和 Object Position 处理；只保存状态快照，不验证进入某 Alt Mode 的信号切换/功能响应或 SVID 定义的特殊退出规则。", "refs": [{ "section": "§6.4.4.2", "table": "Tables 6-30, 6-32", "page": "PDF pp.166–169" }] },
+        "3.2": { "status": "partial", "notes": "检查 Enter/Exit 的角色、位置和响应类型限制，ACK/Exit 更新本链路 Active Mode 观察集合，position 7 清空该集合。Data_Reset/Complete 由 Decoder 清理集合；不表示已实测 Alt Mode 数据路径或复位完成。", "refs": [{ "section": "§6.4.12.6–§6.4.12.8, §8.7.2–§8.7.3", "table": "Enter/Exit Mode and Attention; Exiting Alternate Modes", "page": "PDF pp.170–171, 251–252" }] }
+      },
+      "code": [{ "file": "src/js/pd/vdm.js", "start": 732, "end": 752, "symbol": "decodeEnterExitMode" }, { "file": "src/js/pd/vdm.js", "start": 178, "end": 182, "symbol": "vdmParse" }, { "file": "src/js/pd/decoder.js", "start": 353, "end": 358, "symbol": "activeModes" }],
+      "evidence": ["独立向量验证 PD 3.2 Exit Mode position 7 将观察到的 Active Mode 集合清空。", "代码只在已解析报文事件上改动快照；没有从未知/截断记录补造 Enter ACK 或完整会话。"],
+      "limitations": ["该集合是解码器观察状态，不是设备内部策略状态，也不覆盖 Alternate Mode AMS 响应、进入失败清理规则、重试、Data_Reset 电气动作或模式特定 VDO。", "Data_Reset 清理逻辑位于 Decoder 而非本 VDM 模块，其状态处理并非 Data Reset 完整性证明。"]
+    },
+    {
+      "id": "enter-usb-data-reset-boundary",
+      "title": "Enter_USB、Data_Reset 与 VDM Mode 状态的边界关联",
+      "status": "partial",
+      "versions": {
+        "2.0": { "status": "not-defined", "notes": "PD 2.0 没有 Enter_USB 或 Data_Reset 消息；不能把后续 USB4 流程套用到本版。", "refs": [{ "section": "§6.3, §6.4", "table": "Table 6-3 Control Messages and PD 2.0 Data Message Types", "page": "PDF pp.143–151" }] },
+        "3.0": { "status": "not-defined", "notes": "PD 3.0 v1.1 消息集合未定义 Enter_USB/Data_Reset；本版仍不支持此后的 PDUSB/USB4 AMS 格式。", "refs": [{ "section": "§6.3, §6.4", "table": "Tables 6-1, 6-6 Message Definitions", "page": "PDF pp.96–113" }] },
+        "3.1": { "status": "partial", "notes": "本版已定义 Data_Reset/Data_Reset_Complete（可由 DFP 或 UFP 发起，退出 Port Partner 与 Cable Plug Alternate Modes 并保持供电/数据角色），以及 DFP 发起的 Enter_USB/Table 6-49。解析器能拆 EUDO 字段并按 3.1 保留旧值；未实现完整 Data Reset/Enter USB AMS。", "refs": [{ "section": "§6.3.14–§6.3.15, §6.4.8, §6.8.2, §6.6.10.2", "table": "Table 6-49 Enter_USB Data Object; tDataReset", "page": "PDF pp.141–142, 197–199, 237, 250" }] },
+        "3.2": { "status": "partial", "notes": "Data_Reset 结束 Port Partner 的全部 Alternate Modes并保留 VBUS 合约/数据角色；Enter_USB 使用更新后的 Mode/Speed 值（含 USB4/Gen4 编码）。Data_Reset/Complete 被动观察时会清空 Mode 快照，但 VCONN power cycle、USB link reset、tDataReset、后续 USB4 Discovery/Entry 均不执行。", "refs": [{ "section": "§6.3.14–§6.3.15, §6.4.7, §7.1.2, §7.8, §7.29, §8.7.3", "table": "Table 6.27 Enter_USB Data Object; Data Reset AMS; Exiting Alternate Modes", "page": "PDF pp.122, 145–147, 196, 206, 217, 251" }] }
+      },
+      "code": [{ "file": "src/js/pd/data.js", "start": 122, "end": 152, "symbol": "enterUsbParse" }, { "file": "src/js/pd/decoder.js", "start": 353, "end": 358, "symbol": "activeModes" }],
+      "evidence": ["逐版原文复核确认 Enter_USB 和 Data_Reset 均自 PD 3.1 起定义；PD 3.2 更新 Enter_USB 的 USB Mode/Speed 编码。", "现有 parser 将 Enter_USB 当作独立 Data Message 对象解析；它不是 VDM 命令。Data_Reset 是 Control Message，也不是 VDM。"],
+      "limitations": ["只有字段解析和观察到 Data_Reset/Data_Reset_Complete 后清除 Mode 快照；未验证对端 Accept/PS_RDY/Complete 序列、VCONN 放电/重接、USB 链路 reset、计时器或错误恢复。", "不是 USB4 主动发现与进入流程实现。"]
+    },
+    {
+      "id": "altmode-usb4-semantics-boundary",
+      "title": "SVID/Alternate Mode 内部语义与主动 USB4 握手（审计边界）",
+      "status": "out-of-scope",
+      "versions": {
+        "2.0": { "status": "out-of-scope", "notes": "核心 PD SVDM 提供发现/进入/退出外层；特定 Alternate Mode 命令与 Mode VDO 语义由各 SVID/外部规范定义。", "refs": [{ "section": "§6.4.4.2, Chapter 8", "table": "Table 6-20; PD VDM Usage/Alternate Modes", "page": "PDF pp.168–170, 386+" }] },
+        "3.0": { "status": "out-of-scope", "notes": "保留 SVID 定义命令的原始数据，不解释 DisplayPort/TBT 等模式载荷，也不运行主动 Policy Engine。", "refs": [{ "section": "§6.4.4.2, Chapter 8", "table": "Tables 6-26, 6-28; VDM Usage and Alternate Modes", "page": "PDF pp.132–134, 400+" }] },
+        "3.1": { "status": "out-of-scope", "notes": "PD 核心 VDM 可见字段受解析；USB4 Enter_USB/Data_Reset AMS 与具体 Alt Mode 信号/数据路径由单独控制状态机执行，本模块不主动握手。", "refs": [{ "section": "§6.4.8, §8.3.3.16", "table": "Table 6-49; Enter_USB state diagrams", "page": "PDF pp.197–199, 656–657" }] },
+        "3.2": { "status": "out-of-scope", "notes": "被动记录标准 SVDM/USB4 相关消息不等于主动支持 USB4 Discovery and Entry Flow；Mode-specific 命令/载荷和 USB4 tunneling/PHY 行为仍由外部模式规范及设备 Policy Engine 处理。", "refs": [{ "section": "§7.29, §8.5–§8.7, Chapter 9", "table": "Enter USB AMS and Policy Engine State Diagrams", "page": "PDF pp.217, 248–254+" }] }
+      },
+      "code": [{ "file": "src/js/pd/vdm.js", "start": 171, "end": 175, "symbol": "vdmParse" }, { "file": "src/js/pd/vdm.js", "start": 720, "end": 725, "symbol": "decodeDiscoverModes" }, { "file": "src/js/pd/data.js", "start": 124, "end": 151, "symbol": "enterUsbParse" }],
+      "evidence": ["代码将 SVID 自定义数据作为原始 VDO 展示；Enter_USB 仅由 data.js 解析字段，不是发起/接收状态机。", "PD 3.2 §§8.5–8.7 及 Chapter 9 的 AMS/状态图包含本工具未执行的主动流程。"],
+      "limitations": ["不发送消息、不控制 USB mux/PHY/VBUS/VCONN、不做 USB4 tunneling 或 DP/TBT 模式验证。", "外部规范和厂商自定义命令不可由 PD 核心 VDM Header 单独推出。"]
+    }
+  ],
+  "findings": [
+    {
+      "id": "vdm-major-minor-revision-matrix",
+      "title": "SVDM 版本字段必须依所选 PD 修订版解析",
+      "before": "使用通用 Major/Minor 名称容易把 PD 2.0 的 Major=00 V1.0、PD 3.0/3.1 的 Major=00 不得使用，以及 PD 3.2 的 V1.0 deprecated 与 V2.0/V2.1 Minor 编码混为一谈。",
+      "after": "解析器依据精确 PD Profile 分别标注 Major/Minor 规则；自定义命令 Minor 归 SVID 所有，未指定 3.x 子版本时显式保留 3.0/3.1 与 3.2 差异。对于 Major 超出支持版本的兼容响应只报告诊断，不声称被动工具模拟了接收端协商。",
+      "code": [{ "file": "src/js/pd/vdm.js", "start": 131, "end": 143, "symbol": "vdmParse", "anchor": "const minorText = cmd >= 16" }, { "file": "src/js/pd/vdm.js", "start": 139, "end": 151, "symbol": "vdmParse", "anchor": "if (verMajor === 0)" }, { "file": "src/js/pd/vdm.js", "start": 758, "end": 770, "symbol": "pdValidateVdm", "anchor": "if (major > 1)" }],
+      "refs": [{ "version": "2.0", "section": "§6.4.4.2.3", "table": "Table 6-19", "page": "PDF p.167" }, { "version": "3.0", "section": "§6.4.4.2.3", "table": "Table 6-25", "page": "PDF pp.131–132" }, { "version": "3.1", "section": "§6.4.4.2.3", "table": "Table 6-29", "page": "PDF pp.166–167" }, { "version": "3.2", "section": "§6.4.12.2.1, §8.5.1", "table": "Table 6.33; version negotiation", "page": "PDF pp.151–153, 242" }],
+      "tests": ["tools/pd-audit-vdm.mjs：Major 按四个版本区分、PD 3.2 V2.0/V2.1 Minor、自定义 Minor 與未知 3.x 歧义固定向量。", "artifacts/pd-spec-audit/vdm-audit-results.json：18 passed, 0 failed。"]
+    },
+    {
+      "id": "pd20-sop-data-role",
+      "title": "PD 2.0 SOP VDM Header B5 是 Port Data Role",
+      "before": "曾误以为 PD 2.0 完全不能从 VDM 上下文检查 Data Role，可能遗漏对 SOP 上 DFP/UFP 发起规则的诊断。",
+      "after": "Decoder 将 Header Data Role 传入 VDM context；只对 SOP 检查 B5 角色值。SOP′/SOP″ 的 B5 按各版 Header 表处理为 Reserved，不套用 Port role。",
+      "code": [{ "file": "src/js/pd/decoder.js", "start": 548, "end": 553, "symbol": "_context", "anchor": "_context(link)" }, { "file": "src/js/pd/vdm.js", "start": 802, "end": 813, "symbol": "pdValidateVdm", "anchor": "if (ctx.sop === 'SOP' && ctx.dataRole !== undefined && ctx.dataRole !== null)" }],
+      "refs": [{ "version": "2.0", "section": "§6.2.1.6", "table": "Table 6-1 Data Role", "page": "PDF pp.144–145" }, { "version": "2.0", "section": "§6.4.4.2", "table": "Table 6-20 Structured VDM Commands", "page": "PDF p.168" }],
+      "tests": ["tools/pd-audit-vdm.mjs：PD 2.0 SOP UFP Attention 无角色警告，SOP DFP Attention 产生 ROLE 警告。", "artifacts/pd-spec-audit/vdm-audit-results.json：该向量通过。"]
+    },
+    {
+      "id": "identity-ama-amc-version-map",
+      "title": "AMA/AMC 与 UFP/DFP Product Type 按版本重新分派",
+      "before": "跨版本共用 Product Type 映射会把 PD 2.0/3.0 的 AMA/AMC、PD 3.1 Reserved 与 PD 3.2 已弃用的 legacy Identity 解释为同一种有效新格式。",
+      "after": "PD 2.0 保持旧 AMA VDO 和方向位；PD 3.0 保留 UFP AMA/DFP AMC 共用旧 VDO；PD 3.1 将旧码视为 Reserved；PD 3.2 只对 legacy Identity 标注 deprecated。新版 UFP/DFP VDO 仅在其引入版后使用。",
+      "code": [{ "file": "src/js/pd/vdm.js", "start": 360, "end": 372, "symbol": "idHeaderVdo", "anchor": "dfpVdoKind = PRODUCT_TYPE_VDO_KIND.dfp[ptDfp] ?? null" }, { "file": "src/js/pd/vdm.js", "start": 625, "end": 637, "symbol": "amaVdo", "anchor": "if (!(ctx.revText === '2.0' || ctx.revText === '1.0'))" }],
+      "refs": [{ "version": "2.0", "section": "§6.4.4.3.1", "table": "Table 6-30 AMA VDO", "page": "PDF p.177" }, { "version": "3.0", "section": "§6.4.4.3.1", "table": "Tables 6-32, 6-37", "page": "PDF pp.137, 142" }, { "version": "3.1", "section": "§6.4.4.3.1", "table": "Tables 6-34, 6-36, 6-39, 6-40", "page": "PDF pp.172–175" }, { "version": "3.2", "section": "§6.4.12.3.10", "table": "Legacy AMA/AMC and current UFP/DFP VDO tables", "page": "PDF pp.156–161" }],
+      "tests": ["tools/pd-audit-vdm.mjs：PD 3.0 AMC VDO、PD 3.1 Reserved、PD 3.2 deprecated legacy AMA/AMC 三组独立身份向量。", "artifacts/pd-spec-audit/vdm-audit-results.json：对应向量通过。"]
+    },
+    {
+      "id": "dptc-svid-profile-gate",
+      "title": "DPTC SID 只按 PD 3.2 SVID 表标为 PD 标准 ID",
+      "before": "若全局名称表无视修订版，0xFF01 会被错误地标为 PD 2.0/3.0/3.1 本地规范中已列出的标准 SVID。",
+      "after": "仅在 PD 3.2 Profile 中将 0xFF01 映射为 DPTC SID 并由 isStandardSvid 视为标准；旧版本和未知 3.x Profile 不会据此错误拒绝该值。",
+      "code": [{ "file": "src/js/pd/svid.js", "start": 54, "end": 66, "symbol": "svidName", "anchor": "if (v === 0xFF01)" }, { "file": "src/js/pd/svid.js", "start": 76, "end": 83, "symbol": "isStandardSvid", "anchor": "export const isStandardSvid" }],
+      "refs": [{ "version": "3.0", "section": "§6.4.4.3.2", "table": "Table 6-27 SVID Values", "page": "PDF p.132" }, { "version": "3.1", "section": "§6.4.4.3.2", "table": "Table 6-31 SVID Values", "page": "PDF p.167" }, { "version": "3.2", "section": "§6.4.12.2.1", "table": "Table 6.33 SVID values", "page": "PDF pp.151–153" }],
+      "tests": ["tools/pd-audit-vdm.mjs：0xFF01 在 3.1 为非标准/未命名、在 3.2 为 DPTC SID。", "artifacts/pd-spec-audit/vdm-audit-results.json：向量通过。"]
+    },
+    {
+      "id": "vdm-command-and-payload-validation",
+      "title": "补齐标准 VDM 命令、模式位置与 Identity 列表的部分约束",
+      "before": "只解析头字段而没有充分显式诊断无效标准命令、Minor/Reserved 位、SOP 限制、ACK 对象数量、Mode 位置、BUSY 与 Enter/Exit 组合、已观察列表终止符等问题。",
+      "after": "增加版本/命令上下文校验，限制 Enter/Exit 与 Attention 的 VDO 数量，关联已观察 Mode 数量，检查 SVID 列表终止符，并依据 SOP/Data Role/Cable Plug 角色发出字段级诊断；缺少抓包请求或前序 ACK 时不直接推导非法。",
+      "code": [{ "file": "src/js/pd/vdm.js", "start": 765, "end": 777, "symbol": "pdValidateVdm", "anchor": "if (cmd === 0 || cmd >= 7 && cmd <= 15)" }, { "file": "src/js/pd/vdm.js", "start": 778, "end": 790, "symbol": "pdValidateVdm", "anchor": "if (cmd < 4 && pos || cmd > 6 && cmd < 16 && pos)" }, { "file": "src/js/pd/vdm.js", "start": 792, "end": 804, "symbol": "pdValidateVdm", "anchor": "if (ctx.sop)" }, { "file": "src/js/pd/vdm.js", "start": 812, "end": 824, "symbol": "pdValidateVdm", "anchor": "if (ctx.link === 'cable' && ctx.role === 'Plug' && type === 0)" }, { "file": "src/js/pd/vdm.js", "start": 695, "end": 707, "symbol": "decodeDiscoverSvids", "anchor": "if (nonzeroAfterTerminator)" }],
+      "refs": [{ "version": "2.0", "section": "§6.4.4.2.2", "table": "Tables 6-20, 6-22", "page": "PDF pp.168–170" }, { "version": "3.0", "section": "§6.4.4.2", "table": "Tables 6-26, 6-28", "page": "PDF pp.132–134" }, { "version": "3.1", "section": "§6.4.4.2", "table": "Tables 6-30, 6-32", "page": "PDF pp.166–169" }, { "version": "3.2", "section": "§6.4.12.5–§6.4.12.8", "table": "SVDM command semantics; Table 8.1 responses", "page": "PDF pp.170–171, 243" }],
+      "tests": ["tools/pd-audit-vdm.mjs：command/SOP/BUSY、Mode 数量、SVID terminator、Exit Mode position 7 共 5 组固定向量。", "artifacts/pd-spec-audit/vdm-audit-results.json：18 passed, 0 failed。"]
+    }
+  ],
+  "verification": {
+    "suite": "tools/pd-audit-vdm.mjs",
+    "results": "artifacts/pd-spec-audit/vdm-audit-results.json",
+    "status": "18 passed, 0 failed (parent-run result, 2026-10-08)",
+    "coverageBasis": "每行状态由四份 PDF 的条文、当前代码和明确未覆盖项共同判定；固定向量仅证明命名样例的特定行为，测试通过数不用于估算标准总体符合度。"
+  }
+}

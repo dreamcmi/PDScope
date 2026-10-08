@@ -254,6 +254,11 @@ try {
   cdp = await new CDP(target.webSocketDebuggerUrl).connect();
   await cdp.send('Runtime.enable');
   await cdp.send('Page.enable');
+  if (argv.includes('--width') || argv.includes('--height')) {
+    const width = Number(arg('--width', 1680)), height = Number(arg('--height', 1000));
+    if (!Number.isInteger(width) || !Number.isInteger(height) || width < 320 || height < 320) throw new Error('无效的测试视口尺寸');
+    await cdp.send('Emulation.setDeviceMetricsOverride', {width, height, deviceScaleFactor: 1, mobile: false});
+  }
 
   // 收集控制台错误
   const consoleErrors = [];
@@ -328,6 +333,14 @@ try {
       if (DONE.test(stat)) break;
     }
     check('抓包解码完成', DONE.test(stat) && !/等待打开/.test(stat), stat.replace(/\s+/g, ' ').trim());
+    if (arg('--expect-packets', null) !== null) {
+      const count = await cdp.eval('window.PDScope.status().packets');
+      check('报文总数与预期一致', count === Number(arg('--expect-packets')), `${count} 条`);
+    }
+    if (arg('--expect-events', null) !== null) {
+      const count = await cdp.eval('window.PDScope.tabs().find(t=>t.active)?.ufcs?.events');
+      check('状态事件数与预期一致', count === Number(arg('--expect-events')), `${count} 条`);
+    }
 
     /* 2.5 标签栏：打开一份就该出现一个标签（多文件能力的最小可见证据） */
     const bar1 = await cdp.eval(`(()=>{const b=document.querySelector('#tabBar');return {hidden:!!b.hidden,n:b.querySelectorAll('.tab').length,on:b.querySelectorAll('.tab.is-on').length,name:(b.querySelector('.tab-name')||{}).textContent||''};})()`);
@@ -404,6 +417,17 @@ try {
       }
 
       const firstRow = await cdp.eval(`(()=>{const r=document.querySelector('#vrows .tr');return r?r.innerText.replace(/\\s+/g,' ').trim():'';})()`);
+      if (arg('--expect-vbus', null) !== null || arg('--expect-ibus', null) !== null) {
+        const busText = await cdp.eval(`document.querySelector('#vrows .tr .td.bus')?.textContent || ''`);
+        const numbers = (busText.match(/-?\d+\.\d+/g) || []).map(Number);
+        check('首行保留逐报文电压/电流测量值', numbers.length === 2
+          && (arg('--expect-vbus', null) === null || numbers[0] === Number(arg('--expect-vbus')))
+          && (arg('--expect-ibus', null) === null || numbers[1] === Number(arg('--expect-ibus'))), busText);
+      }
+      if (argv.includes('--expect-missing-bus')) {
+        const busText = await cdp.eval(`document.querySelector('#vrows .tr .td.bus')?.textContent || ''`);
+        check('缺失测量在表格中显示未知', (busText.match(/—/g)||[]).length === 2, busText);
+      }
       check('首行内容合理',
         isUfcsSample
           ? (/D[+±-]/.test(firstRow) && UFCS_TYPE.test(firstRow))
@@ -416,7 +440,8 @@ try {
       /* 3. 点击一行 -> 详情 */
       await cdp.eval(`document.querySelector('#vrows .tr').click()`);
       await sleep(400);
-      const detail = await cdp.eval(`document.querySelector('#detailBody').innerText.replace(/\\s+/g,' ').trim().slice(0,160)`);
+      // 字段区可能排在格式告警之后；应检查实际详情内容，不能截断前缀后误判为空。
+      const detail = await cdp.eval(`document.querySelector('#detailBody').innerText.replace(/\\s+/g,' ').trim()`);
       check('详情面板已填充', /消息头|报文头|链路概览|字段解析/.test(detail), detail.slice(0, 80));
       const bitRows = await cdp.eval(`document.querySelectorAll('#detailBody .dbit').length`);
       check('位域表已渲染', bitRows > 3, `${bitRows} 个位域行`);
@@ -624,22 +649,24 @@ try {
     }
 
     /* 6.4 POWER-Z `.pdStream`（同一个抓包的另一半容器）：报文照解、如实说明没有波形 */
-    if (/\.pdstream$/i.test(DROP || '')) {
+    if (/\.(pd|ufcs)stream$/i.test(DROP || '')) {
+      const streamName = isUfcsSample ? '.ufcsStream' : '.pdStream';
       const srcChip = await cdp.eval(`(()=>{const c=[...document.querySelectorAll('#metaChips .mchip')].find(x=>/来源/.test(x.textContent));return c?c.textContent.replace(/\\s+/g,' ').trim():'';})()`);
-      check('.pdStream：来源标注为 POWER-Z 且点明容器', /POWER-Z/.test(srcChip) && /pdStream/.test(srcChip), srcChip);
+      check(`${streamName}：来源和协议与容器一致`, /POWER-Z/.test(srcChip) && srcChip.includes(streamName)
+        && (await cdp.eval('window.PDScope.status().protocol')) === (isUfcsSample ? 'UFCS' : 'USB PD'), srcChip);
 
       const chTitle = await cdp.eval(`(()=>{const b=document.querySelector('#chList .chitem');return b?b.title:'';})()`);
-      check('.pdStream：通道卡如实说明「无 ADC 波形」', /无 ADC 波形/.test(chTitle), chTitle.slice(0, 90));
+      check(`${streamName}：通道卡如实说明「无 ADC 波形」`, /无 ADC 波形/.test(chTitle), chTitle.slice(0, 90));
 
-      check('.pdStream：时间轴没有曲线（走「无模拟量」分支）', tlCurves === null, `curves=${tlCurves}`);
+      check(`${streamName}：时间轴没有曲线`, tlCurves === null, `curves=${tlCurves}`);
 
       const ticks = await cdp.eval(`window.PDScope.timeline().xTicks.map((k) => k.label)`);
-      check('.pdStream：横轴仍按事件时间铺开（五等分）',
+      check(`${streamName}：横轴仍按事件时间铺开（五等分）`,
         Array.isArray(ticks) && ticks.length === 5 && ticks[4] !== ticks[0], ticks.join(' · '));
 
       const rowCount = await cdp.eval(`document.querySelectorAll('#vrows .tr').length`);
       const statLine = await cdp.eval(`document.querySelector('#statLine').textContent.replace(/\\s+/g,' ').trim()`);
-      check('.pdStream：报文表照常渲染、统计行给出条数',
+      check(`${streamName}：报文表照常渲染、统计行给出条数`,
         rowCount > 0 && /显示 \d+/.test(statLine), `${rowCount} 行可见 · ${statLine.slice(0, 60)}`);
 
       // 没有曲线也要能刷选时间 —— 刷选跟曲线无关，只跟时间轴坐标有关。
@@ -652,7 +679,7 @@ try {
         window.dispatchEvent(new MouseEvent('mouseup',{clientX:${pBrush2.x}+120,clientY:${pBrush2.y},buttons:1,bubbles:true}));return true;})()`);
       await sleep(250);
       const winAfter2 = await cdp.eval(`document.querySelector('#tFrom').value + '~' + document.querySelector('#tTo').value`);
-      check('.pdStream：没有曲线也能刷选时间（不抛异常）',
+      check(`${streamName}：没有曲线也能刷选时间（不抛异常）`,
         winAfter2 !== winBefore2 && winAfter2 !== '0~1000', `${winBefore2} → ${winAfter2}`);
       await cdp.eval(`document.querySelector('#btnTlFit').click()`);
       await sleep(150);

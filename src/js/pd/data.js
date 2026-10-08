@@ -22,11 +22,14 @@ const atLeast = (revText, target) => revTextNum(revText) >= target;
 export function bistParse(em, data, idx, ctx) {
   const mode = pdField(data, 31, 28);
   const legacy = atLeast(ctx.revText, 3.0) ? null : (BIST_MODES_V2[mode] ?? null);
-  const modern = BIST_MODES_V3[mode] ?? null;
+  const modern = atLeast(ctx.revText, 3.0) ? (BIST_MODES_V3[mode] ?? null) : null;
   em.object(`BIST 数据对象 #${idx + 1}`);
   em.detail(`BIST Test Mode [${pdRange(31, 28)}]`, `0x${mode.toString(16).toUpperCase()} · ${modern ?? legacy ?? '无效取值（接收端应忽略本条报文）'}`);
   if (modern && legacy) em.detail('PD 2.0 旧值', `${legacy}（同一数值在旧版规范里含义不同）`);
-  em.detail(`Reserved [${pdRange(27, 0)}]`, `0x${pdHex(data).slice(2)}`);
+  if (legacy && mode === 2) {
+    em.detail('Reserved [B27-16]', pdField(data, 27, 16));
+    em.detail('BIST Error Counter [B15-0]', pdField(data, 15, 0));
+  } else em.detail(`Reserved [${pdRange(27, 0)}]`, `0x${pdHex(data).slice(1)}`);
 
   if (idx > 0) {
     em.note('非法：BIST 只应有 1 个数据对象');
@@ -63,7 +66,7 @@ export function batteryStatusParse(em, data) {
 
 /* ══════════════════ Alert（ADO）══════════════════ */
 
-export function alertParse(em, data, idx) {
+export function alertParse(em, data, idx, ctx = {}) {
   const flags = pdField(data, 31, 24);
   em.object(`Alert 数据对象 #${idx + 1}（ADO）`);
   em.detail(`Type of Alert [${pdRange(31, 24)}]`, `0x${flags.toString(16).padStart(2, '0').toUpperCase()} = `
@@ -73,6 +76,11 @@ export function alertParse(em, data, idx) {
   for (const { bit, name } of ALERT_BITS) {
     if (bit === 24) { em.detail('Reserved [B24]', pdBit(data, 24)); continue; }
     const on = pdBit(data, bit);
+    if (bit === 31 && ctx.specRevision === '3.0') { em.detail('Reserved [B31]', on); continue; }
+    if (bit === 26 && ctx.role === 'SNK') {
+      em.detail('Reserved (Sink OCP) [B26]', on);
+      continue;
+    }
     em.detail(`${name} [B${bit}]`, pdFlag(on));
     if (on) fired.push(name);
   }
@@ -88,12 +96,15 @@ export function alertParse(em, data, idx) {
   em.detail(`Reserved [${pdRange(15, 4)}]`, `0x${pdField(data, 15, 4).toString(16).toUpperCase()}`);
 
   const extType = pdField(data, 3, 0);
-  em.detail(`Extended Alert Event Type [${pdRange(3, 0)}]`, pdBit(data, 31)
-    ? `${extType} · ${EXT_ALERT_EVENT[extType] ?? '自定义/保留事件'}`
+  const extendedAlert = ctx.specRevision !== '3.0' && pdBit(data, 31);
+  const alertEventName = ctx.specRevision === '3.1' && extType > 4
+    ? undefined : EXT_ALERT_EVENT[extType];
+  em.detail(ctx.specRevision === '3.0' ? 'Reserved [B3-0]' : `Extended Alert Event Type [${pdRange(3, 0)}]`, extendedAlert
+    ? `${extType} · ${alertEventName ?? (ctx.specRevision === '3.1' ? 'Reserved（PD 3.1）' : '自定义/保留事件')}`
     : `0x${extType.toString(16).toUpperCase()}（未置 Extended Alert Event）`);
 
   let s = fired.length ? `告警：${fired.join('、')}` : '无告警位';
-  if (pdBit(data, 31)) s += ` · 扩展事件：${EXT_ALERT_EVENT[extType] ?? `保留值 ${extType}`}`;
+  if (extendedAlert) s += ` · 扩展事件：${alertEventName ?? `保留值 ${extType}`}`;
   if (statusChange && (fixed || hot)) {
     s += ` · 电池 ${batteryList(fixed, 0).concat(batteryList(hot, 4)).join('/')}`;
   }
@@ -110,19 +121,22 @@ function batteryList(mask, base) {
 
 /* ══════════════════ Enter_USB（EUDO）══════════════════ */
 
-export function enterUsbParse(em, data) {
+export function enterUsbParse(em, data, ctx = {}) {
   const mode = pdField(data, 30, 28);
   const speed = pdField(data, 23, 21);
   const ctype = pdField(data, 20, 19);
   const ccur = pdField(data, 18, 17);
+  const old = ctx.specRevision === '3.1';
+  const modeText = mode <= 2 ? USB_MODE[mode] : old ? 'Reserved（PD 3.1 v1.4）' : USB_MODE_UNKNOWN;
+  const speedText = old && speed >= 4 ? 'Reserved（PD 3.1 v1.4）' : speed <= 4 ? USB_SPEED[speed] : USB_SPEED_UNKNOWN;
 
   em.detail(`Reserved [B31]`, pdBit(data, 31));
-  em.detail(`USB Mode [${pdRange(30, 28)}]`, `${mode} · ${mode <= 2 ? USB_MODE[mode] : USB_MODE_UNKNOWN}`);
+  em.detail(`USB Mode [${pdRange(30, 28)}]`, `${mode} · ${modeText}`);
   em.detail(`Reserved [B27]`, pdBit(data, 27));
   em.detail('USB4 DRD [B26]', pdFlag(pdBit(data, 26), 'Host DFP 可作 USB4 Device', '否'));
   em.detail('USB3 DRD [B25]', pdFlag(pdBit(data, 25), 'Host DFP 可作 USB3 Device', '否'));
   em.detail(`Reserved [B24]`, pdBit(data, 24));
-  em.detail(`Cable Speed [${pdRange(23, 21)}]`, `${speed} · ${speed <= 4 ? USB_SPEED[speed] : USB_SPEED_UNKNOWN}`);
+  em.detail(`Cable Speed [${pdRange(23, 21)}]`, `${speed} · ${speedText}`);
   em.detail(`Cable Type [${pdRange(20, 19)}]`, ctype === 3 ? CABLE_TYPE[3] : `${ctype} · ${CABLE_TYPE[ctype]}`);
   em.detail(`Cable Current [${pdRange(18, 17)}]`, `${ccur} · ${CABLE_CURRENT_EUDO[ccur]}`);
   em.detail('PCIe Support [B16]', pdFlag(pdBit(data, 16), 'USB4 PCIe 隧道支持', '不支持'));
@@ -130,22 +144,30 @@ export function enterUsbParse(em, data) {
   em.detail('TBT Support [B14]', pdFlag(pdBit(data, 14), '支持 Thunderbolt', '不支持'));
   em.detail('Host Present [B13]', pdFlag(pdBit(data, 13), 'USB 树顶存在 Host', '无 Host'));
   em.detail(`Reserved [${pdRange(12, 0)}]`, `0x${pdField(data, 12, 0).toString(16).toUpperCase()}`);
+  if (ctx.link === 'cable') em.detail('接收端规则', '线缆插头忽略 USB4/USB3 DRD、Cable Current、PCIe/DP/TBT Support、Host Present 字段');
 
-  const s = `${mode <= 2 ? USB_MODE[mode] : USB_MODE_UNKNOWN} · 线缆 ${ctype === 3 ? CABLE_TYPE[3] : CABLE_TYPE[ctype]}`
-    + ` ${speed <= 4 ? USB_SPEED[speed] : USB_SPEED_UNKNOWN}`;
+  const s = `${modeText} · 线缆 ${ctype === 3 ? CABLE_TYPE[3] : CABLE_TYPE[ctype]} ${speedText}`;
   em.note(s);
   return s;
 }
 
 /* ══════════════════ Source_Info（SIDO1 / SIDO2）══════════════════ */
 
-export function sourceInfoParse(em, data, idx) {
+export function sourceInfoParse(em, data, idx, ctx = {}) {
+  if (ctx.specRevision === '3.1' && idx > 0) {
+    em.object(`Source_Info 数据对象 #${idx + 1}（PD 3.1 未定义 SIDO2）`);
+    em.detail('原始值', `0x${pdHex(data)}`);
+    em.warn?.('PD 3.1 Source_Info 消息必须恰好包含一个 SIDO', 'SOURCE_INFO');
+    return 'PD 3.1 未定义的 Source_Info 数据对象';
+  }
   if (idx === 0) {
     /* SIDO1：1W 步长 */
     const portType = pdBit(data, 31);
+    const reserved = pdField(data, 30, 24);
+    if (reserved) em.warn?.('SIDO1 的 Reserved [B30-24] 非零', 'RESERVED');
     em.object('Source_Info 数据对象 #1（SIDO1）');
     em.detail('Port Type [B31]', pdFlag(portType, 'Guaranteed Capability Port（供电能力固定）', 'Managed Capability Port（可动态调整）'));
-    em.detail(`Reserved [${pdRange(30, 24)}]`, `0x${pdField(data, 30, 24).toString(16).toUpperCase()}`);
+    em.detail(`Reserved [${pdRange(30, 24)}]`, `0x${reserved.toString(16).toUpperCase()}`);
     em.detail(`Port Maximum PDP [${pdRange(23, 16)}]`, `${pdField(data, 23, 16)} W（1W 步长，端口最大能提供的功率）`);
     em.detail(`Port Present PDP [${pdRange(15, 8)}]`, `${pdField(data, 15, 8)} W（当前实际可提供，已扣除线缆/温度等限制）`);
     em.detail(`Port Reported PDP [${pdRange(7, 0)}]`, `${pdField(data, 7, 0)} W（Source_Capabilities 里报出的功率）`);
@@ -157,13 +179,19 @@ export function sourceInfoParse(em, data, idx) {
     /* SIDO2：0.5W 步长，带 DPS 位 */
     const portType = pdBit(data, 31);
     const dps = pdBit(data, 30);
+    const reserved = pdField(data, 29, 18);
+    const maxPdp = pdField(data, 17, 9) * 0.5;
+    const guaranteedPdp = pdField(data, 8, 0) * 0.5;
+    if (dps && portType) em.warn?.('DPS Port 的 Port Type 必须为 Managed (0b)', 'SOURCE_INFO');
+    if (reserved) em.warn?.('SIDO2 的 Reserved [B29-18] 非零', 'RESERVED');
+    if (guaranteedPdp > maxPdp) em.warn?.('SIDO2 Port Guaranteed PDP 超过 Port Maximum PDP', 'SOURCE_INFO');
     em.object('Source_Info 数据对象 #2（SIDO2）');
     em.detail('Port Type [B31]', pdFlag(portType, 'Guaranteed Capability Port', 'Managed Capability Port'));
     em.detail('DPS Port [B30]', pdFlag(dps, '动态电源（DPS），Port Type 应为 0b', '非 DPS'));
-    em.detail(`Reserved [${pdRange(29, 18)}]`, `0x${pdField(data, 29, 18).toString(16).toUpperCase()}`);
-    em.detail(`Port Maximum PDP [${pdRange(17, 9)}]`, `${pdNum(pdField(data, 17, 9) * 0.5)} W（0.5W 步长）`);
-    em.detail(`Port Guaranteed PDP [${pdRange(8, 0)}]`, `${pdNum(pdField(data, 8, 0) * 0.5)} W（保证始终能提供的功率）`);
-    const s = `最大 ${pdNum(pdField(data, 17, 9) * 0.5)}W 保证 ${pdNum(pdField(data, 8, 0) * 0.5)}W${dps ? ' · DPS' : ''}`;
+    em.detail(`Reserved [${pdRange(29, 18)}]`, `0x${reserved.toString(16).toUpperCase()}`);
+    em.detail(`Port Maximum PDP [${pdRange(17, 9)}]`, `${pdNum(maxPdp)} W（0.5W 步长）`);
+    em.detail(`Port Guaranteed PDP [${pdRange(8, 0)}]`, `${pdNum(guaranteedPdp)} W（保证始终能提供的功率）`);
+    const s = `最大 ${pdNum(maxPdp)}W 保证 ${pdNum(guaranteedPdp)}W${dps ? ' · DPS' : ''}`;
     em.note(s);
     return s;
   }
@@ -189,10 +217,15 @@ export function revisionParse(em, data) {
 
 /* ══════════════════ EPR_Mode（EPRMDO）══════════════════ */
 
-export function eprModeParse(em, data, idx) {
+export function eprModeParse(em, data, idx, ctx = {}) {
   const action = pdField(data, 31, 24);
   const d = pdField(data, 23, 16);
   const actionText = EPR_MODE_ACTION[action] ?? '无效取值（接收端应忽略本条）';
+  if (!EPR_MODE_ACTION[action]) em.warn?.('EPR_Mode Action 无效', 'EPR_FIELD');
+  if ((action === 1 && ctx.role === 'SRC') || ([2, 3, 4].includes(action) && ctx.role === 'SNK')) em.warn?.('EPR_Mode Action 与发送方电源角色不符', 'ROLE');
+  if (pdField(data, 15, 0) || (action !== 1 && action !== 4 && d)) em.warn?.('EPR_Mode 的保留位非零', 'RESERVED');
+  // Table 6.28 的 Enter Data 为 00h..FFh；PDP 与已捕获 SKEDB 的一致性由会话层检查。
+  if (action === 4 && d > 5) em.warn?.('EPR_Mode 失败原因码无效，接收端忽略该字段', 'EPR_FIELD');
   em.object(`EPR_Mode 数据对象 #${idx + 1}（EPRMDO）`);
   em.detail(`Action [${pdRange(31, 24)}]`, `0x${action.toString(16).padStart(2, '0').toUpperCase()} · ${actionText}`);
   let dText = `0x${d.toString(16).padStart(2, '0').toUpperCase()}`;

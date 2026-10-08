@@ -138,12 +138,12 @@ GitHub 的 Windows runner 一直是 **Windows Server** 系列，从来没有过 
 node tools/version-check.mjs   # 版本号一致（外加文档里写的产物名提示项）
 node tools/syntax.mjs          # 全量语法检查（自动带上 tools/ 下的新脚本）
 node tools/selftest.js         # 协议层合成用例（99 项，含 .pdStream 容器）
+node tools/regression.mjs      # 8 组缺陷回归（不依赖私有样本）
 ```
 
-这三项**在 10 个目标上各跑一遍** —— 顺带验证了解析内核在 Windows / macOS / Linux
-以及 x64 / arm64 上结果一致。`ackcheck.js` 与 `e2e.mjs` 要读仓库上一级的 `.atkcc`
-实测样本，而那些文件按 `.gitignore` **不入库**（采样数据，体积大），CI 里没有它们 ——
-想跑就在本机 `npm run check`。
+这四项**在 10 个目标上各跑一遍**。Windows 11 x64 目标还执行完整 `npm test`，
+覆盖合成波形的 GoodCRC、PD / UFCS 容器、多标签和浏览器 CSV 导出对照。
+默认测试使用仓库里的 DJIPOWER 样本与现造样本，不依赖仓库上一级的私有文件。
 
 ## 几点要知道的
 

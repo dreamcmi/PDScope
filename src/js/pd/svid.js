@@ -5,8 +5,8 @@
  *   • VDM Header 的 B31-16 —— 结构化 VDM 的 Standard ID，或非结构化 VDM 的厂商 ID
  *   • Discover Identity 的 ID Header VDO / Product VDO —— 厂商 ID（VID）
  *
- * 规范只定义了 0xFF00（PD SID）与 0xFF01（DPTC SID）两个标准 ID；
- * 0xFF02…0xFFFE 由 USB-IF 保留，0x0000 是列表结束符。
+ * PD 3.2 Table 6.33 定义了 0xFF00（PD SID）与 0xFF01（DPTC SID）；
+ * 旧版 PD 表只列 0xFF00，0x0000 是 Discover SVIDs 列表结束符。
  * 厂商 ID 由 USB-IF 分配，本质上是「厂商自己的编号」，所以下面这张厂商表只是
  * 常见的便利对照，**不完整也不权威** —— 查不到就老实显示原始 ID。
  */
@@ -48,23 +48,33 @@ export const VENDOR_VID = {
 };
 
 /** SVID → 名称（未知名返回 null） */
-export function svidName(svid) {
+export function svidName(svid, ctx = null) {
   const v = svid & 0xFFFF;
-  if (STANDARD_SVID[v] !== undefined) return STANDARD_SVID[v];
+  if (v === 0xFF00) return STANDARD_SVID[v];
+  if (v === 0xFF01) {
+    if (ctx?.specRevision && ctx.specRevision !== '3.2') return null;
+    return 'DPTC SID（PD 3.2 Table 6.33；DisplayPort Alt Mode）';
+  }
   if (VENDOR_VID[v] !== undefined) return `${VENDOR_VID[v]}（厂商 ID）`;
   return null;
 }
 
+/** SVID → 名称；精确到旧 PD 版本时，只有该版本明确列出的 ID 才标为 PD 标准 ID。 */
+export function svidNameForRevision(svid, specRevision) {
+  return svidName(svid, { specRevision });
+}
+
 /** SVID → 简短标签（附带十六进制原值，界面上一眼双向对照） */
-export function svidText(svid) {
+export function svidText(svid, ctx = null) {
   const v = svid & 0xFFFF;
-  const name = svidName(v);
+  const name = svidName(v, ctx);
   const hex = `0x${v.toString(16).toUpperCase().padStart(4, '0')}`;
   return name ? `${hex} · ${name}` : `${hex} · 未登记的 SVID`;
 }
 
 /** 该 SVID 是否为本规范定义的标准 ID */
-export const isStandardSvid = (svid) => (svid & 0xFFFF) === 0xFF00 || (svid & 0xFFFF) === 0xFF01;
+export const isStandardSvid = (svid, ctx = null) => (svid & 0xFFFF) === 0xFF00
+  || ((svid & 0xFFFF) === 0xFF01 && (!ctx?.specRevision || ctx.specRevision === '3.2'));
 
 /** 0xFF00 的重命名常量（PD 规范自身） */
 export const SVID_PD = 0xFF00;

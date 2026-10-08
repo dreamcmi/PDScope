@@ -1,4 +1,4 @@
-# POWER-Z `.pdStream` 格式（逆向结论）
+# POWER-Z `.pdStream` / `.ufcsStream` 格式（逆向结论）
 
 同一个抓包，POWER-Z 的上位机可以导出两种文件：
 
@@ -10,6 +10,10 @@
 所以 `.pdStream` 不是「另一种协议」：里面的报文与 `.sqlite` 的 `pd_table.Raw` **逐字节相同**，
 解析照旧走 `src/js/pd/`（见 [POWER-Z `.sqlite` 格式](format-powerz.md)）。
 本文只讲这层容器：字节怎么摆、怎么认出它、与 `.sqlite` 的差别在哪。
+
+`.ufcsStream` 使用相同的外层记录布局，但 payload 来自 `ufcs_table.Raw`。
+两种协议不能只靠长度和时间戳区分；解析器检查 Raw 内容并选择对应协议。
+CTK6U / CTK10UL 的 SQLite 与 UFCS 流已逐报文核对一致，分别为 2754 / 2734 条报文。
 
 实现见 `src/js/core/pdstream.js`；造样本 / 互转见 `tools/make-test-pdstream.mjs`。
 
@@ -25,7 +29,7 @@
 ├ f64 BE  Time         秒（相对抓包起点，单调不减）
 ├ f64 BE  Vbus         伏
 └ f64 BE  Ibus         安
-                  ↑ 重复 payloadLen 条记录，直到文件末尾
+                  ↑ 重复上述记录，直到文件末尾
 ```
 
 | 项 | 结论 | 依据 |
@@ -56,19 +60,20 @@
 也就是说：**时间轴没有曲线可画**。界面对此走已有的「这份抓包没有模拟量轨迹数据」分支，
 但横轴时间刻度照常按事件铺开，刷选时间窗口、点选报文、筛选与导出都不受影响。
 
-> ⚠️ 一个容易误会的连带效果：界面与 CSV 里**每条报文的 VBUS / IBUS 两列取自 ADC 采样序列**
-> （`busAt()` 按时间取最近邻），不是 `pd_table` 行里那两个数。所以同一份抓包，
-> `.sqlite` 导出有这两列，`.pdStream` 导出会是空的 —— 这不是解析漏了，而是容器里确实没有波形。
-> 报文条数、类型、方向、时间、数据对象、CRC 口径都不受影响。
+每条报文优先保留表行中的 **VBUS / IBUS**，因此 `.pdStream` / `.ufcsStream` 的界面与 CSV 都有逐报文测量值。
+没有连续 ADC 序列只影响曲线。若逐报文测量缺失，才用 ADC 序列阶梯保持回填；仍缺失时界面显示「—」、CSV 留空。
 
 ## 怎么认出它（没有魔数可用）
 
-文件开头就是一条普通记录，所以只能**靠结构自证**。`sniffPdStream()` 走一遍并要求：
+文件开头就是一条普通记录。`sniffPowerzStream()` 检查完整文件并要求：
 
 1. 每一步的 `payloadLen` 都在合理区间（非 0，且不超过上限）；
 2. **走完的偏移正好等于文件长度**（多一个字节都不认）；
 3. `Time` 有限、非负、**单调不减**；`Vbus` / `Ibus` 在物理量程内（PD 3.1 EPR 上限 48 V / 5 A，各留一倍余量）；
 4. 至少能读出 3 条记录（太短的文件走完也可能是巧合）。
+5. 可识别的 Raw 记录属于同一种协议；全未知或混合 PD / UFCS 的流不接受。
+
+返回值为 `'pd'` / `'ufcs'` / `null`。`sniffPdStream()` 保留为仅识别 PD 的兼容入口。
 
 这个判据很强，也顺带排除了其它格式：ZIP（`.atkcc`）首 4 字节是 `50 4B 03 04`、SQLite 是
 `SQLite format 3`，按大端 u32 读都远超长度上限。自检里把这几条负例都钉住了
@@ -83,19 +88,20 @@
 ## 代码里怎么用
 
 ```js
-import { sniffPdStream, PdStreamCapture, readPdStream, writePdStream } from './pdstream.js';
+import { sniffPowerzStream, PowerzStreamCapture, readPdStream, writePdStream } from './pdstream.js';
 
-if (sniffPdStream(u8)) {
-  const cap = PdStreamCapture.open(u8);        // 与 PowerzCapture 同形
-  const { packets, stats } = await cap.decode();  // 报文语义完全复用 PD 解码器
+if (sniffPowerzStream(u8)) {
+  const cap = PowerzStreamCapture.open(u8);    // 与 PowerzCapture 同形
+  const { packets, stats } = await cap.decode();  // 复用对应的 PD / UFCS 解码器
 }
 ```
 
-实现上 `PdStreamCapture` 继承 `PowerzCapture`，只做两件事：给一个**只读虚拟表**
+实现上 `PowerzStreamCapture` 继承 `PowerzCapture`，只做两件事：给一个**只读虚拟表**
 （`hasTable` / `count` / `rows` 三个方法，形状对齐 `SqliteReader`），以及覆写
 `PowerzCapture#_tableRows()` 让解码流程从二进制流取行而不是从 SQLite 取行。
 所以「换容器」没有带来第二套解码逻辑 —— 这也是自检里能直接断言
 「两种容器解出来的报文逐字段一致」的原因。
+`PdStreamCapture` 仍可用于已有 PD 调用，遇到 UFCS 流会明确报错。
 
 反过来写：`writePdStream(rows)` 接收 `{time, vbus, ibus, raw}` 的数组（与 `pd_table` 同形，
 写入前按 `Time` 排序），因此 `tools/make-test-pdstream.mjs --src 抓包.sqlite` 就是一个

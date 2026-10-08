@@ -34,7 +34,9 @@ export const CSV_EOL = '\r\n';
  * 界面顶栏、表格、详情面板与 CSV 用的是同一个（app.js 的 `fmtTime` 就是转发到这里）。
  */
 export function csvClock(ms) {
-  const s = (Number(ms) || 0) / 1000;
+  // 先舍入到整数毫秒，再分解时/分/秒，保证 59.9996s 正确进位。
+  const value = Number(ms);
+  const s = Math.max(0, Math.round(Number.isFinite(value) ? value : 0)) / 1000;
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
   const sec = s % 60;
@@ -54,7 +56,7 @@ export function csvHead(protocol) {
 /** 一条报文 → 一行单元格（顺序与 `csvHead` 严格对应） */
 export function csvRow(p, protocol) {
   const ufcs = protocol === 'UFCS';
-  const num = (v, digits) => (Number.isFinite(v) ? v : 0).toFixed(digits);
+  const num = (v, digits) => Number.isFinite(v) ? v.toFixed(digits) : '';
   return [
     p.index,
     p.sop ?? '',
@@ -92,9 +94,9 @@ export function csvText(packets, { protocol = 'USB PD', bom = true } = {}) {
   return (bom ? CSV_BOM : '') + lines.join(CSV_EOL);
 }
 
-/** 导出用的文件名主干：去掉抓包扩展名（`.atkcc` / `.sqlite` / `.db`） */
+/** 导出用的文件名主干：去掉所有支持的抓包扩展名。 */
 export function csvBase(fileName) {
-  return String(fileName || 'pdscope').replace(/\.(atkcc|sqlite|db)$/i, '');
+  return String(fileName || 'pdscope').replace(/\.(atkcc|sqlite|db|pdstream|ufcsstream)$/i, '');
 }
 
 /**
