@@ -121,9 +121,9 @@ fn eval_in_main(app: &AppHandle, js: &str) {
 /// 双击关联的 `.atkcc`（Windows/Linux），以及把文件拖到 exe 图标上。
 /// macOS 双击文件走的是 `RunEvent::Opened` 而不是命令行参数，见 `main()` 末尾。
 ///
-/// 认的后缀：`.atkcc`（ATK-C 原始采样）与 `.sqlite`（POWER-Z 分析仪导出）。
-/// 只给 `.atkcc` 注册了文件关联 —— `.sqlite` 是通用扩展名，抢它当关联容易和别的软件打架；
-/// 但命令行 / 拖到 exe 图标上这两条路都该能用，所以这里一并放行。
+/// 认的后缀：`.atkcc`、`.sqlite`、`.pdStream` 与 `.ufcsStream`。
+/// `.sqlite` 是通用扩展名，不抢文件关联；`.atkcc` 与 `.ufcsStream` 有专用关联。
+/// `.pdStream` 也可从命令行 / 拖到 exe 图标上打开。
 fn capture_from_args() -> Option<PathBuf> {
     let args: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
     // 优先认后缀，避免把 `--xxx` 之类的开关当成文件
@@ -132,6 +132,8 @@ fn capture_from_args() -> Option<PathBuf> {
             p.extension().is_some_and(|e| {
                 e.eq_ignore_ascii_case(OsStr::new("atkcc"))
                     || e.eq_ignore_ascii_case(OsStr::new("sqlite"))
+                    || e.eq_ignore_ascii_case(OsStr::new("pdstream"))
+                    || e.eq_ignore_ascii_case(OsStr::new("ufcsstream"))
             })
         })
         .cloned()

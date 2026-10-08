@@ -50,6 +50,12 @@
         "name": "ATK PD Capture",
         "description": "正点原子 ATK-C 抓取的 USB PD 数据",
         "role": "Editor"
+      },
+      {
+        "ext": ["ufcsStream"],
+        "name": "POWER-Z UFCS Capture",
+        "description": "POWER-Z 导出的 UFCS 记录流",
+        "role": "Editor"
       }
     ],
     "windows": {
