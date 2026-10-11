@@ -335,6 +335,118 @@ for (const [text, want, src] of [
   check('解析采样率声明', r.hz === want && r.source === src, `${JSON.stringify(text).padEnd(24)} → ${r.hz}Hz ${r.source}`);
 }
 
+/* ═══════════ ④b 梦源 DSLogic（.dsl）容器 ═══════════
+ *  .dsl 与 .atkcc 同为 ZIP + 每采样点 1 bit 的原始采样，差别只在多通道的组织方式：
+ *  .dsl 把 N 个通道打包在同一个采样点的 ceil(N/8) 个字节里。这里手搓一个多通道
+ *  .dsl，重点盯住「块内按字节跨步抽通道」这一步 —— 抽错一位，整条通道就全是噪声。 */
+{
+  const zlib = await import('node:zlib');
+  const { DslogicCapture, sniffDslogic, parseDslogicSampleRate, DSL_DEFAULT_SAMPLE_RATE } = await import('../src/js/core/dslogic.js');
+
+  // 采样率声明：DSLogic 写的是 `samplerate = 100 MHz`（带单位后缀）
+  for (const [text, want, src] of [
+    ['samplerate = 100 MHz', 100000000, 'declared'],
+    ['SampleRate = 20000000', 20000000, 'declared'],
+    ['samplerate = 50 MHz', 50000000, 'declared'],
+    ['total probes = 3', DSL_DEFAULT_SAMPLE_RATE, 'default'],
+    ['', DSL_DEFAULT_SAMPLE_RATE, 'default'],
+  ]) {
+    const r = parseDslogicSampleRate(text);
+    check('DSL 解析采样率声明', r.hz === want && r.source === src, `${JSON.stringify(text).padEnd(28)} → ${r.hz}Hz ${r.source}`);
+  }
+
+  /** 把若干「每块原始字节」打成 ZIP（stored，不压缩 —— 测试不关心压缩比） */
+  const storedZip = (files) => {
+    const enc = new TextEncoder();
+    const parts = [];
+    const cd = [];
+    let off = 0;
+    const u32 = (v) => Uint8Array.from([v & 0xff, (v >>> 8) & 0xff, (v >>> 16) & 0xff, (v >>> 24) & 0xff]);
+    const u16 = (v) => Uint8Array.from([v & 0xff, (v >>> 8) & 0xff]);
+    for (const f of files) {
+      const name = enc.encode(f.name);
+      const data = f.data;
+      const local = Uint8Array.from([
+        ...u32(0x04034b50), ...u16(20), ...u16(0), ...u16(0), ...u16(0), ...u16(0),
+        ...u32(0), ...u32(data.length), ...u32(data.length), ...u16(name.length), ...u16(0),
+      ]);
+      parts.push(local, name, data);
+      cd.push({ name, off, len: data.length });
+      off += local.length + name.length + data.length;
+    }
+    const cdParts = [];
+    let cdLen = 0;
+    for (const e of cd) {
+      const name = e.name;
+      const rec = Uint8Array.from([
+        ...u32(0x02014b50), ...u16(20), ...u16(20), ...u16(0), ...u16(0), ...u16(0),
+        ...u16(0), ...u32(0), ...u32(e.len), ...u32(e.len), ...u16(name.length), ...u16(0),
+        ...u16(0), ...u16(0), ...u16(0), ...u32(0), ...u32(e.off),
+      ]);
+      cdParts.push(rec, name);
+      cdLen += rec.length + name.length;
+    }
+    const eocd = Uint8Array.from([
+      ...u32(0x06054b50), ...u16(0), ...u16(0), ...u16(cd.length), ...u16(cd.length),
+      ...u32(cdLen), ...u32(off), ...u16(0),
+    ]);
+    const all = [...parts, ...cdParts, eocd];
+    let total = 0; for (const p of all) total += p.length;
+    const out = new Uint8Array(total);
+    let p2 = 0; for (const p of all) { out.set(p, p2); p2 += p.length; }
+    return out;
+  };
+
+  // 12 个探针 → 每采样点 2 字节；让 ch9 = (字节 1 的 bit1) 走 0x55 交替，其余通道恒定
+  const probes = 12;
+  const bps = Math.ceil(probes / 8);             // 2
+  const blockBytes = new Uint8Array(4096 * bps);
+  for (let s = 0; s < 4096; s++) {
+    // ch0..ch8 落在字节 0；ch9..ch11 落在字节 1
+    blockBytes[s * bps + 0] = 0xFF;              // 前 8 通道全高
+    blockBytes[s * bps + 1] = (s & 1) ? 0x02 : 0x00;   // ch9 = bit1 交替 → 0x55/0x00 模式
+  }
+  const dsl = storedZip([
+    { name: 'header', data: new TextEncoder().encode('version = 3\n[header]\nsamplerate = 100 MHz\ntotal samples = 4096\ntotal probes = 12\ntotal blocks = 1\n') },
+    { name: 'session', data: new TextEncoder().encode('{"Title":"DSView v1.3.2"}') },
+    { name: 'L-0/0', data: blockBytes },
+    { name: 'L-9/0', data: blockBytes },
+  ]);
+
+  check('DSL 嗅探：认出 ZIP + header + L-<ch>/<block>', sniffDslogic(dsl) === true);
+  check('DSL 嗅探：普通 ZIP 不误判',
+    sniffDslogic(storedZip([{ name: 'a.txt', data: new Uint8Array([1, 2, 3]) }])) === false);
+
+  const cap = await DslogicCapture.open(dsl, { inflate: (raw) => zlib.inflateRawSync(Buffer.from(raw)) });
+  check('DSL 容器：探针/块数/每采样点字节数',
+    cap.meta.totalProbes === 12 && cap.meta.totalBlocks === 1 && cap.meta.bytesPerSample === 2,
+    `probes=${cap.meta.totalProbes} blocks=${cap.meta.totalBlocks} bps=${cap.meta.bytesPerSample}`);
+  check('DSL 容器：单块 → 4096 采样点', cap.meta.totalSamples === 4096 && cap.meta.channels.length === 2,
+    `${cap.meta.totalSamples} 采样点 / ${cap.meta.channels.length} 通道`);
+
+  // 块净荷是 12 个探针交织的，本通道自己的点数应是「块字节 / 每采样点字节 × 8」，
+  // 不能直接块字节 × 8（那会把其它探针的点也算进来，虚增 12 倍）。
+  check('DSL 容器：每通道采样点数不按「块字节 × 8」虚增',
+    cap.meta.channels.every((c) => c.totalSamples === 4096),
+    cap.meta.channels.map((c) => `ch${c.channel}=${c.totalSamples}`).join(' '));
+  check('DSL 容器：effectiveSampleLimit 与声明总数一致',
+    cap.effectiveSampleLimit(0) === 4096 && cap.effectiveSampleLimit(9) === 4096,
+    `ch0=${cap.effectiveSampleLimit(0)} ch9=${cap.effectiveSampleLimit(9)}`);
+
+  // ★ 跨步抽取：ch9 必须从每个采样点的第 2 个字节取 bit1。
+  //   抽出来按 .atkcc 口径重打包（一字节 8 采样点、bit0 最早）：
+  //   输入每个采样点交替 0/1，于是输出字节的 bit0..7 = 0,1,0,1,0,1,0,1 → 0b10101010 = 0xAA。
+  const ch9 = await cap.readChunk(9, 0, (raw) => zlib.inflateRawSync(Buffer.from(raw)));
+  check('DSL 取通道：多探针块内按字节跨步抽出并重打包为 8 采样点/字节',
+    ch9.length === 512 && ch9[0] === 0xAA && ch9[1] === 0xAA,
+    `len=${ch9.length} first=0x${ch9[0]?.toString(16)}`);
+
+  // ch0 落字节 0 bit0，全高 → 每个采样点都是 1 → 每字节 8 位全置 → 0xFF
+  const ch0 = await cap.readChunk(0, 0, (raw) => zlib.inflateRawSync(Buffer.from(raw)));
+  check('DSL 取通道：字节 0 的 bit0（ch0 全 1 → 0xFF）',
+    ch0.length === 512 && ch0.every((b) => b === 0xFF), `first=0x${ch0[0]?.toString(16)}`);
+}
+
 /* ═══════════ ⑤ 分析仪导出（POWER-Z / SQLite）路径 ═══════════
  *  ATK-C 存的是原始电平（要先跑 BMC → 4B5B）；POWER-Z 存的是**分析仪已经解好的逻辑字节**
  *  ＋两张普通的 SQLite 表。这条路径上有三件自己写的东西要盯住：

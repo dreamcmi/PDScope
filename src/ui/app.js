@@ -26,6 +26,7 @@
  */
 
 import { AtkccCapture, scanChannelActivity } from '../js/core/atkcc.js';
+import { DslogicCapture, sniffDslogic, scanDslogicChannelActivity } from '../js/core/dslogic.js';
 import { decodeChannel, buildBusSeries, attachBusValues } from '../js/core/pipeline.js';
 import { PowerzCapture, sniffPowerz } from '../js/core/powerz.js';
 import { PowerzStreamCapture, sniffPowerzStream } from '../js/core/pdstream.js';
@@ -337,7 +338,7 @@ addEventListener('drop', (e) => {
  * 所以先按「名字像不像抓包」筛一道。但只要**一个都不像**，就把全部放进来交给内容嗅探
  * （`sniffPowerz` / ZIP 魔数）自己判 —— 免得用户把抓包改了个扩展名就再也打不开。
  */
-const CAPTURE_EXT = /\.(atkcc|sqlite|db|bin|zip|pdstream|ufcsstream)$/i;
+const CAPTURE_EXT = /\.(atkcc|dsl|sqlite|db|bin|zip|pdstream|ufcsstream)$/i;
 function pickCaptureFiles(list) {
   const all = [...list].filter((f) => f && (f.size > 0 || f.name));
   const named = all.filter((f) => CAPTURE_EXT.test(f.name));
@@ -412,14 +413,16 @@ async function loadContainer(file) {
     setProgress(0.05, `${fmtSize(buf.length)} 已载入，解析容器…`);
 
     // ── 格式分流：只看文件内容（魔数 + 结构自证），不看扩展名 ──
-    // 三种容器：ATK-C 的 ZIP 原始采样、POWER-Z 的 SQLite（`.sqlite`）、
-    // POWER-Z 的二进制记录流（`.pdStream` / `.ufcsStream`，来自对应协议的表行）。
-    // 后两者的**报文解码流程完全相同**（见 core/pdstream.js），所以这里只是选个对象。
+    // 四种容器：ATK-C 的 ZIP 原始采样（.atkcc）、梦源 DSLogic 的 ZIP 原始采样（.dsl）、
+    // POWER-Z 的 SQLite（.sqlite）、POWER-Z 的二进制记录流（.pdStream / .ufcsStream）。
+    // ATK-C 与 DSLogic 的报文解码流程相同（都走 BMC → 4B5B），所以这里只是选个对象。
     const cap = sniffPowerz(buf)
       ? PowerzCapture.open(buf)
       : sniffPowerzStream(buf)
         ? PowerzStreamCapture.open(buf)
-        : await AtkccCapture.open(buf, { inflate });
+        : sniffDslogic(buf)
+          ? await DslogicCapture.open(buf, { inflate })
+          : await AtkccCapture.open(buf, { inflate });
 
     doc.cap = cap;
     doc.meta = cap.meta;
@@ -436,9 +439,11 @@ async function loadContainer(file) {
     let pick = chs[0].channel;
     if (chs.length > 1) {
       showProgress('正在扫描各通道活动度…', `${chs.length} 个通道`);
+      // DSLogic 的通道列要按字节跨步抽取，扫描函数各用各的（语义一致，见 core/dslogic.js）
+      const scanOne = cap.meta.source === 'dslogic' ? scanDslogicChannelActivity : scanChannelActivity;
       doc.chActivity = new Map();
       for (let i = 0; i < chs.length; i++) {
-        const r = await scanChannelActivity(cap, chs[i].channel, inflate, 3);
+        const r = await scanOne(cap, chs[i].channel, inflate, 3);
         doc.chActivity.set(chs[i].channel, r);
         setProgress(0.05 + 0.25 * (i + 1) / chs.length, `通道 ${chs[i].channel}：${r.activity} 个活动字节`);
       }
@@ -537,7 +542,7 @@ $('#specRevision').addEventListener('change', () => {
 /**
  * 解码指定文档（用 `doc.channel` 那个通道），然后把整个界面刷新成它的样子。
  *
- * 两种格式在这里合流：ATK-C 要跑「分块 → BMC → 4B5B」，
+ * 两种走法在这里合流：原始采样容器（ATK-C 的 .atkcc、DSLogic 的 .dsl）要跑「分块 → BMC → 4B5B」，
  * POWER-Z 只要拆事件行并把逻辑字节交给同一个 PD 解码器。
  * 两者产出的 `{packets, stats}` 同形，所以下面这段渲染代码一份都不用复制。
  */
@@ -921,11 +926,14 @@ function renderMeta() {
   }
   const m = S.meta;
   const pz = m.source === 'powerz';
+  // 原始采样容器（ATK-C 的 .atkcc / DSLogic 的 .dsl）走同一条解码路径，只是容器不同
+  const RAW_SRC_LABEL = { atkcc: 'ATK-C · .atkcc', dslogic: 'DSLogic · .dsl' };
+  const rawLabel = RAW_SRC_LABEL[m.source];
   // 标注数据来源，CSS 也据此微调（例如时间轴标题前的方块颜色）
-  document.documentElement.dataset.source = pz ? 'powerz' : 'atkcc';
+  document.documentElement.dataset.source = pz ? 'powerz' : (rawLabel ? m.source : 'atkcc');
   const add = (k, v) => box.appendChild(Object.assign(el('span', 'mchip'), { innerHTML: `${k} <b>${v}</b>` }));
 
-  add('来源', pz ? esc(m.title) : 'ATK-C · .atkcc');
+  add('来源', pz ? esc(m.title) : (rawLabel || 'ATK-C · .atkcc'));
   if (!isUfcs()) add('规范', S.specRevision ? `PD ${S.specRevision}` : '自动');
 
   // 时间基准 / 采样率：数值 + 来源标记。值不是写死的 —— ATK-C 来自 channel.ini 的声明，
@@ -941,7 +949,7 @@ function renderMeta() {
     + `<span class="mtag${src === 'measured' || src === 'override' ? ' warn' : ''}">${tag}</span>`;
   rateChip.title = S.stats?.sampleRateNote
     || (pz ? 'POWER-Z 只记录毫秒时间戳，时间轴按「1 采样点 = 1 ms」映射'
-      : (m.sampleRateRaw ? `取自 channel.ini：${m.sampleRateRaw}` : '文件未声明采样率，用默认值'));
+      : (m.sampleRateRaw ? `取自 ${m.source === 'dslogic' ? 'header' : 'channel.ini'}：${m.sampleRateRaw}` : '文件未声明采样率，用默认值'));
   box.appendChild(rateChip);
 
   const dur = (S.totalSamples || m.totalSamples) / rate;
@@ -994,6 +1002,9 @@ function renderChannels() {
   }
 
   const chs = m.channels;
+  // `.dsl` 的块是「全部探针交织在一起」的整块，每个通道都指向同一批块 ——
+  // 报「N 块」会让人以为是各自独立的存储，这里改成报探针序号。
+  const dsl = m.source === 'dslogic';
   $('#chHint').textContent = chs.length > 1 ? `${chs.length} 个通道（已按活动度排序）` : '';
 
   /** 活动度扫描结果（新格式是对象；老的纯数字也认，避免历史数据路径踩空） */
@@ -1007,7 +1018,7 @@ function renderChannels() {
     const a = act(c.channel);
     const noisy = a.edgeLike > NOISE_EDGE_LIKE;
     const b = el('button', 'chitem' + (c.channel === S.channel ? ' is-on' : '') + (noisy ? ' is-noisy' : ''));
-    b.innerHTML = `<b>CH${c.channel}</b><span>${c.chunks.length} 块</span>`
+    b.innerHTML = `<b>CH${c.channel}</b><span>${dsl ? `探针 ${c.channel % 8}` : `${c.chunks.length} 块`}</span>`
       + (S.chActivity.has(c.channel) ? `<span class="act">${a.activity}</span>` : '');
     b.title = `${c.totalSamples} 采样点 ≈ ${(c.totalSamples / (S.rate || S.meta.sampleRate)).toFixed(2)} s`
       + (S.chActivity.has(c.channel)
@@ -1279,8 +1290,8 @@ function setEmptyState(kind, extra) {
   if (kind === 'failed') {
     t.textContent = '这份文件打不开';
     p.textContent = extra || '无法识别它的格式。';
-    n.textContent = '只认 ATK-C 的 .atkcc（ZIP 容器）、POWER-Z 的 .sqlite（SQLite 库）'
-      + '与 .pdStream / .ufcsStream（二进制记录流）—— 按文件内容与结构判断，不看扩展名。';
+    n.textContent = '只认 ATK-C 的 .atkcc、梦源 DSLogic 的 .dsl（都是 ZIP 容器里的原始电平采样）、'
+      + 'POWER-Z 的 .sqlite（SQLite 库）与 .pdStream / .ufcsStream（二进制记录流）—— 按文件内容与结构判断，不看扩展名。';
     n.hidden = false;
     return;
   }
@@ -1313,8 +1324,9 @@ function setEmptyState(kind, extra) {
     return;
   }
   t.textContent = '打开一份 PD 抓包文件';
-  p.innerHTML = '支持正点原子 ATK-C 的 <b>.atkcc</b>（原始电平采样，走 BMC → 4B5B 解码）'
-    + '与 POWER-Z 的 <b>.sqlite</b>（分析仪已解好的逻辑字节），两者解析后逐字段溯源。';
+  p.innerHTML = '支持正点原子 ATK-C 的 <b>.atkcc</b>、梦源 DSLogic 的 <b>.dsl</b>'
+    + '（都是原始电平采样，走 BMC → 4B5B 解码）与 POWER-Z 的 <b>.sqlite</b>'
+    + '（分析仪已解好的逻辑字节），解析后逐字段溯源。';
   n.textContent = '也可以把文件直接拖进窗口 —— 一次拖多份，每份各占一个标签页';
   n.hidden = false;
 }
@@ -1657,7 +1669,8 @@ function tlCurves() {
 function renderTimelineHead() {
   const seg = $('#tlSeg');
   const cur = tlCurves();
-  $('#tlTitle').textContent = cur ? cur.title : 'VBUS / IBUS 时间轴';
+  const digitalOnly = S.cap && S.meta?.source === 'dslogic';
+  $('#tlTitle').textContent = cur ? cur.title : (digitalOnly ? '报文时间轴（无模拟量）' : 'VBUS / IBUS 时间轴');
   const labels = S.meta?.busLabels ?? [];
   const hasAux = !!S.busSeries?.hasAux && labels.length === 2;
   // 档名跟着文件给的两路名字走：PD 是 CC 线，UFCS 是 DP / DM
@@ -1739,7 +1752,9 @@ function drawTimeline(selPkt) {
   const cur = tlCurves();
   if (!cur) {
     g.fillStyle = cTx3; g.font = '11px sans-serif'; g.textAlign = 'left';
-    g.fillText(S.cap ? '这份抓包没有模拟量轨迹数据' : '打开抓包后显示 VBUS / IBUS', x0 + 8, y0 + H / 2);
+    g.fillText(S.cap
+      ? (S.meta?.source === 'dslogic' ? 'DSLogic 只记录数字电平，没有 VBUS / IBUS 模拟量' : '这份抓包没有模拟量轨迹数据')
+      : '打开抓包后显示 VBUS / IBUS', x0 + 8, y0 + H / 2);
     return;
   }
 
@@ -2376,7 +2391,7 @@ window.pdscopeOpenUrl = async (name, url) => {
  * @param {object} opts
  * @param {string} opts.name    文件名（只用于展示与默认导出名，格式靠内容嗅探判定）
  * @param {Uint8Array|ArrayBuffer} opts.bytes 抓包原始字节
- * @param {number} [opts.channel] 指定通道（多通道 .atkcc）；不给就自动挑
+ * @param {number} [opts.channel] 指定通道（多通道 .atkcc / .dsl）；不给就自动挑
  * @param {number} [opts.limit]   只导前 N 条（调试/取样用）
  * @param {boolean} [opts.bom]    是否带 UTF-8 BOM（默认带；写文件要它，走管道不要）
  * @param {(ratio:number, text:string)=>void} [opts.onProgress] 解码进度旁路
@@ -2429,7 +2444,7 @@ window.PDScope = {
   status: () => ({
     env: ENV.name,
     file: S.fileName,
-    source: S.meta?.source ?? null,        // 'atkcc'（容器里没有这个字段）| 'powerz'
+    source: S.meta?.source ?? null,        // 'atkcc'（容器里没有这个字段）| 'powerz' | 'dslogic'
     protocol: S.meta?.protocol ?? 'USB PD',
     specRevision: S.meta?.protocol === 'UFCS' ? null : S.specRevision,
     channel: S.channel,

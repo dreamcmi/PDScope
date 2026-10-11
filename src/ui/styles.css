@@ -388,6 +388,8 @@ body.side-collapsed .sidebar{ width:0; opacity:0; overflow:hidden; border-right:
 .stat .bad{ color:var(--bad); font-weight:600; }
 
 .seg{ display:flex; padding:2px; border-radius:7px; background:var(--bg2); border:1px solid var(--line); }
+/* `display:flex` 会盖掉 hidden 属性自带的 display:none，必须显式兜住 */
+.seg[hidden]{ display:none; }
 .seg-item{
   height:22px; padding:0 10px; border:none; border-radius:5px; cursor:pointer;
   background:transparent; color:var(--tx-2); font:inherit; font-size:11px;

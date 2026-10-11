@@ -96,13 +96,13 @@ export function csvText(packets, { protocol = 'USB PD', bom = true } = {}) {
 
 /** 导出用的文件名主干：去掉所有支持的抓包扩展名。 */
 export function csvBase(fileName) {
-  return String(fileName || 'pdscope').replace(/\.(atkcc|sqlite|db|pdstream|ufcsstream)$/i, '');
+  return String(fileName || 'pdscope').replace(/\.(atkcc|dsl|sqlite|db|pdstream|ufcsstream)$/i, '');
 }
 
 /**
  * 导出文件名：`<主干>-ch<通道>.csv`。
  *
- * 带通道号是有意的：同一份多通道 .atkcc 换个通道再导一次，不该把上一份覆盖掉。
+ * 带通道号是有意的：同一份多通道 .atkcc / .dsl 换个通道再导一次，不该把上一份覆盖掉。
  * 命令行导出的**默认输出名**也走这里（由页面算好交给外壳），所以两处不会跑偏。
  */
 export function csvFileName(fileName, channel) {
@@ -177,7 +177,7 @@ export function csvExport(doc, { limit = 0, bom = true } = {}) {
     fileName: csvFileName(doc.fileName, doc.channel),
     channel: doc.channel,
     protocol,
-    source: doc.meta?.source ?? 'atkcc',          // 'atkcc' | 'powerz'
+    source: doc.meta?.source ?? 'atkcc',          // 'atkcc' | 'dslogic' | 'powerz'
     fileSize: doc.fileSize ?? 0,
     packets: all.length,
     rows: rows.length,

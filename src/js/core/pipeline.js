@@ -8,7 +8,6 @@
 
 import { EdgeExtractor, BmcDecoder, collectRunStats, estimateSampleRate, nowMs, yieldToMain } from './bmc.js';
 import { PdDecoder } from '../pd/index.js';
-import { AtkccCapture } from './atkcc.js';
 
 /**
  * 喂给边沿提取器的**单片**字节数（64 KiB = 52 万个采样点）。
@@ -34,7 +33,7 @@ const SLICE_BYTES = 65536;
 const YIELD_BUDGET_MS = 20;
 
 /**
- * @param {AtkccCapture} capture
+ * @param {import('./atkcc.js').AtkccCapture|import('./dslogic.js').DslogicCapture} capture
  * @param {number} channel
  * @param {{inflate:Function, onProgress?:Function, shouldStop?:()=>boolean, sampleRate?:number, specRevision?:'2.0'|'3.0'|'3.1'|'3.2'|null}} opts
  * @returns {Promise<{packets:object[], stats:object}>}
@@ -95,7 +94,8 @@ export async function decodeChannel(capture, channel, opts) {
       if (remainBytes < keep) keep = Math.max(0, remainBytes);
     }
     if (isLast) {
-      const t = AtkccCapture.trimTrailingZeros(data);
+      // 用容器自己的裁剪实现（.atkcc 与 .dsl 共有一个同语义的静态方法）
+      const t = capture.constructor.trimTrailingZeros(data);
       if (t < keep) { trimmed += keep - t; keep = t; }
     }
     data = data.subarray(0, keep);

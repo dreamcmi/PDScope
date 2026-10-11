@@ -6,8 +6,9 @@
  *   node tools/cli.js <file> [--channel 0] [--json] [--csv] [--limit 50] [--verbose]
  *                            [--rate 2500000] [--spec 2.0|3.0|3.1|3.2|auto]
  *
- * 支持两种格式，按文件内容自动分流（不看扩展名）：
+ * 支持三种格式，按文件内容自动分流（不看扩展名）：
  *   · .atkcc —— 正点原子 ATK-C 抓的原始电平采样，走 BMC → 4B5B；
+ *   · .dsl   —— 梦源 DSLogic 抓的原始电平采样（同样走 BMC → 4B5B，多通道在块内交织）；
  *   · .sqlite —— POWER-Z 分析仪导出的库，报文已经是逻辑字节。
  *
  * 采样率默认取文件声明（channel.ini），文件没声明或声明得离谱时用波形节拍反推；
@@ -19,6 +20,7 @@
  */
 import { readFile } from 'node:fs/promises';
 import { AtkccCapture, scanChannelActivity } from '../src/js/core/atkcc.js';
+import { DslogicCapture, sniffDslogic, scanDslogicChannelActivity } from '../src/js/core/dslogic.js';
 import { PowerzCapture, sniffPowerz } from '../src/js/core/powerz.js';
 import { PowerzStreamCapture, sniffPowerzStream } from '../src/js/core/pdstream.js';
 import { decodeChannel, attachBusValues } from '../src/js/core/pipeline.js';
@@ -64,16 +66,18 @@ if (!args.file) {
 const bytes = new Uint8Array(await readFile(args.file));
 const tOpen = Date.now();
 
-// 格式分流：POWER-Z 的 SQLite / .pdStream 与 ATK-C 的 ZIP 靠文件内容区分，扩展名只作参考
+// 格式分流：POWER-Z 的 SQLite / .pdStream 与 ATK-C / DSLogic 的 ZIP 靠文件内容区分，扩展名只作参考
 const inflate = await makeNodeInflator();
 const pzKind = sniffPowerz(bytes);
 const streamKind = !pzKind && sniffPowerzStream(bytes);
+const dslKind = !pzKind && !streamKind && sniffDslogic(bytes);
 const cap = pzKind ? PowerzCapture.open(bytes)
   : streamKind ? PowerzStreamCapture.open(bytes)
-    : await AtkccCapture.open(bytes, { inflate });
+    : dslKind ? await DslogicCapture.open(bytes, { inflate })
+      : await AtkccCapture.open(bytes, { inflate });
 const pz = !!pzKind || !!streamKind;
-const container = pzKind ? 'SQLite' : streamKind ? (streamKind === 'ufcs' ? '.ufcsStream' : '.pdStream') : 'ATK-C';
-console.error(`[open] ${Date.now() - tOpen}ms  ${pz ? `POWER-Z（${cap.meta.protocol}，${cap.meta.tableRows} 行事件，${container}）` : 'ATK-C（原始采样）'}`
+const container = pzKind ? 'SQLite' : streamKind ? (streamKind === 'ufcs' ? '.ufcsStream' : '.pdStream') : (dslKind ? 'DSLogic' : 'ATK-C');
+console.error(`[open] ${Date.now() - tOpen}ms  ${pz ? `POWER-Z（${cap.meta.protocol}，${cap.meta.tableRows} 行事件，${container}）` : `${container}（原始采样）`}`
   + `  采样率=${cap.meta.sampleRate}Hz`
   + (pz ? '（分析仪毫秒时间戳，按 1 采样点 = 1 ms 映射）' : `${cap.meta.sampleRateRaw ? `（${cap.meta.sampleRateRaw}）` : '（文件未声明）'}`)
   + `  totalSamples=${cap.meta.totalSamples}  duration=${cap.durationSec.toFixed(3)}s  channels=${cap.meta.channels.length}`
@@ -88,9 +92,10 @@ if (args.listChannels) {
 }
 
 if (args.scan) {
-  if (pz) { console.error('  --scan 只对 .atkcc 的原始采样有意义（分析仪导出没有活动度可扫）'); process.exit(0); }
+  if (pz) { console.error('  --scan 只对原始采样容器（.atkcc / .dsl）有意义（分析仪导出没有活动度可扫）'); process.exit(0); }
+  const scanOne = dslKind ? scanDslogicChannelActivity : scanChannelActivity;
   for (const c of cap.meta.channels) {
-    const r = await scanChannelActivity(cap, c.channel, inflate, args.scan);
+    const r = await scanOne(cap, c.channel, inflate, args.scan);
     console.log(`ch${String(c.channel).padStart(2)}  非空闲字节=${String(r.activity).padStart(10)}  (扫描 ${r.scannedChunks} 块 / ${(r.bytes / 1048576).toFixed(1)} MiB)`);
   }
   process.exit(0);
