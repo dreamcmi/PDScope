@@ -2,16 +2,19 @@
 
 **USB Power Delivery 抓包解析上位机**
 
-直接打开抓包文件，把 PD / UFCS 报文还原出来并逐字段溯源。五种来源**按文件内容自动分流**：
+直接打开抓包文件，把 PD / UFCS 报文还原出来并逐字段溯源。六种来源**按文件内容自动分流**：
 
 | 来源 | 文件 | 存的是什么 | 解析路径 |
 | ---- | ---- | ---------- | -------- |
 | 正点原子 **ATK-C** | `.atkcc` | CC 线的原始电平采样（ZIP + 1bit/采样） | 分块 → 边沿 → BMC → 4B5B → PD 报文 |
+| 梦源 **DSLogic** | `.dsl` | 逻辑分析仪的多路原始电平采样（ZIP + 探针交织） | 抽出通道 → 边沿 → BMC → 4B5B → PD 报文 |
 | **POWER-Z**（ChargerLAB） | `.sqlite` | 分析仪**已经解好的逻辑字节** + ADC 采样序列 | SQLite 读表 → Raw blob 拆事件 → 同一套 PD 语义解析 |
 | **POWER-Z**（录制 UFCS） | `.sqlite` | 同上，但录的是 **D+/D- 上的 UFCS**（融合快速充电） | SQLite 读表 → 定位 UFCS 帧 → 独立 UFCS 解析库（UART/消息头/CRC-8） |
 | **POWER-Z**（另一种导出） | `.pdStream` | 同一个抓包的**报文流**（只有 `pd_table`，**没有 ADC 波形**） | 二进制记录流 → 同一套 PD 语义解析（见 [格式](doc/format-pdstream.md)） |
 | **POWER-Z**（UFCS 流导出） | `.ufcsStream` | `ufcs_table` 的报文、时间戳与逐报文测量值，**没有 ADC 波形** | 二进制记录流 → UFCS 语义解析 |
 
+`.atkcc` 与 `.dsl` 都是 ZIP 里的原始电平采样、共用同一条 BMC → 4B5B 解码路径，
+差别只在多通道的组织方式（`.atkcc` 每通道一个文件、`.dsl` 多探针交织在同一批字节里，见 [格式](doc/format-dslogic.md)）。
 `.sqlite` 再按表名细分：有 `pd_table` 走 USB PD，有 `ufcs_table` 走 UFCS。
 两种流的外层布局相同，按 Raw 内容区分协议。表行里的 VBUS / IBUS 会保留到界面与导出；缺失测量在界面显示「—」、CSV 留空。
 几条路径解出来的报文对象**同形**，所以界面、筛选、详情、时间轴、导出只有「协议相关的那几处」分叉。
@@ -43,7 +46,7 @@
 
 ```bash
 node tools/build-standalone.mjs         # 生成 dist/PDScope.html
-# 双击 dist/PDScope.html，拖入 .atkcc / .sqlite / .pdStream / .ufcsStream（可以一次拖好几份）
+# 双击 dist/PDScope.html，拖入 .atkcc / .dsl / .sqlite / .pdStream / .ufcsStream（可以一次拖好几份）
 ```
 
 **想要一个真正的桌面应用**：
@@ -78,6 +81,7 @@ README 只留入口，细节按主题分在 `doc/` 下：
 | CI 构建（10 个目标、产物体积） | [doc/ci.md](doc/ci.md) |
 | 界面功能逐条说明 | [doc/ui.md](doc/ui.md) |
 | `.atkcc` 容器格式（逆向结论） | [doc/format-atkcc.md](doc/format-atkcc.md) |
+| 梦源 DSLogic `.dsl` 容器格式（逆向结论） | [doc/format-dslogic.md](doc/format-dslogic.md) |
 | POWER-Z `.sqlite` 与 UFCS 容器格式 | [doc/format-powerz.md](doc/format-powerz.md) |
 | PD / UFCS 解析库怎么复用 | [doc/lib-pd.md](doc/lib-pd.md) · [doc/lib-ufcs.md](doc/lib-ufcs.md) |
 | PD 四份规范覆盖、版本差异与审查结果 | [doc/pd-spec-coverage.md](doc/pd-spec-coverage.md) |
@@ -99,7 +103,6 @@ artifacts/      自检截图与报告（不入库）
 doc/            文档（本目录）
 tools/          构建、自检、排查脚本
 ```
-
 完整树与逐文件说明见 [doc/structure.md](doc/structure.md)。
 
 ## 自检
@@ -107,7 +110,7 @@ tools/          构建、自检、排查脚本
 ```bash
 node tools/version-check.mjs     # 版本号一致（先跑它，最便宜）
 node tools/syntax.mjs            # 全量语法检查（几秒）
-node tools/selftest.js           # 协议层合成用例 99 项（含 CSV 导出 15 项、.pdStream 容器 8 项）
+node tools/selftest.js           # 协议层合成用例 112 项（含 CSV 导出 15 项、.pdStream 容器 8 项、DSLogic 容器 13 项）
 npm run pd:compliance             # 81 组 PD 规范回归，覆盖 2.0/3.0/3.1/3.2
 npm run regression               # 8 组缺陷回归：UFCS 事件/流、测量、配对、时间进位、CLI 与空输入
 npm run ackcheck                 # 现造 PD 波形，检查 6 对 GoodCRC

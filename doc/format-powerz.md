@@ -152,4 +152,5 @@ npm run e2e:ufcs:synth              # 同上，但样本是现造的（无需私
 
 ---
 
-相关：[`.atkcc` 格式](format-atkcc.md) · [UFCS 解析库](lib-ufcs.md) · [已知限制](limits.md)
+相关：[`.atkcc` 格式](format-atkcc.md) · [梦源 DSLogic `.dsl` 格式](format-dslogic.md) ·
+[UFCS 解析库](lib-ufcs.md) · [已知限制](limits.md)

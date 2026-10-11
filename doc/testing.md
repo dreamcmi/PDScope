@@ -4,7 +4,7 @@
 # 版本号 / 语法 / 协议层（纯 Node，秒级）
 node tools/version-check.mjs              # 版本号是否一致（最便宜，先跑它）
 node tools/syntax.mjs                     # 全量语法检查（几秒；界面脚本错一个字符就是白屏）
-node tools/selftest.js                    # 合成用例 99 项：4B5B / PD / CRC + 采样率 + plug 信令 + POWER-Z / UFCS 路径 + CSV 导出 + .pdStream 容器
+node tools/selftest.js                    # 合成用例 112 项：4B5B / PD / CRC + 采样率 + plug 信令 + POWER-Z / UFCS 路径 + CSV 导出 + .pdStream / .dsl 容器
 npm run pd:compliance                     # 对照四份 PD 规范的 121 组字段/帧/状态回归
 npm run pd:audit                          # 四版本入口、wire、对象、VDM 和浏览器版本/导出专项
 npm run ackcheck                         # 现造 12 条 PD 报文，验证 6 对 GoodCRC
@@ -118,7 +118,7 @@ EPR/AVS 案例以 `.pdStream` 导入整段流程，检查请求/合同/Keep Aliv
 
 ## selftest.js
 
-用例共 **99 项**，分七组。
+用例共 **112 项**，分八组。
 
 * **第一组（8 项）** 在合成报文的**字段级**校验 4B5B / PD / CRC 语义。
 * **第二组（4 项）** 把同一串报文按 **1.5 / 2.5 / 4 / 6 MHz** 重新采样一遍，检查：用真实采样率能解出全部报文、
@@ -128,18 +128,37 @@ EPR/AVS 案例以 `.pdStream` 导入整段流程，检查请求/合同/Keep Aliv
   端口侧的 UFP + Padding + DFP 三件套、EPR_Source_Capabilities 的 PDO 列表、
   **分块扩展消息的完整重组**（前块缺失时只显示原始数据）、BIST 模式在 PD 2.0 与 3.x 下的不同含义、
   Discover SVIDs 的两两成对。
-* **第四组（6 项）** 只测 `channel.ini` 的**采样率声明解析**：多键名（`SamplingFrequency` /
-  `SampleRate` / 小写下划线写法）、多单位（裸数字 = kHz、`MHz`、`kHz`）、
-  以及「只有 `Resolution` 或整个键都缺」时退回默认值。
+* **第四组（11 项）** 只测**采样率声明解析**：来自 `channel.ini` 的 6 项 —— 多键名
+  （`SamplingFrequency` / `SampleRate` / 小写下划线写法）、多单位（裸数字 = kHz、`MHz`、`kHz`）、
+  以及「只有 `Resolution` 或整个键都缺」时退回默认值；来自 `.dsl` 的 `header` 的 5 项 ——
+  `samplerate = 100 MHz` / `SampleRate = 20000000` / `samplerate = 50 MHz` 三种带单位写法，
+  以及缺键时退回默认 100 MHz。
 * **第五组（26 项）** 专测 **POWER-Z 的 `.sqlite` 路径（USB PD）**：Raw blob 的插入/拔出/包裹报文拆帧与
   「拼不通要如实标截断」、`decodeWire` 的语义等价与「CRC 未记录 ≠ 通过」、SQLite 页/记录读取、
   `PowerzCapture` 的端到端，以及「不是 POWER-Z 的 SQLite 要判为不支持」。
   其中 **8 项**专测**同一个抓包的另一半容器 `.pdStream`**（见下）。
-* **第六组（34 项）** 专测 **UFCS**（见下）。
-* **第七组（15 项）** 专测 **CSV 导出格式**（`src/js/core/csv.js`，见下）。
+* **第六组（13 项）** 专测**梦源 DSLogic 的 `.dsl` 容器**（见下）。
+* **第七组（34 项）** 专测 **UFCS**（见下）。
+* **第八组（15 项）** 专测 **CSV 导出格式**（`src/js/core/csv.js`，见下）。
 
-第五、第六两组都用**手搓的最小 SQLite 库**做输入，不依赖任何真实样本，CI 上也能跑；
-第七组连容器都不用，喂的是手搓的报文对象。
+第五、第六、第七三组都用**现造的最小容器**做输入（手搓 SQLite / 手搓 ZIP），不依赖任何真实样本，CI 上也能跑；
+第八组连容器都不用，喂的是手搓的报文对象。
+
+### `.dsl` 那 13 项测什么
+
+`.dsl` 是梦源 DSLogic 的抓包：ZIP 里装**多探针交织的原始电平**，与 `.atkcc` 共用 BMC → 4B5B 解码链
+（格式见 [梦源 DSLogic `.dsl` 格式](format-dslogic.md)）。这一组的输入是**手搓的最小 ZIP**
+（用 `stored` 方式，不碰 deflate），要求：
+
+* **采样率解析**：`header` 的 `samplerate = 100 MHz`（带单位）认出来，缺键时退回默认 100 MHz；
+* **嗅探正例与负例**：认出「ZIP + `header` + `L-<ch>/<block>`」三件套；
+  普通 ZIP（只有 `a.txt`）必须**判为不是**；
+* **容器元信息**：「12 探针 / 1 块 / 每采样点 2 字节」如实读出；
+* **每通道采样点数不虚增**：块净荷是全部探针交织的，本通道的点数必须是
+  `块字节 / bytesPerSample × 8`（**不是** `块字节 × 8`），且与 `header` 声明的总数一致；
+* **★ 跨步抽出并重打包**（最关键的一条）：让 `ch9` 落在第 2 个字节的 `bit1`、逐采样点交替 `0/1`，
+  抽出来后必须是**一字节 8 采样点、`bit0` 最早**的 `0xAA`；`ch0` 全高则每个字节都是 `0xFF`。
+  这条钉住的是「换容器不换语义」—— 重打包口径错了，下游解码会静默出错。
 
 ### `.pdStream` 那 8 项测什么
 

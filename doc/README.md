@@ -9,6 +9,7 @@ README 只留「是什么、怎么跑起来」，细节都在本目录里按主�
 | [ci.md](ci.md) | CI 构建：10 个目标怎么落地、归档体积为什么差一个数量级、为什么没有 Win10 产物、CI 里跑哪些自检 |
 | [ui.md](ui.md) | 界面功能逐条说明（报文表、方向、筛选、详情面板、UFCS 视图…）与截图索引 |
 | [format-atkcc.md](format-atkcc.md) | `.atkcc` 容器格式（逆向结论）、解码链、采样率「声明 → 波形自检 → 兜底」三级策略 |
+| [format-dslogic.md](format-dslogic.md) | 梦源 DSLogic `.dsl` 容器格式（逆向结论）：`L-<通道>/<块号>` 条目名、多探针交织的跨步抽通道与重打包、与 `.atkcc` 的差异 |
 | [format-powerz.md](format-powerz.md) | POWER-Z `.sqlite` 格式：`pd_table` / `ufcs_table`、Raw blob 事件结构、UFCS 容器布局、自写 SQLite 读取器 |
 | [format-pdstream.md](format-pdstream.md) | POWER-Z `.pdStream` 格式：只有 `pd_table` 的二进制记录流、结构自证的识别判据、与 `.sqlite` 的差别（没有 ADC 波形） |
 | [lib-pd.md](lib-pd.md) | USB PD 解析库 `src/js/pd/`：用法、比官方上位机多补了什么、规范条目对照 |

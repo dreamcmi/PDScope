@@ -27,7 +27,9 @@ PDScope/
 │  ├─ js/core/            容器与波形内核（浏览器 + Node 通用，零依赖）
 │  │   ├─ zip.js          ZIP 读取（含 ZIP64 / EOCD 定位）
 │  │   ├─ inflate.js      deflate-raw 解压（浏览器 DecompressionStream / Node zlib）
-│  │   ├─ atkcc.js        .atkcc 容器解析
+│  │   ├─ atkcc.js        .atkcc 容器解析（正点原子 ATK-C）
+│  │   ├─ dslogic.js      梦源 DSLogic `.dsl` 容器解析：探针交织的块内跨步抽通道、
+│  │   │                  重打包成与 .atkcc 同口径的 8 采样点/字节（下游一行不改）
 │  │   ├─ sqlite.js       只读 SQLite 读取器（POWER-Z 导出用的库格式，零依赖自写）
 │  │   ├─ powerz.js       POWER-Z（.sqlite）适配层：嗅探 / Raw blob 拆事件 / 解码编排
 │  │   ├─ pdstream.js     POWER-Z 流导出（.pdStream / .ufcsStream）：完整结构与协议嗅探 / 流读写，
@@ -52,11 +54,11 @@ PDScope/
 ├─ assets/                品牌图标「源素材」：icon.png（1024² 主源图）+ icon.ico
 ├─ dist/                  前端产物：PDScope.html —— 单文件版与桌面版共用的唯一入口页
 ├─ artifacts/             自检产物：截图 + 报告（不入库，也不进安装包）
-├─ rawdata/               本机私有抓包样本（**不入库**：`.atkcc` 被 .gitignore 忽略，`.sqlite` 靠自觉别提交）
+├─ rawdata/               本机私有抓包样本（**不入库**：`.atkcc` 被 .gitignore 忽略，`.sqlite` / `.dsl` 靠自觉别提交）
 ├─ doc/                   文档：README 的详细版分册（本目录）
 ├─ .github/workflows/     CI：10 个目标一起构建（build.yml，见 [CI 构建](ci.md)）
 └─ tools/
-   ├─ cli.js              命令行解析（.atkcc / .sqlite / .pdStream / .ufcsStream 自动分流；表格 / --json / --csv / --rate）
+   ├─ cli.js              命令行解析（.atkcc / .dsl / .sqlite / .pdStream / .ufcsStream 自动分流；表格 / --json / --csv / --rate）
    │                      `--csv` 走的是 `src/js/core/csv.js`，与桌面版 `--csv`、界面导出的格式完全一致
    ├─ version-check.mjs   版本号一致性检查（外加文档里的产物名提示项；自检链第一步）
    ├─ syntax.mjs          全量语法检查（node --check，几秒）

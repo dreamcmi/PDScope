@@ -110,4 +110,4 @@ if (sniffPowerzStream(u8)) {
 ---
 
 相关：[POWER-Z `.sqlite` 格式](format-powerz.md) · [ATK-C `.atkcc` 格式](format-atkcc.md) ·
-[自检](testing.md) · [已知限制](limits.md)
+[梦源 DSLogic `.dsl` 格式](format-dslogic.md) · [自检](testing.md) · [已知限制](limits.md)

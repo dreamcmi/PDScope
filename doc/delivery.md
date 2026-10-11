@@ -45,7 +45,7 @@ node tools/build-standalone.mjs
 | **Linux**   | 双击（部分桌面环境会问用什么程序打开，选浏览器），或终端 `xdg-open dist/PDScope.html`。   |
 
 不管哪个平台，都有两种喂文件的方式：**把抓包文件拖进窗口**，或点界面上的「选择文件」
-（快捷键 `Ctrl/⌘+O`）。`.atkcc`、`.sqlite` 与 `.pdStream` 都认。
+（快捷键 `Ctrl/⌘+O`）。`.atkcc`、`.dsl`、`.sqlite`、`.pdStream`、`.ufcsStream` 都认。
 
 两种方式都支持**一次给多份**：拖拽时把多个文件一起拖进窗口，或在文件对话框里多选
 （`#fileInput` 带 `multiple`）。每份抓包各占一个标签，先打开的那份自动激活，其余在后台
@@ -84,7 +84,7 @@ node tools/serve.mjs        # 默认 http://127.0.0.1:5188，会自动开浏览�
 
 | 能力                                  | 单文件 HTML | Tauri 桌面 | 本地服务 |
 | ------------------------------------- | :---------: | :--------: | :------: |
-| 拖入 `.atkcc` / `.sqlite`             | ✔           | ✔          | ✔        |
+| 拖入 `.atkcc` / `.dsl` / `.sqlite` / `.pdStream` / `.ufcsStream` | ✔           | ✔          | ✔        |
 | 「选择文件」按钮 / `Ctrl+O`            | ✔           | ✔          | ✔        |
 | 解码 / 表格 / 详情 / 时间轴 / 筛选     | ✔           | ✔          | ✔        |
 | 多份抓包同开（标签栏 / `Alt+1..9`）    | ✔           | ✔          | ✔        |

@@ -54,4 +54,5 @@ bus.ini                sample=N,vbus=14.651,ibus=1.274   ← 模拟量轨迹，s
 
 ---
 
-相关：[`.sqlite` 格式](format-powerz.md) · [PD 解析库](lib-pd.md) · [已知限制](limits.md)
+相关：[梦源 DSLogic `.dsl` 格式](format-dslogic.md) · [`.sqlite` 格式](format-powerz.md) ·
+[PD 解析库](lib-pd.md) · [已知限制](limits.md)
